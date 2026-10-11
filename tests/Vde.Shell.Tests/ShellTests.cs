@@ -978,3 +978,125 @@ public class WindowsLayoutFileTypeTests
         }
     }
 }
+
+public class RegistryCommandTests
+{
+    [Theory]
+    [InlineData("/opt/app/run \"%1\"", new[] { "/a b/c.txt" }, new[] { "/opt/app/run", "/a b/c.txt" })]
+    [InlineData("app --file=%L", new[] { "/x.txt" }, new[] { "app", "--file=/x.txt" })]
+    [InlineData("app %*", new[] { "/a", "/b c" }, new[] { "app", "/a", "/b c" })]
+    [InlineData("app %1 %2", new[] { "/a" }, new[] { "app", "/a" })]      // missing %2 vanishes
+    [InlineData("app --dir %W", new[] { "/home/u/x.txt" }, new[] { "app", "--dir", "/home/u" })]
+    [InlineData("app 100%% %7", new string[0], new[] { "app", "100%" })]
+    [InlineData("app --flag", new string[0], new[] { "app", "--flag" })]
+    public void Expansion(string command, string[] targets, string[] expected)
+        => Assert.Equal(expected, RegistryCommand.Expand(command, targets));
+}
+
+public class RegistryOpenTests
+{
+    private sealed class Capture : IProcessLauncher
+    {
+        public List<ProcessRequest> Started { get; } = new();
+        public void Start(ProcessRequest request) => Started.Add(request);
+    }
+
+    private sealed class World : IDisposable
+    {
+        public Fixture Fx { get; } = new();
+        public ClassesRoot Hkcr { get; } = new(new Hive("HKCU"), new Hive("HKLM"));
+        public Capture Launches { get; } = new();
+        public string File { get; }
+        public string Winish { get; }
+        public ShellExecute Shell { get; }
+        public FileAssociations Assoc { get; }
+
+        public World()
+        {
+            Fx.Write("usr-share/mime/globs2", "50:application/x-thing:*.thing\n");
+            Winish = Fx.Program("winish");
+            Fx.Program("native");
+            Fx.App("native", "Native", "native %f", "application/x-thing;");
+            File = Fx.Write("docs/a b.thing", "x");
+
+            var mime = new MimeDatabase(Fx.Xdg);
+            var apps = DesktopEntryDatabase.Load(Fx.Xdg, []);
+            Assoc = new FileAssociations(Fx.Xdg, mime, apps, ["VDE"], Hkcr, mirrorToFreedesktop: false);
+            Shell = new ShellExecute(Assoc, mime, Launches, Fx.Env, types: new FileTypes(mime, Hkcr));
+        }
+
+        public void Install()
+        {
+            Hkcr.SetValue(".thing", "", RegistryValueKind.String, "Thing.Document");
+            Hkcr.SetValue(@"Thing.Document\shell\open\command", "", RegistryValueKind.String, "winish --open \"%1\"");
+            Hkcr.SetValue(@"Thing.Document\shell\edit", "", RegistryValueKind.String, "&Edit with Thing");
+            Hkcr.SetValue(@"Thing.Document\shell\edit\command", "", RegistryValueKind.String, "winish --edit \"%1\"");
+        }
+
+        public void Dispose() => Fx.Dispose();
+    }
+
+    [Fact]
+    public void Installed_command_beats_freedesktop_association()
+    {
+        using var w = new World();
+        w.Install();
+
+        w.Shell.Open(w.File);
+
+        var start = Assert.Single(w.Launches.Started);
+        Assert.Equal(w.Winish, start.FileName);
+        Assert.Equal(new[] { "--open", w.File }, start.Arguments);   // unix path, spaces intact
+    }
+
+    [Fact]
+    public void The_users_own_choice_beats_the_installed_command()
+    {
+        using var w = new World();
+        w.Install();
+        w.Assoc.SetDefault("application/x-thing", w.Assoc.GetHandlers("application/x-thing").Single());
+
+        w.Shell.Open(w.File);
+
+        Assert.EndsWith("native", Assert.Single(w.Launches.Started).FileName);
+    }
+
+    [Fact]
+    public void Without_a_registered_command_freedesktop_is_used()
+    {
+        using var w = new World();
+
+        w.Shell.Open(w.File);
+
+        Assert.EndsWith("native", Assert.Single(w.Launches.Started).FileName);
+    }
+
+    [Fact]
+    public void Verbs_are_listed_with_labels_and_the_default_first_and_can_be_invoked()
+    {
+        using var w = new World();
+        w.Install();
+        w.Hkcr.SetValue(@"Thing.Document\shell", "", RegistryValueKind.String, "edit");   // make edit the default verb
+        var types = new FileTypes(new MimeDatabase(w.Fx.Xdg), w.Hkcr);
+
+        var verbs = types.GetVerbs(w.File);
+
+        Assert.Equal(new[] { "edit", "open" }, verbs.Select(v => v.Id));
+        Assert.Equal("Edit with Thing", verbs[0].Label);
+        Assert.Equal("Open", verbs[1].Label);
+
+        w.Shell.Invoke(w.File, "edit");
+        Assert.Equal(new[] { "--edit", w.File }, Assert.Single(w.Launches.Started).Arguments);
+        Assert.Throws<ArgumentException>(() => w.Shell.Invoke(w.File, "print"));
+    }
+
+    [Fact]
+    public void A_command_naming_a_missing_program_reports_it()
+    {
+        using var w = new World();
+        w.Hkcr.SetValue(".thing", "", RegistryValueKind.String, "Thing.Document");
+        w.Hkcr.SetValue(@"Thing.Document\shell\open\command", "", RegistryValueKind.String, "/nowhere/app \"%1\"");
+
+        Assert.Throws<FileNotFoundException>(() => w.Shell.Open(w.File));
+    }
+}

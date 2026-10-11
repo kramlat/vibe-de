@@ -90,7 +90,36 @@ public sealed class ShellExecute
             Launch(DesktopEntry.Load(path, Path.GetFileName(path), _locales));
             return;
         }
+
+        // An application the user picked in the shell wins; then a command an installer registered
+        // (HKCR\<ProgID>\shell\open\command); then the freedesktop associations.
+        if (_associations.GetRegistryDefault(mime) is null && _types?.GetVerbs(path).FirstOrDefault(IsOpen) is { } open)
+        {
+            StartCommand(open.Command, [path]);
+            return;
+        }
         OpenWithDefault(path, mime, [path]);
+    }
+
+    // Runs one of the registry's verbs (edit, print, ...) on a file.
+    public void Invoke(string path, string verb)
+    {
+        path = Path.GetFullPath(path);
+        var found = _types?.GetVerbs(path).FirstOrDefault(v => string.Equals(v.Id, verb, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException($"'{path}' has no '{verb}' action.", nameof(verb));
+        StartCommand(found.Command, [path]);
+    }
+
+    private static bool IsOpen(FileVerb verb) => string.Equals(verb.Id, "open", StringComparison.OrdinalIgnoreCase);
+
+    private void StartCommand(string command, IReadOnlyList<string> targets)
+    {
+        var argv = RegistryCommand.Expand(command, targets);
+        if (argv.Count == 0)
+            throw new InvalidOperationException("The registered command is empty.");
+
+        var program = FindExecutable(argv[0]) ?? throw new FileNotFoundException($"Cannot find '{argv[0]}'.", argv[0]);
+        _launcher.Start(new ProcessRequest(program, argv.Skip(1).ToList(), null));
     }
 
     public void OpenWith(DesktopEntry app, IReadOnlyList<string> targets) => Start(app, app.Exec, targets);

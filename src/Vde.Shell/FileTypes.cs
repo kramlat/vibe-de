@@ -2,6 +2,8 @@ using Vibe.Registry;
 
 namespace Vde.Shell;
 
+public sealed record FileVerb(string Id, string Label, string Command);
+
 public sealed record FileTypeInfo(
     string MimeType,
     string Description,                  // "PNG image"
@@ -50,6 +52,43 @@ public sealed class FileTypes
         icons.AddRange(_mime.IconNames(mime).Where(n => !icons.Contains(n)));
 
         return new FileTypeInfo(mime, description, icons);
+    }
+
+    // The actions the registry defines for a file: shell\<verb> with a name and command, e.g. open, edit, print.
+    // Checked in the same order as the other settings; the default verb (shell's own default value, else "open") comes first.
+    public IReadOnlyList<FileVerb> GetVerbs(string path)
+    {
+        var ext = Extension(path);
+        var mime = GetMimeType(path);
+        var roots = new List<string>();
+        if (ext is not null)
+            roots.Add(RegistryRoot + "\\" + ext);
+        if (ext is not null && Read(ext, "") is { } progId)
+            roots.Add(progId);
+        roots.Add(RegistryRoot + "\\" + mime);
+
+        var verbs = new List<FileVerb>();
+        string? defaultVerb = null;
+        foreach (var root in roots)
+        {
+            var shell = root + "\\shell";
+            if (_classes is null || !_classes.KeyExists(shell))
+                continue;
+            defaultVerb ??= Read(shell, "");
+
+            foreach (var verb in _classes.GetSubKeyNames(shell))
+            {
+                if (verbs.Any(v => string.Equals(v.Id, verb, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                if (Read(shell + "\\" + verb + "\\command", "") is not { } command)
+                    continue;
+                var label = Read(shell + "\\" + verb, "")?.Replace("&", "") ?? char.ToUpperInvariant(verb[0]) + verb[1..];
+                verbs.Add(new FileVerb(verb, label, command));
+            }
+        }
+
+        var first = defaultVerb ?? "open";
+        return verbs.OrderBy(v => string.Equals(v.Id, first, StringComparison.OrdinalIgnoreCase) ? 0 : 1).ToList();
     }
 
     // Windows layout: HKCR\.ext (Default = ProgID), then HKCR\<ProgID> holds the name and DefaultIcon.

@@ -43,6 +43,15 @@ public sealed class FileAssociations
 
     public DesktopEntry? GetDefault(string mimeType) => GetHandlers(mimeType).FirstOrDefault();
 
+    // Only the application the user chose in the registry (HKCR\MIME\<type>\Default), ignoring every fallback.
+    public DesktopEntry? GetRegistryDefault(string mimeType)
+    {
+        if (_classes is null)
+            return null;
+        var id = new RegistryList(_classes).Defaults(_mime.Canonical(mimeType)).FirstOrDefault();
+        return id is not null && _apps.Find(id) is { } app && IsUsable(app) ? app : null;
+    }
+
     // The "Open with" list: the chosen default first, then other associated applications.
     // Handlers of parent types (a C source file is also plain text) come after those of the exact type.
     public IReadOnlyList<DesktopEntry> GetHandlers(string mimeType)
