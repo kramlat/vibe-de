@@ -1,5 +1,6 @@
 using Vde.Freedesktop;
 using Vde.Shell;
+using Vibe.Registry;
 
 namespace Vde.Shell.Tests;
 
@@ -636,5 +637,140 @@ public class MimeTieTests
         fx.Write("home/data/mime/globs2", "60:application/mine:*.png\n");
 
         Assert.Equal("application/mine", new MimeDatabase(fx.Xdg).GuessFromName("a.png"));
+    }
+}
+
+public class RegistryAssociationTests
+{
+    private sealed class World : IDisposable
+    {
+        public Fixture Fx { get; } = new();
+        public Hive User { get; } = new("user");
+        public Hive System { get; } = new("system");
+        public DesktopEntryDatabase Apps { get; }
+        public MimeDatabase Mime { get; }
+
+        public World()
+        {
+            Fx.Write("usr-share/mime/globs2", "50:text/plain:*.txt\n");
+            Fx.App("alpha", "Alpha", "alpha %f", "text/plain;");
+            Fx.App("beta", "Beta", "beta %f", "text/plain;");
+            Fx.App("gamma", "Gamma", "gamma %f", "");
+            Mime = new MimeDatabase(Fx.Xdg);
+            Apps = DesktopEntryDatabase.Load(Fx.Xdg, []);
+        }
+
+        public FileAssociations Assoc(bool mirror = true, bool withSystem = true)
+            => new(Fx.Xdg, Mime, Apps, ["VDE"], new ClassesRoot(User, withSystem ? System : null), mirror);
+
+        public void Dispose() => Fx.Dispose();
+    }
+
+    [Fact]
+    public void Registry_default_beats_mimeapps_list_and_app_lists()
+    {
+        using var w = new World();
+        w.Fx.Write("home/config/mimeapps.list", "[Default Applications]\ntext/plain=beta.desktop;\n");
+        w.User.SetValue(@"Software\Classes\MIME\text/plain", "Default", RegistryValueKind.String, "gamma.desktop");
+
+        var handlers = w.Assoc().GetHandlers("text/plain").Select(a => a.Id).ToList();
+
+        Assert.Equal("gamma.desktop", handlers[0]);
+        Assert.Equal("beta.desktop", handlers[1]);   // freedesktop choice is still offered, as fallback
+        Assert.Contains("alpha.desktop", handlers);
+    }
+
+    [Fact]
+    public void User_hive_beats_system_hive_and_system_beats_freedesktop()
+    {
+        using var w = new World();
+        w.Fx.Write("home/config/mimeapps.list", "[Default Applications]\ntext/plain=alpha.desktop;\n");
+        w.System.SetValue(@"Software\Classes\MIME\text/plain", "Default", RegistryValueKind.String, "beta.desktop");
+
+        Assert.Equal("beta.desktop", w.Assoc().GetDefault("text/plain")!.Id);
+
+        w.User.SetValue(@"Software\Classes\MIME\text/plain", "Default", RegistryValueKind.String, "gamma.desktop");
+        Assert.Equal("gamma.desktop", w.Assoc().GetDefault("text/plain")!.Id);
+    }
+
+    [Fact]
+    public void Falls_back_to_freedesktop_when_the_registry_has_nothing()
+    {
+        using var w = new World();
+        w.Fx.Write("home/config/mimeapps.list", "[Default Applications]\ntext/plain=beta.desktop;\n");
+
+        Assert.Equal("beta.desktop", w.Assoc().GetDefault("text/plain")!.Id);
+        Assert.Equal("alpha.desktop", new FileAssociations(w.Fx.Xdg, w.Mime, w.Apps, ["VDE"]).GetHandlers("text/plain")
+            .First(a => a.Id != "beta.desktop").Id);   // and works with no hives at all
+    }
+
+    [Fact]
+    public void Registry_added_and_removed_lists_apply()
+    {
+        using var w = new World();
+        w.User.SetValue(@"Software\Classes\MIME\text/plain", "Added", RegistryValueKind.MultiString, new[] { "gamma.desktop" });
+        w.User.SetValue(@"Software\Classes\MIME\text/plain", "Removed", RegistryValueKind.MultiString, new[] { "alpha.desktop" });
+
+        var ids = w.Assoc().GetHandlers("text/plain").Select(a => a.Id).ToList();
+
+        Assert.Equal(new[] { "gamma.desktop", "beta.desktop" }, ids);
+    }
+
+    [Fact]
+    public void SetDefault_writes_the_registry_and_mirrors_to_mimeapps_list()
+    {
+        using var w = new World();
+        var assoc = w.Assoc();
+
+        assoc.SetDefault("text/plain", w.Apps.Find("beta")!);
+
+        Assert.Equal("beta.desktop", w.User.GetValue(@"Software\Classes\MIME\text/plain", "Default")!.Data);
+        Assert.Equal(new[] { "beta.desktop" }, (string[])w.User.GetValue(@"Software\Classes\MIME\text/plain", "Added")!.Data!);
+        Assert.Null(w.System.GetValue(@"Software\Classes\MIME\text/plain", "Default"));   // only the first hive is written
+        Assert.Contains("text/plain=beta.desktop;", File.ReadAllText(assoc.UserMimeAppsPath));
+        Assert.Equal("beta.desktop", assoc.GetDefault("text/plain")!.Id);
+    }
+
+    [Fact]
+    public void Mirroring_can_be_turned_off()
+    {
+        using var w = new World();
+        var assoc = w.Assoc(mirror: false);
+
+        assoc.SetDefault("text/plain", w.Apps.Find("beta")!);
+
+        Assert.False(File.Exists(assoc.UserMimeAppsPath));
+        Assert.Equal("beta.desktop", assoc.GetDefault("text/plain")!.Id);
+    }
+
+    [Fact]
+    public void Choosing_an_app_unhides_it_and_ClearDefault_restores_the_fallback()
+    {
+        using var w = new World();
+        var assoc = w.Assoc(mirror: false);
+        w.User.SetValue(@"Software\Classes\MIME\text/plain", "Removed", RegistryValueKind.MultiString, new[] { "gamma.desktop", "alpha.desktop" });
+
+        assoc.SetDefault("text/plain", w.Apps.Find("alpha")!);
+        Assert.Equal(new[] { "gamma.desktop" }, (string[])w.User.GetValue(@"Software\Classes\MIME\text/plain", "Removed")!.Data!);
+        Assert.Equal("alpha.desktop", assoc.GetDefault("text/plain")!.Id);
+
+        assoc.ClearDefault("text/plain");
+        Assert.Null(w.User.GetValue(@"Software\Classes\MIME\text/plain", "Default"));
+        // alpha remains in the Added list, so it is still offered
+        Assert.Contains("alpha.desktop", assoc.GetHandlers("text/plain").Select(a => a.Id));
+    }
+
+    [Fact]
+    public void Associations_survive_saving_the_hive()
+    {
+        using var w = new World();
+        w.Assoc(mirror: false).SetDefault("text/plain", w.Apps.Find("beta")!);
+
+        var ms = new MemoryStream();
+        w.User.Write(ms);
+        ms.Position = 0;
+        var reloaded = new FileAssociations(w.Fx.Xdg, w.Mime, w.Apps, ["VDE"], new ClassesRoot(Hive.Read("user", ms)), false);
+
+        Assert.Equal("beta.desktop", reloaded.GetDefault("text/plain")!.Id);
     }
 }
