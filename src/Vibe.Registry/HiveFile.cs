@@ -17,17 +17,34 @@ internal sealed class HiveFile
     public string Path { get; }
     public bool ReadOnly { get; }
 
-    public HiveFile(string path, bool readOnly)
+    // createMode is the permission a newly created hive file gets (an existing file keeps its own);
+    // new directories get the same bits plus execute wherever read is allowed: 0600 -> 0700, 0644 -> 0755.
+    public HiveFile(string path, bool readOnly, UnixFileMode createMode)
     {
         Path = System.IO.Path.GetFullPath(path);
         ReadOnly = readOnly;
+        CreateMode = createMode;
+    }
+
+    public UnixFileMode CreateMode { get; }
+
+    private UnixFileMode DirectoryMode
+    {
+        get
+        {
+            var mode = CreateMode;
+            if ((mode & UnixFileMode.UserRead) != 0) mode |= UnixFileMode.UserExecute;
+            if ((mode & UnixFileMode.GroupRead) != 0) mode |= UnixFileMode.GroupExecute;
+            if ((mode & UnixFileMode.OtherRead) != 0) mode |= UnixFileMode.OtherExecute;
+            return mode;
+        }
     }
 
     private string LockPath => Path + ".lock";
 
     public IDisposable Lock()
     {
-        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!, DirectoryMode);
         var clock = Stopwatch.StartNew();
         for (int wait = 1; ; wait = Math.Min(wait * 2, 50))
         {
@@ -44,7 +61,7 @@ internal sealed class HiveFile
 
     // The hive as it is on disk now, or null when it is the same as the last one we saw.
     // A missing file reads as an empty hive.
-    public Node? ReadIfChanged()
+    public Node? ReadIfChanged(Func<Node> emptyRoot)
     {
         var info = new FileInfo(Path);
         if (!info.Exists)
@@ -52,7 +69,7 @@ internal sealed class HiveFile
             if (_stamp is null)
                 return null;
             _stamp = null;
-            return new Node(string.Empty, null);
+            return emptyRoot();
         }
 
         var stamp = StampOf(info);
@@ -69,7 +86,14 @@ internal sealed class HiveFile
     public void Write(Node root)
     {
         var temp = Path + ".tmp";
-        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+        // The replacement keeps the hive's permission (or gets CreateMode the first time), and is created
+        // with it, so there is never a moment when the data is readable by more than it should be.
+        var mode = File.Exists(Path) ? File.GetUnixFileMode(Path) : CreateMode;
+        File.Delete(temp);
+        using (var stream = new FileStream(temp, new FileStreamOptions
+               {
+                   Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, UnixCreateMode = mode,
+               }))
         {
             FhiveFormat.Write(root, stream);
             stream.Flush(flushToDisk: true);   // the data must be on disk before the rename makes it the hive
@@ -87,7 +111,7 @@ internal sealed class HiveFile
             // A fresh account has no hive directory yet; without it we would never hear about the first write.
             if (ReadOnly)
                 return null;
-            Directory.CreateDirectory(directory);
+            Directory.CreateDirectory(directory, DirectoryMode);
         }
 
         var fileName = System.IO.Path.GetFileName(Path);

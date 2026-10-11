@@ -15,13 +15,14 @@ public sealed class RegistryStore : IDisposable
     }
 
     // $XDG_CONFIG_HOME/hive/User.fhive and /etc/hive/System.fhive, opened for sharing between processes.
-    // The system hive is read-only unless the caller (an installer, RegSvrVDE --system) asks to write it.
+    // The user hive is created (empty, mode 0600) if it does not exist yet. The system hive is only read, and
+    // never created here: for now a missing one simply reads as empty.
     public static RegistryStore OpenDefault(string? userHivePath = null, string? systemHivePath = null, bool systemWritable = false, bool watch = true)
     {
         userHivePath ??= Path.Combine(DefaultConfigHome(), "hive", "User.fhive");
         systemHivePath ??= "/etc/hive/System.fhive";
         return new RegistryStore(
-            Hive.OpenShared("HKLM", systemHivePath, watch, readOnly: !systemWritable),
+            Hive.OpenShared("HKLM", systemHivePath, watch, readOnly: !systemWritable, fileMode: UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead),
             Hive.OpenShared("HKCU", userHivePath, watch));
     }
 

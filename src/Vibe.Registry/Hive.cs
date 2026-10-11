@@ -82,13 +82,30 @@ public sealed class Hive : IDisposable
     // immediately under a file lock, so there is nothing to Save and no update is lost; changes other processes
     // make are picked up by a file watcher and raised as Changed events. A read-only hive (the system hive,
     // for ordinary users) never locks or writes, and any change to it throws UnauthorizedAccessException.
-    public static Hive OpenShared(string name, string path, bool watch = true, bool readOnly = false)
+    public static Hive OpenShared(string name, string path, bool watch = true, bool readOnly = false, UnixFileMode? fileMode = null)
     {
         var hive = new Hive(name) { FilePath = path };
-        var file = new HiveFile(path, readOnly);
-        if (file.ReadIfChanged() is { } root)
-            hive._root = root;
+        var file = new HiveFile(path, readOnly, fileMode ?? (UnixFileMode.UserRead | UnixFileMode.UserWrite));
         hive._file = file;
+
+        if (readOnly)
+        {
+            // Never creates anything: a hive that does not exist reads as empty.
+            if (file.ReadIfChanged(() => new Node(string.Empty, null)) is { } existing)
+                hive._root = existing;
+        }
+        else
+        {
+            // A hive that does not exist is created now, empty, so it is there for every other process too.
+            using (file.Lock())
+            {
+                if (file.ReadIfChanged(() => new Node(string.Empty, null)) is { } existing)
+                    hive._root = existing;
+                if (!File.Exists(file.Path))
+                    file.Write(hive._root);
+            }
+        }
+
         if (watch)
             hive._watching = file.Watch(hive.RefreshQuietly);
         return hive;
@@ -126,7 +143,7 @@ public sealed class Hive : IDisposable
     // Caller holds _gate.
     private void ApplyExternal(List<RegistryChange> changes)
     {
-        if (_file!.ReadIfChanged() is not { } root)
+        if (_file!.ReadIfChanged(() => new Node(string.Empty, null)) is not { } root)
             return;
         HiveDiff.GraftVolatile(_root, root);
         changes.AddRange(HiveDiff.Between(_root, root));

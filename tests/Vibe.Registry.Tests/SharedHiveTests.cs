@@ -20,21 +20,46 @@ public class SharedHiveTests
         => await source.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
     [Fact]
-    public void A_missing_file_starts_empty_and_the_first_write_creates_it()
+    public void A_missing_hive_is_created_empty_at_once_with_private_permissions()
     {
         using var dir = new TempDir();
         using var hive = Hive.OpenShared("HKCU", dir.Hive);
 
         Assert.True(hive.IsShared);
-        Assert.False(File.Exists(dir.Hive));
+        Assert.True(File.Exists(dir.Hive));                                   // there before anything is written
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(dir.Hive));   // 0600
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(Path.GetDirectoryName(dir.Hive)!));          // 0700
 
         hive.SetValue(@"Software\Vde", "v", RegistryValueKind.DWord, 7u);
 
-        Assert.True(File.Exists(dir.Hive));
         Assert.False(File.Exists(dir.Hive + ".tmp"));
         Assert.False(hive.IsDirty);
         using var again = Hive.OpenShared("HKCU", dir.Hive, watch: false);
         Assert.Equal(7u, again.GetValue(@"Software\Vde", "v")!.Data);
+    }
+
+    [Fact]
+    public void Writes_keep_the_hive_files_permissions()
+    {
+        using var dir = new TempDir();
+        using var hive = Hive.OpenShared("HKCU", dir.Hive, watch: false);
+        File.SetUnixFileMode(dir.Hive, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);   // 0640
+
+        hive.SetValue("A", "v", RegistryValueKind.Bool, true);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead, File.GetUnixFileMode(dir.Hive));
+    }
+
+    [Fact]
+    public void A_read_only_hive_that_does_not_exist_is_empty_and_is_not_created()
+    {
+        using var dir = new TempDir();
+        using var hive = Hive.OpenShared("HKLM", dir.Hive, readOnly: true);
+
+        Assert.False(hive.KeyExists("Anything"));
+        Assert.False(File.Exists(dir.Hive));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(dir.Hive)));
     }
 
     [Fact]
@@ -191,5 +216,23 @@ public class SharedHiveTests
         store.ClassesRoot.SetValue(".txt", "Content Type", RegistryValueKind.String, "text/x-mine");   // goes to HKCU
         Assert.Equal("text/x-mine", store.ClassesRoot.GetValue(".txt", "Content Type")!.Data);
         Assert.True(File.Exists(dir.Hive));
+    }
+}
+
+public class DefaultStoreTests
+{
+    [Fact]
+    public void OpenDefault_creates_the_user_hive_but_never_the_system_one()
+    {
+        using var dir = new TempDir();
+        var system = Path.Combine(dir.Path, "etc", "hive", "System.fhive");
+
+        using var store = RegistryStore.OpenDefault(dir.Hive, system, watch: false);
+
+        Assert.True(File.Exists(dir.Hive));
+        Assert.False(File.Exists(system));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(system)));
+        Assert.True(store.LocalMachine.IsReadOnly);
+        Assert.False(store.ClassesRoot.KeyExists(".txt"));   // an absent system hive is just empty
     }
 }
