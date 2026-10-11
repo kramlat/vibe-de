@@ -7,6 +7,7 @@ internal sealed class Node
     public Dictionary<string, Node> Children { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, RegistryValue> Values { get; } = new(StringComparer.OrdinalIgnoreCase);
     public RegistryKeyFlags Flags { get; set; }
+    public PosixPermissions Perms { get; set; } = new(0, 0, PosixPermissions.KeyDefault);
     public DateTime Created { get; set; } = DateTime.UtcNow;
     public DateTime Modified { get; set; } = DateTime.UtcNow;
 
@@ -19,7 +20,7 @@ internal sealed class Node
     // A deep copy under a new parent.
     public Node CloneUnder(Node? parent)
     {
-        var copy = new Node(Name, parent) { Flags = Flags, Created = Created, Modified = Modified };
+        var copy = new Node(Name, parent) { Flags = Flags, Created = Created, Modified = Modified, Perms = Perms };
         foreach (var value in Values)
             copy.Values.Add(value.Key, value.Value);
         foreach (var child in Children.Values)

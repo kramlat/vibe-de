@@ -45,6 +45,15 @@ public sealed class ClassesRoot
         return null;
     }
 
+    // The permissions of the value that GetValue would return: the user's if they have one, else the system's.
+    public PosixPermissions? GetValuePermissions(string path, string name)
+    {
+        foreach (var hive in Hives())
+            if (hive.GetValuePermissions(Map(path), name) is { } permissions)
+                return permissions;
+        return null;
+    }
+
     // Value names from both hives; where both have one, the user's.
     public IReadOnlyList<RegistryValue> GetValues(string path)
     {

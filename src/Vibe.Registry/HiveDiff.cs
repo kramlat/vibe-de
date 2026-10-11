@@ -34,10 +34,16 @@ internal static class HiveDiff
 
         if (before.Flags != after.Flags)
             changes.Add(new RegistryChange(RegistryChangeKind.KeyFlagsChanged, path));
+        if (before.Perms != after.Perms)
+            changes.Add(new RegistryChange(RegistryChangeKind.PermissionsChanged, path));
 
         foreach (var value in after.Values.Values)
+        {
             if (!before.Values.TryGetValue(value.Name, out var old) || !old.SameAs(value))
                 changes.Add(new RegistryChange(RegistryChangeKind.ValueSet, path, value.Name));
+            else if (old.Permissions != value.Permissions)
+                changes.Add(new RegistryChange(RegistryChangeKind.PermissionsChanged, path, value.Name));
+        }
         foreach (var value in before.Values.Values)
             if (!after.Values.ContainsKey(value.Name))
                 changes.Add(new RegistryChange(RegistryChangeKind.ValueDeleted, path, value.Name));

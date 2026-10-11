@@ -3,28 +3,29 @@ using System.Text;
 
 namespace Vibe.Registry;
 
-// Fhive v1 on-disk layout (all little-endian):
+// Fhive v1.1 on-disk layout (all little-endian; 1.0, which had no permissions, was never released):
 //
 //   header (64 bytes)
-//   key table      36 bytes per key, in pre-order (a parent always precedes its children)
-//   value table    20 bytes per value
+//   key table      44 bytes per key, in pre-order (a parent always precedes its children)
+//   value table    28 bytes per value
 //   string pool    NUL-terminated UTF-8 names; offset 0 is the empty string
 //   blob pool      value data, addressed by (offset, length)
 //
 // Header: "FHIV", u16 major, u16 minor, u32 flags, u32 keyCount, u32 valueCount,
 //   u32 keyTableOffset, u32 valueTableOffset, u32 stringPoolOffset, u32 stringPoolLength,
 //   u32 blobPoolOffset, u32 blobPoolLength, u32 rootKeyId, u32 crc32 (of all bytes after the header).
-// Key:   u32 id, u32 parentId (0xFFFFFFFF for root), u32 nameOffset, u32 securityRef (reserved),
-//        u32 flags, i64 createdUtcTicks, i64 modifiedUtcTicks
-// Value: u32 keyId, u32 nameOffset, u16 kind, u16 reserved, u32 dataOffset, u32 dataLength
+// Key:   u32 id, u32 parentId (0xFFFFFFFF for root), u32 nameOffset, u32 flags,
+//        i64 createdUtcTicks, i64 modifiedUtcTicks, u32 uid, u32 gid, u16 mode (rwxrwxrwx), u16 reserved
+// Value: u32 keyId, u32 nameOffset, u16 kind, u16 mode (rwxrwxrwx), u32 dataOffset, u32 dataLength,
+//        u32 uid, u32 gid
 internal static class FhiveFormat
 {
     private const int HeaderSize = 64;
-    private const int KeyRecordSize = 36;
-    private const int ValueRecordSize = 20;
+    private const int KeyRecordSize = 44;
+    private const int ValueRecordSize = 28;
     private const uint NoParent = 0xFFFFFFFF;
     private const ushort VersionMajor = 1;
-    private const ushort VersionMinor = 0;
+    private const ushort VersionMinor = 1;
     private static readonly byte[] Magic = "FHIV"u8.ToArray();
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
@@ -57,10 +58,13 @@ internal static class FhiveFormat
             keyWriter.Write(id);
             keyWriter.Write(parentId);
             keyWriter.Write(Intern(node.Name));
-            keyWriter.Write(0u);
             keyWriter.Write((uint)node.Flags);
             keyWriter.Write(node.Created.Ticks);
             keyWriter.Write(node.Modified.Ticks);
+            keyWriter.Write(node.Perms.Uid);
+            keyWriter.Write(node.Perms.Gid);
+            keyWriter.Write(node.Perms.Mode);
+            keyWriter.Write((ushort)0);
 
             foreach (var value in node.Values.Values.OrderBy(v => v.Name, StringComparer.OrdinalIgnoreCase))
             {
@@ -68,9 +72,11 @@ internal static class FhiveFormat
                 valueWriter.Write(id);
                 valueWriter.Write(Intern(value.Name));
                 valueWriter.Write((ushort)value.Kind);
-                valueWriter.Write((ushort)0);
+                valueWriter.Write(value.Permissions.Mode);
                 valueWriter.Write((uint)blobs.Position);
                 valueWriter.Write((uint)data.Length);
+                valueWriter.Write(value.Permissions.Uid);
+                valueWriter.Write(value.Permissions.Gid);
                 blobs.Write(data);
                 valueCount++;
             }
@@ -139,8 +145,9 @@ internal static class FhiveFormat
             throw new InvalidDataException("Not an fhive file.");
 
         var major = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(4));
-        if (major != VersionMajor)
-            throw new InvalidDataException($"Unsupported fhive version {major}.");
+        var minor = BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(6));
+        if (major != VersionMajor || minor < VersionMinor)
+            throw new InvalidDataException($"Unsupported fhive version {major}.{minor}.");
 
         uint keyCount = U32(data, 12), valueCount = U32(data, 16);
         uint keyOffset = U32(data, 20), valueOffset = U32(data, 24);
@@ -169,6 +176,9 @@ internal static class FhiveFormat
                 throw new InvalidDataException("Key ids must be sequential.");
 
             string name = ReadString(stringBytes, U32(rec, 8));
+            var keyMode = BinaryPrimitives.ReadUInt16LittleEndian(rec[40..]);
+            if ((keyMode & ~PosixPermissions.Mask) != 0)
+                throw new InvalidDataException("Invalid key permissions.");
             Node? parent = null;
             if (i == 0)
             {
@@ -186,9 +196,10 @@ internal static class FhiveFormat
 
             var node = new Node(name, parent)
             {
-                Flags = (RegistryKeyFlags)U32(rec, 16),
-                Created = new DateTime(BinaryPrimitives.ReadInt64LittleEndian(rec[20..]), DateTimeKind.Utc),
-                Modified = new DateTime(BinaryPrimitives.ReadInt64LittleEndian(rec[28..]), DateTimeKind.Utc),
+                Flags = (RegistryKeyFlags)U32(rec, 12),
+                Created = new DateTime(BinaryPrimitives.ReadInt64LittleEndian(rec[16..]), DateTimeKind.Utc),
+                Modified = new DateTime(BinaryPrimitives.ReadInt64LittleEndian(rec[24..]), DateTimeKind.Utc),
+                Perms = new PosixPermissions(U32(rec, 32), U32(rec, 36), keyMode),
             };
             if (parent is not null && !parent.Children.TryAdd(name, node))
                 throw new InvalidDataException($"Duplicate key '{name}'.");
@@ -211,8 +222,12 @@ internal static class FhiveFormat
                 throw new InvalidDataException("Value data lies outside the blob pool.");
 
             string name = ReadString(stringBytes, U32(rec, 4));
+            var valueMode = BinaryPrimitives.ReadUInt16LittleEndian(rec[10..]);
+            if ((valueMode & ~PosixPermissions.Mask) != 0)
+                throw new InvalidDataException("Invalid value permissions.");
             var decoded = ValueCodec.Decode(kind, blobBytes.Slice((int)dataOffset, (int)dataLength));
-            if (!nodes[keyId].Values.TryAdd(name, new RegistryValue(name, kind, decoded)))
+            var permissions = new PosixPermissions(U32(rec, 20), U32(rec, 24), valueMode);
+            if (!nodes[keyId].Values.TryAdd(name, new RegistryValue(name, kind, decoded, permissions)))
                 throw new InvalidDataException($"Duplicate value '{name}'.");
         }
 
