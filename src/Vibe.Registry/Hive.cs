@@ -41,7 +41,7 @@ public sealed record RegistryKeyInfo(
 //
 // Every key and value has an owner, group and rwxrwxrwx mode, checked against Identity on every call
 // (see PosixPermissions for what each bit means). Denied calls throw UnauthorizedAccessException.
-public sealed class Hive : IDisposable
+public sealed class Hive : IHive, IDisposable
 {
     private readonly object _gate = new();
     private Node _root;
@@ -53,9 +53,32 @@ public sealed class Hive : IDisposable
     public string? FilePath { get; set; }
     public bool IsDirty => _dirty;
 
-    // Who is asking. Defaults to the user and groups of this process; a service acting for someone
-    // else sets it (a Regedit run through pkexec simply is root).
-    public RegistryIdentity Identity { get; set; } = RegistryIdentity.Current;
+    // Who is asking. Defaults to the user and groups of this process. A service acting for someone else
+    // should not set this (it is shared by every caller) but use As(identity), which scopes it to one view.
+    public RegistryIdentity Identity
+    {
+        get => _scoped.Value ?? _identity;
+        set => _identity = value;
+    }
+
+    private RegistryIdentity _identity = RegistryIdentity.Current;
+    private readonly AsyncLocal<RegistryIdentity?> _scoped = new();
+
+    // This hive as seen by the given identity: the same data and locking, but every call is checked against
+    // that identity. Several views can be used at the same time from different threads.
+    public IHive As(RegistryIdentity identity) => new HiveView(this, identity);
+
+    internal IDisposable Impersonate(RegistryIdentity identity)
+    {
+        var previous = _scoped.Value;
+        _scoped.Value = identity;
+        return new Restore(() => _scoped.Value = previous);
+    }
+
+    private sealed class Restore(Action action) : IDisposable
+    {
+        public void Dispose() => action();
+    }
 
     // Bits removed from the default modes of new keys (0755) and values (0644), as the shell's umask does.
     public ushort Umask { get; set; }

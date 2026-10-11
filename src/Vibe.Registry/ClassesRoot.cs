@@ -6,13 +6,13 @@ public sealed class ClassesRoot
 {
     public const string KeyPath = @"Software\Classes";
 
-    private readonly Hive _user;
-    private readonly Hive? _system;
+    private readonly IHive _user;
+    private readonly IHive? _system;
 
     // Same shape as Hive.Changed, with paths relative to HKCR.
     public event EventHandler<RegistryChange>? Changed;
 
-    public ClassesRoot(Hive user, Hive? system = null)
+    public ClassesRoot(IHive user, IHive? system = null)
     {
         _user = user ?? throw new ArgumentNullException(nameof(user));
         _system = system;
@@ -81,7 +81,7 @@ public sealed class ClassesRoot
     public bool DeleteValue(string path, string name) => _user.DeleteValue(Map(path), name);
     public bool DeleteKey(string path) => _user.DeleteKey(Map(path));
 
-    private IEnumerable<Hive> Hives()
+    private IEnumerable<IHive> Hives()
     {
         yield return _user;
         if (_system is not null)

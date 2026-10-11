@@ -210,8 +210,8 @@ public class SharedHiveTests
 
         using var store = RegistryStore.OpenDefault(dir.Hive, system, watch: false);
 
-        Assert.True(store.LocalMachine.IsReadOnly);
-        Assert.False(store.CurrentUser.IsReadOnly);
+        Assert.True(((Hive)store.LocalMachine).IsReadOnly);
+        Assert.False(((Hive)store.CurrentUser).IsReadOnly);
         Assert.Equal("text/plain", store.ClassesRoot.GetValue(".txt", "Content Type")!.Data);   // HKCR sees the system hive
         store.ClassesRoot.SetValue(".txt", "Content Type", RegistryValueKind.String, "text/x-mine");   // goes to HKCU
         Assert.Equal("text/x-mine", store.ClassesRoot.GetValue(".txt", "Content Type")!.Data);
@@ -232,7 +232,7 @@ public class DefaultStoreTests
         Assert.True(File.Exists(dir.Hive));
         Assert.False(File.Exists(system));
         Assert.False(Directory.Exists(Path.GetDirectoryName(system)));
-        Assert.True(store.LocalMachine.IsReadOnly);
+        Assert.True(((Hive)store.LocalMachine).IsReadOnly);
         Assert.False(store.ClassesRoot.KeyExists(".txt"));   // an absent system hive is just empty
     }
 }

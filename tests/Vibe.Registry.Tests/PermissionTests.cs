@@ -304,3 +304,90 @@ public class PermissionTests
         Assert.Null(hkcr.GetValuePermissions(@".nope", ""));
     }
 }
+
+public class HiveViewTests
+{
+    private static readonly RegistryIdentity Alice = new(1000, 1000, [100]);
+    private static readonly RegistryIdentity Bob = new(1001, 1001, [100]);
+    private static readonly RegistryIdentity Carol = new(1002, 1002);
+
+    private static ushort M(string octal) => PosixPermissions.ParseMode(octal);
+
+    private static Hive Make()
+    {
+        var hive = new Hive("t") { Identity = RegistryIdentity.Root };
+        hive.SetKeyPermissions("", new PosixPermissions(0, 0, M("777")));
+        return hive;
+    }
+
+    [Fact]
+    public void A_view_acts_as_its_identity_without_touching_the_hives_own()
+    {
+        var hive = Make();
+        var asAlice = hive.As(Alice);
+        var asBob = hive.As(Bob);
+
+        asAlice.SetValue("Mine", "v", RegistryValueKind.String, "x");
+        asAlice.SetKeyPermissions("Mine", new PosixPermissions(1000, 1000, M("700")));
+
+        Assert.Equal("x", asAlice.GetValue("Mine", "v")!.Data);
+        Assert.Throws<UnauthorizedAccessException>(() => asBob.GetValue("Mine", "v"));
+        Assert.Equal(1000u, asAlice.GetKeyPermissions("Mine").Uid);
+        Assert.Equal(RegistryIdentity.Root, hive.Identity);   // untouched
+        Assert.Equal("x", hive.GetValue("Mine", "v")!.Data);   // and the hive itself, as root, still sees it
+    }
+
+    [Fact]
+    public void Views_used_at_the_same_time_from_different_threads_never_borrow_each_others_identity()
+    {
+        var hive = Make();
+        hive.As(Alice).SetValue("Secret", "v", RegistryValueKind.Bool, true);
+        hive.As(Alice).SetKeyPermissions("Secret", new PosixPermissions(1000, 1000, M("700")));
+        var asAlice = hive.As(Alice);
+        var asCarol = hive.As(Carol);
+        int leaks = 0, failures = 0;
+
+        Parallel.For(0, 8, worker =>
+        {
+            for (int i = 0; i < 300; i++)
+            {
+                if (worker % 2 == 0)
+                {
+                    if (asAlice.GetValue("Secret", "v") is null) Interlocked.Increment(ref failures);   // Alice must always be allowed
+                }
+                else
+                {
+                    try { asCarol.GetValue("Secret", "v"); Interlocked.Increment(ref leaks); }          // Carol must always be refused
+                    catch (UnauthorizedAccessException) { }
+                }
+            }
+        });
+
+        Assert.Equal(0, leaks);
+        Assert.Equal(0, failures);
+    }
+
+    [Fact]
+    public void Events_still_flow_through_views()
+    {
+        var hive = Make();
+        var seen = new List<RegistryChange>();
+        var view = hive.As(Alice);
+        view.Changed += (_, c) => seen.Add(c);
+
+        hive.As(Bob).SetValue("K", "v", RegistryValueKind.Bool, true);
+
+        Assert.Contains(new RegistryChange(RegistryChangeKind.ValueSet, "K", "v"), seen);
+    }
+
+    [Fact]
+    public void Everything_that_takes_a_hive_takes_the_interface()
+    {
+        IHive viewed = Make().As(Alice);
+        var hkcr = new ClassesRoot(viewed);
+
+        hkcr.SetValue(".x", "", RegistryValueKind.String, "X");
+        Assert.Equal("X", hkcr.GetValue(".x", "")!.Data);
+        Assert.Equal(1, RegFile.FromHive(viewed, "", "HKEY_CURRENT_USER").Sections.Count(s => s.KeyPath.EndsWith("Software\\Classes\\.x")));
+    }
+}

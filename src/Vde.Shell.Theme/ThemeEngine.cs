@@ -121,7 +121,7 @@ public sealed class ThemeEngine
 
     // Applies the registry's choice now and again whenever it changes, however it was changed (Settings,
     // a script, another program). Dispose the result to stop listening.
-    public IDisposable BindTo(Hive hive)
+    public IDisposable BindTo(IHive hive)
     {
         Apply(ThemeSettings.Load(hive));
 

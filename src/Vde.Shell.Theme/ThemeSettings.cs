@@ -14,7 +14,7 @@ public static class ThemeSettings
 {
     public const string KeyPath = @"Software\Vde\Appearance";
 
-    public static ThemeSelection Load(Hive hive)
+    public static ThemeSelection Load(IHive hive)
     {
         var id = hive.GetValue(KeyPath, "Theme") is { Kind: RegistryValueKind.String } t && t.Data is string { Length: > 0 } s ? s : ThemeCatalog.FluentId;
 
@@ -30,7 +30,7 @@ public static class ThemeSettings
         return new ThemeSelection(id, variant, accent);
     }
 
-    public static void Save(Hive hive, ThemeSelection selection)
+    public static void Save(IHive hive, ThemeSelection selection)
     {
         hive.SetValue(KeyPath, "Theme", RegistryValueKind.String, selection.ThemeId);
         hive.SetValue(KeyPath, "Variant", RegistryValueKind.String, selection.Variant.ToString());
