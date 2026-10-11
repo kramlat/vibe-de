@@ -774,3 +774,105 @@ public class RegistryAssociationTests
         Assert.Equal("beta.desktop", reloaded.GetDefault("text/plain")!.Id);
     }
 }
+
+public class FileTypesTests
+{
+    private static (FileTypes types, ClassesRoot hkcr, Fixture fx) Build()
+    {
+        var fx = new Fixture();
+        fx.Write("usr-share/mime/globs2", "50:image/png:*.png\n50:text/plain:*.txt\n50:text/x-log:*.log\n");
+        fx.Write("usr-share/mime/generic-icons", "image/png:image-x-generic\n");
+        fx.Write("usr-share/mime/image/png.xml",
+            "<mime-type xmlns=\"http://www.freedesktop.org/standards/shared-mime-info\" type=\"image/png\"><comment>PNG image</comment></mime-type>");
+        var hkcr = new ClassesRoot(new Hive("HKCU"), new Hive("HKLM"));
+        return (new FileTypes(new MimeDatabase(fx.Xdg), hkcr), hkcr, fx);
+    }
+
+    [Fact]
+    public void Without_registry_entries_everything_comes_from_the_mime_database()
+    {
+        var (types, _, fx) = Build();
+        using (fx)
+        {
+            var info = types.Describe("/x/photo.PNG");
+
+            Assert.Equal("image/png", info.MimeType);
+            Assert.Equal("PNG image", info.Description);
+            Assert.Equal(new[] { "image-png", "image-x-generic" }, info.IconNames);
+        }
+    }
+
+    [Fact]
+    public void Extension_class_overrides_icon_description_and_content_type()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(@"CLSID\.png", "DefaultIcon", RegistryValueKind.String, "my-png-icon");
+            hkcr.SetValue(@"CLSID\.png", "", RegistryValueKind.String, "Picture");
+            hkcr.SetValue(@"CLSID\.log", "Content Type", RegistryValueKind.String, "text/plain");
+
+            var png = types.Describe("/x/a.png");
+            Assert.Equal("Picture", png.Description);
+            Assert.Equal(new[] { "my-png-icon", "image-png", "image-x-generic" }, png.IconNames);
+            Assert.Equal("image/png", png.MimeType);
+
+            Assert.Equal("text/plain", types.GetMimeType("/x/server.log"));
+            Assert.Equal("text/plain", types.Describe("/x/server.log").MimeType);
+        }
+    }
+
+    [Fact]
+    public void Mime_class_applies_to_every_file_of_that_type_and_the_extension_wins()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(@"CLSID\image/png", "DefaultIcon", RegistryValueKind.String, "type-icon");
+            Assert.Equal("type-icon", types.Describe("/x/a.png").IconNames[0]);
+
+            hkcr.SetValue(@"CLSID\.png", "DefaultIcon", RegistryValueKind.String, "ext-icon");
+            Assert.Equal(new[] { "ext-icon", "type-icon" }, types.Describe("/x/a.png").IconNames.Take(2));
+        }
+    }
+
+    [Fact]
+    public void Directories_and_unknown_files_and_wrong_value_types()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            Assert.Equal("inode/directory", types.Describe(fx.Root).MimeType);
+            hkcr.SetValue(@"CLSID\.png", "DefaultIcon", RegistryValueKind.DWord, 5u);   // not a string: ignored
+            Assert.Equal("image-png", types.Describe("/x/a.png").IconNames[0]);
+            Assert.Equal("application/octet-stream", types.Describe("/x/unknown.zzz").MimeType);
+        }
+    }
+
+    [Fact]
+    public void ShellExecute_honours_content_type_overrides()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(@"CLSID\.log", "Content Type", RegistryValueKind.String, "text/plain");
+            fx.Program("edit");
+            fx.App("edit", "Edit", "edit %f", "text/plain;");
+            var file = fx.Write("a.log", "x");
+            var mime = new MimeDatabase(fx.Xdg);
+            var apps = DesktopEntryDatabase.Load(fx.Xdg, []);
+            var launches = new List<ProcessRequest>();
+            var shell = new ShellExecute(new FileAssociations(fx.Xdg, mime, apps, ["VDE"]), mime,
+                new Capture(launches), fx.Env, types: types);
+
+            shell.Open(file);
+
+            Assert.Equal(new[] { file }, Assert.Single(launches).Arguments);
+        }
+    }
+
+    private sealed class Capture(List<ProcessRequest> into) : IProcessLauncher
+    {
+        public void Start(ProcessRequest request) => into.Add(request);
+    }
+}

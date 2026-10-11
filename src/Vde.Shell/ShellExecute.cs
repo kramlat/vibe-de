@@ -56,16 +56,18 @@ public sealed class ShellExecute
     private readonly IProcessLauncher _launcher;
     private readonly Func<string, string?> _env;
     private readonly IReadOnlyList<string> _locales;
+    private readonly FileTypes? _types;
 
     public ShellExecute(
         FileAssociations associations, MimeDatabase mime, IProcessLauncher? launcher = null,
-        Func<string, string?>? env = null, IReadOnlyList<string>? locales = null)
+        Func<string, string?>? env = null, IReadOnlyList<string>? locales = null, FileTypes? types = null)
     {
         _associations = associations;
         _mime = mime;
         _launcher = launcher ?? new ProcessLauncher();
         _env = env ?? Environment.GetEnvironmentVariable;
         _locales = locales ?? [];
+        _types = types;
     }
 
     // A path or URL, opened with its default application.
@@ -82,7 +84,7 @@ public sealed class ShellExecute
         if (!File.Exists(path) && !Directory.Exists(path))
             throw new FileNotFoundException("Nothing to open.", path);
 
-        var mime = _mime.GuessForFile(path);
+        var mime = _types?.GetMimeType(path) ?? _mime.GuessForFile(path);
         if (mime == "application/x-desktop")
         {
             Launch(DesktopEntry.Load(path, Path.GetFileName(path), _locales));
