@@ -6,9 +6,11 @@ trademarks). AI features are optional and off unless enabled.
 
 ## Layout
 
+- `src/Vde.Freedesktop` — XDG dirs, .desktop entries, icon/sound/cursor theme lookup (LGPL-3.0-or-later)
 - `src/libFluent` — Fluent-style Avalonia control library (LGPL-3.0-or-later)
 - `src/Vibe.Registry` — the registry: typed hive files (`.fhive`, checksummed, atomic saves) with `.reg` import/export and change events (LGPL-3.0-or-later)
 - `tests/` — xunit tests (`dotnet test`)
+- `data/icons` — Vibe artwork in freedesktop icon-theme layout (`start-here-vde`: launcher mark + symbolic variant; original, LGPL-3.0-or-later)
 - `src/Vibe.Shell` — taskbar, launcher, notifications, desktop (GPL-3.0-or-later)
 - compositor with X11 fallback and XWayland — later stage
 
