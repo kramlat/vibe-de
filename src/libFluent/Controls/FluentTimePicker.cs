@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentTimePicker : TimePicker, IStyleable {
-    Type IStyleable.StyleKey => typeof(TimePicker);
+public class FluentTimePicker : TimePicker {
+    protected override Type StyleKeyOverride => typeof(TimePicker);
 }

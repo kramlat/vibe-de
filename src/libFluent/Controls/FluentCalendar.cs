@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentCalendar : Calendar, IStyleable {
-    Type IStyleable.StyleKey => typeof(Calendar);
+public class FluentCalendar : Calendar {
+    protected override Type StyleKeyOverride => typeof(Calendar);
 }

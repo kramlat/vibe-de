@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentToolstrip : ToolBar, IStyleable {
-    Type IStyleable.StyleKey => typeof(ToolBar);
+public class FluentToolstrip : ItemsControl {
+    protected override Type StyleKeyOverride => typeof(ItemsControl);
 }

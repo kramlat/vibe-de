@@ -1,12 +1,11 @@
-using Avalonia.Markup.Xaml;
+using Avalonia.Controls;
 
 namespace libFluent.Windows;
 
 public class FluentSplash : FluentWindow {
     public FluentSplash() {
-        AvaloniaXamlLoader.Load(this);
         CanResize = false;
         ShowInTaskbar = false;
-        SystemDecorations = SystemDecorations.None;
+        SystemDecorations = Avalonia.Controls.SystemDecorations.None;
     }
 }

@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentStackPanel : StackPanel, IStyleable {
-    Type IStyleable.StyleKey => typeof(StackPanel);
+public class FluentStackPanel : StackPanel {
+    protected override Type StyleKeyOverride => typeof(StackPanel);
 }

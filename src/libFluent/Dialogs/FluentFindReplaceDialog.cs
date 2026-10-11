@@ -4,6 +4,5 @@ using Avalonia.Markup.Xaml;
 
 public class FluentFindReplaceDialog : Window {
     public FluentFindReplaceDialog() {
-        AvaloniaXamlLoader.Load(this);
     }
 }

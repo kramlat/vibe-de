@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentTreeView : TreeView, IStyleable {
-    Type IStyleable.StyleKey => typeof(TreeView);
+public class FluentTreeView : TreeView {
+    protected override Type StyleKeyOverride => typeof(TreeView);
 }

@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentTabControl : TabControl, IStyleable {
-    Type IStyleable.StyleKey => typeof(TabControl);
+public class FluentTabControl : TabControl {
+    protected override Type StyleKeyOverride => typeof(TabControl);
 }

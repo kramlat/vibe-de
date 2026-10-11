@@ -5,6 +5,5 @@ using Avalonia.Markup.Xaml;
 public class FluentCommandDialog : Window {
     public FluentCommandDialog()
     {
-        AvaloniaXamlLoader.Load(this);
     }
 }

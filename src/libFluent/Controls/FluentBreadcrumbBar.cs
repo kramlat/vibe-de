@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentBreadcrumbBar : TemplatedControl, IStyleable {
-    Type IStyleable.StyleKey => typeof(TemplatedControl);
+public class FluentBreadcrumbBar : TemplatedControl {
+    protected override Type StyleKeyOverride => typeof(TemplatedControl);
 }

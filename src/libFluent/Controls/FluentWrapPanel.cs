@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentWrapPanel : WrapPanel, IStyleable {
-    Type IStyleable.StyleKey => typeof(WrapPanel);
+public class FluentWrapPanel : WrapPanel {
+    protected override Type StyleKeyOverride => typeof(WrapPanel);
 }

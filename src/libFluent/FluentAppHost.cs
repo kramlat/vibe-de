@@ -1,28 +1,14 @@
 using Avalonia;
-using Avalonia.Controls.ApplicationLifetimes;
-using Avalonia.ReactiveUI;
 
 namespace libFluent;
 
 public static class FluentAppHost
 {
-    private static bool _initialized;
-
+    // libFluent never owns the AppBuilder: the host application configures the platform
+    // (UsePlatformDetect, UseWayland, ...) and libFluent only checks that one is running.
     public static void EnsureInitialized()
     {
-        if (_initialized)
-            return;
-
-        BuildAvaloniaApp().SetupWithoutStarting();
-        _initialized = true;
+        if (Application.Current is null)
+            throw new InvalidOperationException("libFluent requires a running Avalonia Application.");
     }
-
-    private static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<FluentDummyApp>()
-                     .UsePlatformDetect()
-                     .UseReactiveUI();
-}
-
-internal class FluentDummyApp : Application
-{
 }

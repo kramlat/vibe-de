@@ -4,6 +4,5 @@ using Avalonia.Markup.Xaml;
 
 public class FluentProgressDialog : Window {
     public FluentProgressDialog() {
-        AvaloniaXamlLoader.Load(this);
     }
 }

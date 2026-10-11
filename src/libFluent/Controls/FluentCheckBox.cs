@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentCheckBox : CheckBox, IStyleable {
-    Type IStyleable.StyleKey => typeof(CheckBox);
+public class FluentCheckBox : CheckBox {
+    protected override Type StyleKeyOverride => typeof(CheckBox);
 }

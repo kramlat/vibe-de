@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentSearchBox : AutoCompleteBox, IStyleable {
-    Type IStyleable.StyleKey => typeof(AutoCompleteBox);
+public class FluentSearchBox : AutoCompleteBox {
+    protected override Type StyleKeyOverride => typeof(AutoCompleteBox);
 }

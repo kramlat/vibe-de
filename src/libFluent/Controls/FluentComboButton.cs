@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentComboButton : SplitButton, IStyleable {
-    Type IStyleable.StyleKey => typeof(SplitButton);
+public class FluentComboButton : SplitButton {
+    protected override Type StyleKeyOverride => typeof(SplitButton);
 }

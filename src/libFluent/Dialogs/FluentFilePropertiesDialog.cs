@@ -4,6 +4,5 @@ using Avalonia.Markup.Xaml;
 
 public class FluentFilePropertiesDialog : Window {
     public FluentFilePropertiesDialog() {
-        AvaloniaXamlLoader.Load(this);
     }
 }

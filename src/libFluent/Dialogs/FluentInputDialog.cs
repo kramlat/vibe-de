@@ -4,6 +4,5 @@ using Avalonia.Markup.Xaml;
 
 public class FluentInputDialog : Window {
     public FluentInputDialog() {
-        AvaloniaXamlLoader.Load(this);
     }
 }

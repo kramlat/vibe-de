@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentMenuItem : MenuItem, IStyleable {
-    Type IStyleable.StyleKey => typeof(MenuItem);
+public class FluentMenuItem : MenuItem {
+    protected override Type StyleKeyOverride => typeof(MenuItem);
 }

@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentDropdown : ComboBox, IStyleable {
-    Type IStyleable.StyleKey => typeof(ComboBox);
+public class FluentDropdown : ComboBox {
+    protected override Type StyleKeyOverride => typeof(ComboBox);
 }

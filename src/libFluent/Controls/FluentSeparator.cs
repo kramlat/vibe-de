@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentSeparator : Separator, IStyleable {
-    Type IStyleable.StyleKey => typeof(Separator);
+public class FluentSeparator : Separator {
+    protected override Type StyleKeyOverride => typeof(Separator);
 }

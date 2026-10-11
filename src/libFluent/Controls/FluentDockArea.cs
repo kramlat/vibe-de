@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentDockArea : DockPanel, IStyleable {
-    Type IStyleable.StyleKey => typeof(DockPanel);
+public class FluentDockArea : DockPanel {
+    protected override Type StyleKeyOverride => typeof(DockPanel);
 }

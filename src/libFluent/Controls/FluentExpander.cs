@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentExpander : Expander, IStyleable {
-    Type IStyleable.StyleKey => typeof(Expander);
+public class FluentExpander : Expander {
+    protected override Type StyleKeyOverride => typeof(Expander);
 }

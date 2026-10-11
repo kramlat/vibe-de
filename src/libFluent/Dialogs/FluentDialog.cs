@@ -4,6 +4,5 @@ namespace libFluent.Windows;
 
 public class FluentDialog : FluentWindow {
     public FluentDialog() {
-        AvaloniaXamlLoader.Load(this);
     }
 }

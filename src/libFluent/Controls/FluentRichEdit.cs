@@ -1,9 +1,8 @@
 using Avalonia.Controls;
-using Avalonia.Controls.Documents;
 using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentRichEdit : RichTextBox, IStyleable {
-    Type IStyleable.StyleKey => typeof(RichTextBox);
+public class FluentRichEdit : TextBox {
+    protected override Type StyleKeyOverride => typeof(TextBox);
 }

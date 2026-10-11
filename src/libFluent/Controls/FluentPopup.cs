@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentPopup : Popup, IStyleable {
-    Type IStyleable.StyleKey => typeof(Popup);
+public class FluentPopup : Popup {
+    protected override Type StyleKeyOverride => typeof(Popup);
 }

@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentMediaControl : TemplatedControl, IStyleable {
-    Type IStyleable.StyleKey => typeof(TemplatedControl);
+public class FluentMediaControl : TemplatedControl {
+    protected override Type StyleKeyOverride => typeof(TemplatedControl);
 }

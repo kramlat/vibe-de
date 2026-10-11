@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentRibbonStrip : TemplatedControl, IStyleable {
-    Type IStyleable.StyleKey => typeof(TemplatedControl);
+public class FluentRibbonStrip : TemplatedControl {
+    protected override Type StyleKeyOverride => typeof(TemplatedControl);
 }

@@ -6,6 +6,5 @@ namespace libFluent.Dialogs;
 
 public class FluentTaskDialog : Window {
     public FluentTaskDialog()     {
-        AvaloniaXamlLoader.Load(this);
     }
 }

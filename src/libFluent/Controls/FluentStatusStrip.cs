@@ -3,7 +3,7 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentStatusStrip : StatusBar, IStyleable
+public class FluentStatusStrip : ContentControl
 {
-    Type IStyleable.StyleKey => typeof(StatusBar);
+    protected override Type StyleKeyOverride => typeof(ContentControl);
 }

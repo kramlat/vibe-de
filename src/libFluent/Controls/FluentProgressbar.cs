@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentProgressBar : ProgressBar, IStyleable {
-    Type IStyleable.StyleKey => typeof(ProgressBar);
+public class FluentProgressBar : ProgressBar {
+    protected override Type StyleKeyOverride => typeof(ProgressBar);
 }

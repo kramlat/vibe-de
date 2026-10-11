@@ -1,8 +1,6 @@
-using Avalonia.Controls.Primitives;
-using Avalonia.Styling;
+using Avalonia.Controls;
 
 namespace libFluent.Controls;
 
-public class FluentFlyout : Flyout, IStyleable {
-    Type IStyleable.StyleKey => typeof(Flyout);
+public class FluentFlyout : Flyout {
 }

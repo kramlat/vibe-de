@@ -4,6 +4,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentRichLabel : TextBlock, IStyleable {
-    Type IStyleable.StyleKey => typeof(TextBlock);
+public class FluentRichLabel : TextBlock {
+    protected override Type StyleKeyOverride => typeof(TextBlock);
 }

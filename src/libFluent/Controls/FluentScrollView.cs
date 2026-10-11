@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentScrollView : ScrollViewer, IStyleable {
-    Type IStyleable.StyleKey => typeof(ScrollViewer);
+public class FluentScrollView : ScrollViewer {
+    protected override Type StyleKeyOverride => typeof(ScrollViewer);
 }

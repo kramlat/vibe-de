@@ -3,6 +3,6 @@ using Avalonia.Styling;
 
 namespace libFluent.Controls;
 
-public class FluentHexEdit : TemplatedControl, IStyleable {
-    Type IStyleable.StyleKey => typeof(TemplatedControl);
+public class FluentHexEdit : TemplatedControl {
+    protected override Type StyleKeyOverride => typeof(TemplatedControl);
 }
