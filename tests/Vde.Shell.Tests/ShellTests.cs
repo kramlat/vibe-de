@@ -1025,12 +1025,21 @@ public class RegistryOpenTests
             Shell = new ShellExecute(Assoc, mime, Launches, Fx.Env, types: new FileTypes(mime, Hkcr));
         }
 
+        // chmod 755 on a command value, as an installer deliberately does
+        public void MakeExecutable(string commandKey)
+        {
+            var current = Hkcr.GetValuePermissions(commandKey, "")!.Value;
+            Hkcr.SetValuePermissions(commandKey, "", current.WithMode(PosixPermissions.KeyDefault));
+        }
+
         public void Install()
         {
             Hkcr.SetValue(".thing", "", RegistryValueKind.String, "Thing.Document");
             Hkcr.SetValue(@"Thing.Document\shell\open\command", "", RegistryValueKind.String, "winish --open \"%1\"");
             Hkcr.SetValue(@"Thing.Document\shell\edit", "", RegistryValueKind.String, "&Edit with Thing");
             Hkcr.SetValue(@"Thing.Document\shell\edit\command", "", RegistryValueKind.String, "winish --edit \"%1\"");
+            MakeExecutable(@"Thing.Document\shell\open\command");
+            MakeExecutable(@"Thing.Document\shell\edit\command");
         }
 
         public void Dispose() => Fx.Dispose();
@@ -1096,7 +1105,191 @@ public class RegistryOpenTests
         using var w = new World();
         w.Hkcr.SetValue(".thing", "", RegistryValueKind.String, "Thing.Document");
         w.Hkcr.SetValue(@"Thing.Document\shell\open\command", "", RegistryValueKind.String, "/nowhere/app \"%1\"");
+        w.MakeExecutable(@"Thing.Document\shell\open\command");
 
         Assert.Throws<FileNotFoundException>(() => w.Shell.Open(w.File));
+    }
+}
+
+public class CommandTrustTests
+{
+    private static readonly RegistryIdentity Alice = new(1000, 1000, [100]);
+    private static readonly RegistryIdentity Bob = new(1001, 1001, [100]);
+    private static readonly RegistryIdentity Root = RegistryIdentity.Root;
+
+    private static ushort M(string octal) => PosixPermissions.ParseMode(octal);
+    private static PosixPermissions P(uint uid, uint gid, string mode) => new(uid, gid, M(mode));
+
+    [Theory]
+    [InlineData(1000u, "755", true)]     // mine, executable
+    [InlineData(1000u, "700", true)]
+    [InlineData(1000u, "644", false)]    // not executable: what an import or a plain write creates
+    [InlineData(0u, "755", true)]        // root's, executable by everyone
+    [InlineData(0u, "700", false)]       // root's, root only: not for Alice
+    [InlineData(0u, "750", false)]       // root's, group 0 only
+    [InlineData(1001u, "755", false)]    // Bob's: another user's command never runs as Alice
+    [InlineData(1000u, "757", false)]    // writable by anyone
+    [InlineData(1000u, "777", false)]
+    public void The_policy_for_an_ordinary_user(uint owner, string mode, bool trusted)
+        => Assert.Equal(trusted, CommandTrust.Evaluate(P(owner, owner, mode), Alice).IsTrusted);
+
+    [Fact]
+    public void Group_execute_works_for_group_members_only()
+    {
+        var shared = P(0, 100, "750");   // root's, group 100 may execute
+        Assert.True(CommandTrust.Evaluate(shared, Alice).IsTrusted);
+        Assert.True(CommandTrust.Evaluate(shared, Bob).IsTrusted);
+        Assert.False(CommandTrust.Evaluate(shared, new RegistryIdentity(1002, 1002)).IsTrusted);
+    }
+
+    [Fact]
+    public void Root_only_actions_run_for_root_and_say_why_they_do_not_for_everyone_else()
+    {
+        var rootOnly = P(0, 0, "700");
+
+        Assert.True(CommandTrust.Evaluate(rootOnly, Root).IsTrusted);
+        var denied = CommandTrust.Evaluate(rootOnly, Alice);
+        Assert.False(denied.IsTrusted);
+        Assert.Contains("not executable by you", denied.Reason);
+        Assert.Contains("another user", CommandTrust.Evaluate(P(1001, 1001, "755"), Alice).Reason);
+        Assert.Contains("anyone can write", CommandTrust.Evaluate(P(1000, 1000, "757"), Alice).Reason);
+        Assert.False(CommandTrust.Evaluate(null, Alice).IsTrusted);
+    }
+
+    private sealed class Capture : IProcessLauncher
+    {
+        public List<ProcessRequest> Started { get; } = new();
+        public void Start(ProcessRequest request) => Started.Add(request);
+    }
+
+    // The system hive is written by root (an installer); the user hive is Alice's.
+    private sealed class World : IDisposable
+    {
+        public Fixture Fx { get; } = new();
+        public Hive System { get; } = new("HKLM") { Identity = Root };
+        public Hive User { get; }
+        public ClassesRoot Hkcr { get; }
+        public Capture Launches { get; } = new();
+        public string File { get; }
+        public ShellExecute Shell { get; }
+        public FileTypes Types { get; }
+
+        public World(RegistryIdentity identity)
+        {
+            User = new Hive("HKCU") { Identity = identity };
+            Hkcr = new ClassesRoot(User, System);
+            Fx.Write("usr-share/mime/globs2", "50:application/x-thing:*.thing\n");
+            Fx.Program("winish");
+            Fx.Program("native");
+            Fx.App("native", "Native", "native %f", "application/x-thing;");
+            File = Fx.Write("docs/a.thing", "x");
+
+            var mime = new MimeDatabase(Fx.Xdg);
+            var apps = DesktopEntryDatabase.Load(Fx.Xdg, []);
+            Types = new FileTypes(mime, Hkcr, identity: identity);
+            Shell = new ShellExecute(new FileAssociations(Fx.Xdg, mime, apps, ["VDE"], Hkcr, mirrorToFreedesktop: false), mime, Launches, Fx.Env, types: Types);
+        }
+
+        // An installer (root) registers a command in the system hive with the given owner and mode.
+        public void InstallSystemCommand(string mode, uint owner = 0, uint group = 0)
+        {
+            System.SetValue(@"Software\Classes\.thing", "", RegistryValueKind.String, "Thing.Document");
+            System.SetValue(@"Software\Classes\Thing.Document\shell\open\command", "", RegistryValueKind.String, "winish \"%1\"");
+            System.SetValuePermissions(@"Software\Classes\Thing.Document\shell\open\command", "", P(owner, group, mode));
+            // keys must be searchable by everyone
+            System.SetKeyPermissions("", P(0, 0, "755"));
+        }
+
+        public void Dispose() => Fx.Dispose();
+    }
+
+    [Fact]
+    public void An_inert_open_command_is_ignored_and_freedesktop_takes_over()
+    {
+        using var w = new World(Alice);
+        w.InstallSystemCommand("644");   // registered, but not marked executable
+
+        w.Shell.Open(w.File);
+
+        Assert.EndsWith("native", Assert.Single(w.Launches.Started).FileName);   // the freedesktop app, not winish
+    }
+
+    [Fact]
+    public void An_executable_system_command_runs_for_a_normal_user()
+    {
+        using var w = new World(Alice);
+        w.InstallSystemCommand("755");
+
+        w.Shell.Open(w.File);
+
+        Assert.EndsWith("winish", Assert.Single(w.Launches.Started).FileName);
+    }
+
+    [Fact]
+    public void Verbs_report_trust_so_a_menu_can_grey_them_out_and_invoking_one_explains_itself()
+    {
+        using var w = new World(Alice);
+        w.InstallSystemCommand("700");   // root-only
+
+        var verb = Assert.Single(w.Types.GetVerbs(w.File));
+        Assert.False(verb.IsTrusted);
+        Assert.Contains("not executable by you", verb.UntrustedReason);
+
+        var ex = Assert.Throws<UntrustedCommandException>(() => w.Shell.Invoke(w.File, "open"));
+        Assert.Equal("open", ex.Verb);
+        Assert.Empty(w.Launches.Started);
+    }
+
+    [Fact]
+    public void The_same_root_only_command_runs_when_root_asks()
+    {
+        using var w = new World(Root);
+        w.InstallSystemCommand("700");
+
+        Assert.True(Assert.Single(w.Types.GetVerbs(w.File)).IsTrusted);
+        w.Shell.Invoke(w.File, "open");
+        Assert.EndsWith("winish", Assert.Single(w.Launches.Started).FileName);
+    }
+
+    [Fact]
+    public void A_users_own_override_beats_the_system_command_and_is_judged_on_its_own_permissions()
+    {
+        using var w = new World(Alice);
+        w.InstallSystemCommand("755");
+        // Alice overrides the command in her own hive: a plain write is 0644, so it is inert...
+        w.Hkcr.SetValue(@"Thing.Document\shell\open\command", "", RegistryValueKind.String, "winish --mine \"%1\"");
+        w.Hkcr.SetValue(".thing", "", RegistryValueKind.String, "Thing.Document");   // her hive's own copy of the chain
+        Assert.False(Assert.Single(w.Types.GetVerbs(w.File)).IsTrusted);
+
+        // ...until she marks it executable herself.
+        var current = w.Hkcr.GetValuePermissions(@"Thing.Document\shell\open\command", "")!.Value;
+        w.Hkcr.SetValuePermissions(@"Thing.Document\shell\open\command", "", current.WithMode(M("755")));
+        Assert.True(Assert.Single(w.Types.GetVerbs(w.File)).IsTrusted);
+        w.Shell.Open(w.File);
+        Assert.Contains("--mine", Assert.Single(w.Launches.Started).Arguments);
+    }
+
+    [Fact]
+    public void Importing_a_reg_file_cannot_plant_a_runnable_command()
+    {
+        using var w = new World(Alice);
+        const string reg = """
+            Windows Registry Editor Version 5.00
+
+            [HKEY_CLASSES_ROOT\.thing]
+            @="Thing.Document"
+
+            [HKEY_CLASSES_ROOT\Thing.Document\shell\open\command]
+            @="winish \"%1\""
+            """;
+
+        // HKEY_CLASSES_ROOT lives under Software\Classes in the user hive
+        var imported = RegFile.Parse(reg.Replace("HKEY_CLASSES_ROOT", @"HKEY_CURRENT_USER\Software\Classes"));
+        imported.ApplyTo(w.User, "HKEY_CURRENT_USER");
+
+        var verb = Assert.Single(w.Types.GetVerbs(w.File));
+        Assert.False(verb.IsTrusted);   // imported values are 0644
+        w.Shell.Open(w.File);
+        Assert.EndsWith("native", Assert.Single(w.Launches.Started).FileName);
     }
 }

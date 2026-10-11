@@ -71,6 +71,11 @@ public sealed class ClassesRoot
             : throw new KeyNotFoundException($"Key '{path}' does not exist.");
     }
 
+    // Changes the owner, group or mode of a value in the user's hive (a value that only the system hive has
+    // cannot be changed from here: override it in the user hive first).
+    public void SetValuePermissions(string path, string name, PosixPermissions permissions)
+        => _user.SetValuePermissions(Map(path), name, permissions);
+
     public void CreateKey(string path) => _user.CreateKey(Map(path));
     public void SetValue(string path, string name, RegistryValueKind kind, object? data) => _user.SetValue(Map(path), name, kind, data);
     public bool DeleteValue(string path, string name) => _user.DeleteValue(Map(path), name);

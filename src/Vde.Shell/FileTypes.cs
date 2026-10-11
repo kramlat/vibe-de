@@ -2,7 +2,9 @@ using Vibe.Registry;
 
 namespace Vde.Shell;
 
-public sealed record FileVerb(string Id, string Label, string Command);
+// IsTrusted says whether the shell may run Command for this user (see CommandTrust); an untrusted verb is still
+// listed so a menu can show it greyed out, or offer to mark it executable.
+public sealed record FileVerb(string Id, string Label, string Command, bool IsTrusted = true, string? UntrustedReason = null);
 
 public sealed record FileTypeInfo(
     string MimeType,
@@ -23,12 +25,14 @@ public sealed class FileTypes
     private readonly MimeDatabase _mime;
     private readonly ClassesRoot? _classes;
     private readonly IReadOnlyList<string> _locales;
+    private readonly RegistryIdentity _identity;
 
-    public FileTypes(MimeDatabase mime, ClassesRoot? classes = null, IReadOnlyList<string>? locales = null)
+    public FileTypes(MimeDatabase mime, ClassesRoot? classes = null, IReadOnlyList<string>? locales = null, RegistryIdentity? identity = null)
     {
         _mime = mime;
         _classes = classes;
         _locales = locales ?? [];
+        _identity = identity ?? RegistryIdentity.Current;
     }
 
     public string GetMimeType(string path)
@@ -83,7 +87,8 @@ public sealed class FileTypes
                 if (Read(shell + "\\" + verb + "\\command", "") is not { } command)
                     continue;
                 var label = Read(shell + "\\" + verb, "")?.Replace("&", "") ?? char.ToUpperInvariant(verb[0]) + verb[1..];
-                verbs.Add(new FileVerb(verb, label, command));
+                var trust = CommandTrust.Evaluate(_classes.GetValuePermissions(shell + "\\" + verb + "\\command", ""), _identity);
+                verbs.Add(new FileVerb(verb, label, command, trust.IsTrusted, trust.Reason));
             }
         }
 

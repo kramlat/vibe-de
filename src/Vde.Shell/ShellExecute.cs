@@ -92,8 +92,9 @@ public sealed class ShellExecute
         }
 
         // An application the user picked in the shell wins; then a command an installer registered
-        // (HKCR\<ProgID>\shell\open\command); then the freedesktop associations.
-        if (_associations.GetRegistryDefault(mime) is null && _types?.GetVerbs(path).FirstOrDefault(IsOpen) is { } open)
+        // (HKCR\<ProgID>\shell\open\command) that is trusted, i.e. marked executable; then freedesktop.
+        // A command that is not trusted is ignored here, exactly as if it had never been registered.
+        if (_associations.GetRegistryDefault(mime) is null && _types?.GetVerbs(path).FirstOrDefault(v => IsOpen(v) && v.IsTrusted) is { } open)
         {
             StartCommand(open.Command, [path]);
             return;
@@ -107,6 +108,8 @@ public sealed class ShellExecute
         path = Path.GetFullPath(path);
         var found = _types?.GetVerbs(path).FirstOrDefault(v => string.Equals(v.Id, verb, StringComparison.OrdinalIgnoreCase))
             ?? throw new ArgumentException($"'{path}' has no '{verb}' action.", nameof(verb));
+        if (!found.IsTrusted)
+            throw new UntrustedCommandException(found.Id, found.UntrustedReason ?? "it is not marked executable");
         StartCommand(found.Command, [path]);
     }
 
