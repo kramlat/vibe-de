@@ -8,10 +8,11 @@ public sealed record FileTypeInfo(
     IReadOnlyList<string> IconNames);    // freedesktop icon names (or an absolute path), most specific first
 
 // What kind of thing a file is, and how to show it: its MIME type, a friendly name and icon names.
-// The registry can override each per extension or per MIME type under HKCR\CLSID\<.ext or mime/type>:
-//   (Default)      friendly type name
-//   DefaultIcon    freedesktop icon name, or an absolute path to an image
-//   Content Type   MIME type to treat files with this extension as
+// The registry can override each, in either of the two layouts Explorer has always read:
+//   HKCR\CLSID\<.ext or mime/type>   (Default) friendly name, DefaultIcon, Content Type
+//   HKCR\.ext -> ProgID              Content Type on .ext; (Default) and DefaultIcon on HKCR\<ProgID>
+// The CLSID class is checked first, then the ProgID chain, then the MIME type's own class.
+// DefaultIcon is a freedesktop icon name or an absolute path; Windows "file,index" references are ignored.
 // Anything the registry does not say comes from the freedesktop MIME database.
 public sealed class FileTypes
 {
@@ -29,24 +30,40 @@ public sealed class FileTypes
     }
 
     public string GetMimeType(string path)
-        => Override(Extension(path), "Content Type") is { } forced ? _mime.Canonical(forced) : _mime.GuessForFile(path);
+    {
+        var ext = Extension(path);
+        var forced = Lookup(ext, "Content Type") ?? (ext is null ? null : Read(ext, "Content Type"));
+        return forced is not null ? _mime.Canonical(forced) : _mime.GuessForFile(path);
+    }
 
     public FileTypeInfo Describe(string path)
     {
         var ext = Extension(path);
         var mime = GetMimeType(path);
 
-        var description = Override(ext, "") ?? Override(mime, "") ?? _mime.Describe(mime, _locales);
+        var description = Lookup(ext, "") ?? ProgId(ext, "") ?? Lookup(mime, "") ?? _mime.Describe(mime, _locales);
 
         var icons = new List<string>();
-        if (Override(ext, "DefaultIcon") is { } extIcon)
-            icons.Add(extIcon);
-        if (Override(mime, "DefaultIcon") is { } mimeIcon && !icons.Contains(mimeIcon))
-            icons.Add(mimeIcon);
+        foreach (var candidate in new[] { Lookup(ext, "DefaultIcon"), ProgId(ext, "DefaultIcon"), Lookup(mime, "DefaultIcon") })
+            if (candidate is not null && IsDrawableHere(candidate) && !icons.Contains(candidate))
+                icons.Add(candidate);
         icons.AddRange(_mime.IconNames(mime).Where(n => !icons.Contains(n)));
 
         return new FileTypeInfo(mime, description, icons);
     }
+
+    // Windows layout: HKCR\.ext (Default = ProgID), then HKCR\<ProgID> holds the name and DefaultIcon.
+    private string? ProgId(string? ext, string valueName)
+    {
+        if (ext is null || Read(ext, "") is not { } progId)
+            return null;
+        return Read(progId, valueName);
+    }
+
+    // A Windows icon reference ("C:\app.exe,0", "shell32.dll,3") cannot be drawn here;
+    // freedesktop names and absolute Linux paths can.
+    private static bool IsDrawableHere(string icon)
+        => icon.StartsWith('/') || (!icon.Contains('\\') && !icon.Contains(','));
 
     // ".PNG" -> ".png"; directories and extension-less names have none.
     private static string? Extension(string path)
@@ -57,11 +74,15 @@ public sealed class FileTypes
         return ext.Length > 1 ? ext.ToLowerInvariant() : null;
     }
 
-    private string? Override(string? className, string valueName)
+    // HKCR\CLSID\<class>
+    private string? Lookup(string? className, string valueName)
+        => className is null ? null : Read(RegistryRoot + "\\" + className, valueName);
+
+    // A non-empty string value at an HKCR path. Anything else (missing, wrong type) counts as not set,
+    // so a bad registry entry can never break the file list.
+    private string? Read(string path, string valueName)
     {
-        if (_classes is null || className is null)
-            return null;
-        var value = _classes.GetValue(RegistryRoot + "\\" + className, valueName);
+        var value = _classes?.GetValue(path, valueName);
         return value is { Kind: RegistryValueKind.String or RegistryValueKind.ExpandString } && value.Data is string { Length: > 0 } s ? s : null;
     }
 }

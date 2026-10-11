@@ -876,3 +876,105 @@ public class FileTypesTests
         public void Start(ProcessRequest request) => into.Add(request);
     }
 }
+
+public class WindowsLayoutFileTypeTests
+{
+    private static (FileTypes types, ClassesRoot hkcr, Fixture fx) Build()
+    {
+        var fx = new Fixture();
+        fx.Write("usr-share/mime/globs2", "50:image/png:*.png\n50:text/x-log:*.log\n");
+        var hkcr = new ClassesRoot(new Hive("HKCU"), new Hive("HKLM"));
+        return (new FileTypes(new MimeDatabase(fx.Xdg), hkcr), hkcr, fx);
+    }
+
+    [Fact]
+    public void Follows_the_ext_to_ProgID_chain()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(".png", "", RegistryValueKind.String, "pngfile");
+            hkcr.SetValue("pngfile", "", RegistryValueKind.String, "PNG Image");
+            hkcr.SetValue("pngfile", "DefaultIcon", RegistryValueKind.String, "image-png-special");
+
+            var info = types.Describe("/x/a.png");
+
+            Assert.Equal("PNG Image", info.Description);
+            Assert.Equal("image-png-special", info.IconNames[0]);
+        }
+    }
+
+    [Fact]
+    public void Content_type_on_the_ext_key_is_honoured()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(".log", "Content Type", RegistryValueKind.String, "text/plain");
+            Assert.Equal("text/plain", types.GetMimeType("/x/a.log"));
+        }
+    }
+
+    [Fact]
+    public void Clsid_class_beats_the_ProgID_chain()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(".png", "", RegistryValueKind.String, "pngfile");
+            hkcr.SetValue("pngfile", "DefaultIcon", RegistryValueKind.String, "from-progid");
+            hkcr.SetValue("pngfile", "", RegistryValueKind.String, "From ProgID");
+            hkcr.SetValue(@"CLSID\.png", "DefaultIcon", RegistryValueKind.String, "from-clsid");
+            hkcr.SetValue(@"CLSID\.png", "", RegistryValueKind.String, "From CLSID");
+
+            var info = types.Describe("/x/a.png");
+
+            Assert.Equal("From CLSID", info.Description);
+            Assert.Equal(new[] { "from-clsid", "from-progid" }, info.IconNames.Take(2));
+        }
+    }
+
+    [Theory]
+    [InlineData(@"C:\Program Files\App\app.exe,0")]
+    [InlineData("shell32.dll,3")]
+    [InlineData(@"%SystemRoot%\system32\imageres.dll")]
+    public void Windows_icon_references_are_ignored(string windowsIcon)
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(".png", "", RegistryValueKind.String, "pngfile");
+            hkcr.SetValue("pngfile", "DefaultIcon", RegistryValueKind.String, windowsIcon);
+
+            Assert.Equal("image-png", types.Describe("/x/a.png").IconNames[0]);
+        }
+    }
+
+    [Fact]
+    public void Absolute_linux_paths_are_kept_as_icons()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(".png", "", RegistryValueKind.String, "pngfile");
+            hkcr.SetValue("pngfile", "DefaultIcon", RegistryValueKind.String, "/opt/app/icon.svg");
+
+            Assert.Equal("/opt/app/icon.svg", types.Describe("/x/a.png").IconNames[0]);
+        }
+    }
+
+    [Fact]
+    public void A_dangling_ProgID_is_harmless()
+    {
+        var (types, hkcr, fx) = Build();
+        using (fx)
+        {
+            hkcr.SetValue(".png", "", RegistryValueKind.String, "missingclass");
+
+            var info = types.Describe("/x/a.png");
+
+            Assert.Equal("image/png", info.MimeType);
+            Assert.Equal("image-png", info.IconNames[0]);
+        }
+    }
+}
