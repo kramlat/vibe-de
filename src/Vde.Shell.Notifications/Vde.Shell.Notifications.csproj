@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Vibe.Registry\Vibe.Registry.csproj" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
   </ItemGroup>
 
 </Project>
