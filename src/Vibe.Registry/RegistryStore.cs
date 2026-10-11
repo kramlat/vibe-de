@@ -15,14 +15,15 @@ public sealed class RegistryStore : IDisposable
     }
 
     // $XDG_CONFIG_HOME/hive/User.fhive and /etc/hive/System.fhive, opened for sharing between processes.
-    // The user hive is created (empty, mode 0600) if it does not exist yet. The system hive is only read, and
-    // never created here: for now a missing one simply reads as empty.
-    public static RegistryStore OpenDefault(string? userHivePath = null, string? systemHivePath = null, bool systemWritable = false, bool watch = true)
+    // The user hive is created (empty, mode 0600) if it does not exist yet. The system hive is only ever read:
+    // applications have no business writing it, and a missing one simply reads as empty. Creating and filling
+    // system hives is the job of the mkhive tool, run by an installer with the rights it needs.
+    public static RegistryStore OpenDefault(string? userHivePath = null, string? systemHivePath = null, bool watch = true)
     {
         userHivePath ??= Path.Combine(DefaultConfigHome(), "hive", "User.fhive");
         systemHivePath ??= "/etc/hive/System.fhive";
         return new RegistryStore(
-            Hive.OpenShared("HKLM", systemHivePath, watch, readOnly: !systemWritable, fileMode: UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead),
+            Hive.OpenShared("HKLM", systemHivePath, watch, readOnly: true),
             Hive.OpenShared("HKCU", userHivePath, watch));
     }
 
