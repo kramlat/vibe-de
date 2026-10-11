@@ -7,8 +7,7 @@ trademarks). AI features are optional and off unless enabled.
 ## Layout
 
 - `src/libFluent` — Fluent-style Avalonia control library (LGPL-3.0-or-later)
-- `src/Vibe.Registry` — registry abstraction plus the built-in Fhive/.reg backend (LGPL-3.0-or-later)
-- `src/Vibe.Registry.Elekra` — optional Elekra backend; the rest of the DE does not depend on it (LGPL-3.0-or-later)
+- `src/Vibe.Registry` — registry: Fhive hive files with `.reg` import/export (LGPL-3.0-or-later)
 - `src/Vibe.Shell` — taskbar, launcher, notifications, desktop (GPL-3.0-or-later)
 - compositor with X11 fallback and XWayland — later stage
 
