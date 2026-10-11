@@ -462,3 +462,73 @@ public class ProtocolRobustnessTests
         Assert.False(daemon.Hive.KeyExists("K"));
     }
 }
+
+public class FhiveClientTests
+{
+    [Fact]
+    public void With_a_daemon_running_the_store_goes_through_it()
+    {
+        using var userDaemon = new Daemon();
+        using var store = FhiveClient.OpenStore(
+            userHivePath: Path.Combine(userDaemon.Dir, "unused", "User.fhive"), systemHivePath: Path.Combine(userDaemon.Dir, "unused", "System.fhive"),
+            userSocket: userDaemon.Socket, systemSocket: Path.Combine(userDaemon.Dir, "no-such.sock"), watch: false);
+
+        Assert.True(FhiveClient.IsServedByDaemon(store.CurrentUser));    // the user hive: from the daemon
+        Assert.False(FhiveClient.IsServedByDaemon(store.LocalMachine));  // no system daemon: from its file
+        store.ClassesRoot.SetValue(".thing", "Content Type", RegistryValueKind.String, "application/x-thing");
+
+        Assert.Equal("application/x-thing", new ClassesRoot(userDaemon.Hive).GetValue(".thing", "Content Type")!.Data);   // it really went to the daemon
+        Assert.False(File.Exists(Path.Combine(userDaemon.Dir, "unused", "User.fhive")));                                   // and the file route was not used
+    }
+
+    [Fact]
+    public void Without_any_daemon_it_falls_back_to_the_files()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "fhive-fallback-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var store = FhiveClient.OpenStore(
+                userHivePath: Path.Combine(dir, "User.fhive"), systemHivePath: Path.Combine(dir, "System.fhive"),
+                userSocket: Path.Combine(dir, "no.sock"), systemSocket: Path.Combine(dir, "none.sock"), watch: false);
+
+            Assert.False(FhiveClient.IsServedByDaemon(store.CurrentUser));
+            Assert.False(FhiveClient.IsServedByDaemon(store.LocalMachine));
+            store.ClassesRoot.SetValue(".x", "v", RegistryValueKind.String, "1");
+            Assert.True(File.Exists(Path.Combine(dir, "User.fhive")));   // the user hive was created, as always
+            Assert.False(File.Exists(Path.Combine(dir, "System.fhive")));
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_stale_socket_file_is_not_mistaken_for_a_daemon()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "fhive-stale-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var stale = Path.Combine(dir, "user.sock");
+            File.WriteAllText(stale, "left over");
+            using var store = FhiveClient.OpenStore(
+                userHivePath: Path.Combine(dir, "User.fhive"), systemHivePath: Path.Combine(dir, "System.fhive"),
+                userSocket: stale, systemSocket: Path.Combine(dir, "none.sock"), watch: false);
+
+            Assert.False(FhiveClient.IsServedByDaemon(store.CurrentUser));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("/run/user/1000", "/run/user/1000/fhive/user.sock")]
+    [InlineData("relative/path", null)]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    public void The_user_socket_is_under_the_runtime_directory(string? runtime, string? expected)
+        => Assert.Equal(expected, FhiveClient.UserSocket(k => k == "XDG_RUNTIME_DIR" ? runtime : null));
+}
