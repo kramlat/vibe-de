@@ -1,0 +1,8 @@
+# Permissions for the system hive. Everything else is owned by root with the defaults (755 keys, 644 values).
+# Commands are only ever marked executable here, on purpose: this is the list of what ships as trusted.
+# (None yet: the shell's own actions are .desktop entries, not registry commands.)
+#
+# value Software\Classes\**\shell\*\command @ 755
+
+# Policy keys are for root alone to change and everyone to read.
+key   Software\Vde\Policies\**   755

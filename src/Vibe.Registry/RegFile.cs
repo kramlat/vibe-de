@@ -338,16 +338,20 @@ public sealed class RegFile
     // ---- hive interchange ----
 
     // Applies the sections under rootPrefix (e.g. "HKEY_CURRENT_USER") to a hive. Other sections are skipped.
+    // basePath puts them below a key instead of at the root: HKEY_CLASSES_ROOT lives at Software\Classes.
     // Returns how many sections were applied.
-    public int ApplyTo(Hive hive, string rootPrefix)
+    public int ApplyTo(Hive hive, string rootPrefix, string basePath = "")
     {
         rootPrefix = rootPrefix.Trim('\\');
+        basePath = basePath.Trim('\\');
         int applied = 0;
 
         foreach (var section in Sections)
         {
             if (!TryStrip(section.KeyPath, rootPrefix, out var relative))
                 continue;
+            if (basePath.Length > 0)
+                relative = relative.Length == 0 ? basePath : basePath + "\\" + relative;
 
             if (section.DeleteKey)
             {

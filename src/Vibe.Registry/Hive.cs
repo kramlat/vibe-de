@@ -63,11 +63,19 @@ public sealed class Hive : IDisposable
     // Raised on the calling thread after the change is applied and the lock released.
     public event EventHandler<RegistryChange>? Changed;
 
-    public Hive(string name)
+    public Hive(string name) : this(name, () => DateTime.UtcNow)
+    {
+    }
+
+    // clock supplies every timestamp (created, modified); a fixed one makes a hive file reproducible.
+    public Hive(string name, Func<DateTime> clock)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
+        Clock = clock;
         _root = NewRoot();
     }
+
+    public Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
 
     private Hive(string name, Node root)
     {
@@ -78,6 +86,8 @@ public sealed class Hive : IDisposable
     private Node NewRoot() => new(string.Empty, null)
     {
         Perms = new PosixPermissions(Identity.Uid, Identity.Gid, PosixPermissions.KeyDefault),
+        Created = Clock(),
+        Modified = Clock(),
     };
 
     // ---- persistence ----
@@ -193,11 +203,20 @@ public sealed class Hive : IDisposable
     }
 
     // Writes to a temporary file and renames it over the target, so a crash never leaves half a hive.
+    // The file keeps its permission (a 0600 hive stays 0600); a new one is private (0600) unless made otherwise.
     public void Save(string path)
     {
         var temp = path + ".tmp";
-        using (var stream = File.Create(temp))
+        var mode = File.Exists(path) ? File.GetUnixFileMode(path) : UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        File.Delete(temp);
+        using (var stream = new FileStream(temp, new FileStreamOptions
+               {
+                   Mode = FileMode.CreateNew, Access = FileAccess.Write, Share = FileShare.None, UnixCreateMode = mode,
+               }))
+        {
             Write(stream);
+            stream.Flush(flushToDisk: true);
+        }
         File.Move(temp, path, overwrite: true);
 
         if (path == FilePath)
@@ -255,7 +274,7 @@ public sealed class Hive : IDisposable
             DemandRemovable(node);
 
             parent.Children.Remove(node.Name);
-            parent.Modified = DateTime.UtcNow;
+            parent.Modified = Clock();
             changes.Add(new RegistryChange(RegistryChangeKind.KeyDeleted, node.FullPath));
             return true;
         });
@@ -296,7 +315,7 @@ public sealed class Hive : IDisposable
             {
                 DemandOwner(node.Perms, "change the flags of");
                 node.Flags = flags;
-                node.Modified = DateTime.UtcNow;
+                node.Modified = Clock();
                 changes.Add(new RegistryChange(RegistryChangeKind.KeyFlagsChanged, node.FullPath));
             }
             return null;
@@ -321,7 +340,7 @@ public sealed class Hive : IDisposable
             if (CheckPermissionChange(node.Perms, permissions))
             {
                 node.Perms = permissions;
-                node.Modified = DateTime.UtcNow;
+                node.Modified = Clock();
                 changes.Add(new RegistryChange(RegistryChangeKind.PermissionsChanged, node.FullPath));
             }
             return null;
@@ -404,7 +423,7 @@ public sealed class Hive : IDisposable
             }
 
             node.Values[name] = value;
-            node.Modified = DateTime.UtcNow;
+            node.Modified = Clock();
             changes.Add(new RegistryChange(RegistryChangeKind.ValueSet, node.FullPath, name));
             return null;
         });
@@ -425,7 +444,7 @@ public sealed class Hive : IDisposable
             if (CheckPermissionChange(value.Permissions, permissions))
             {
                 node.Values[name] = value.WithPermissions(permissions);
-                node.Modified = DateTime.UtcNow;
+                node.Modified = Clock();
                 changes.Add(new RegistryChange(RegistryChangeKind.PermissionsChanged, node.FullPath, name));
             }
             return null;
@@ -449,7 +468,7 @@ public sealed class Hive : IDisposable
 
             Demand(node, Access.Write | Access.Execute, "remove values from");
             node.Values.Remove(name);
-            node.Modified = DateTime.UtcNow;
+            node.Modified = Clock();
             changes.Add(new RegistryChange(RegistryChangeKind.ValueDeleted, node.FullPath, name));
             return true;
         });
@@ -530,9 +549,9 @@ public sealed class Hive : IDisposable
             if (!node.Children.TryGetValue(part, out var child))
             {
                 Demand(node, Access.Write | Access.Execute, "create keys in");
-                child = new Node(part, node) { Perms = NewPermissions(PosixPermissions.KeyDefault) };
+                child = new Node(part, node) { Perms = NewPermissions(PosixPermissions.KeyDefault), Created = Clock(), Modified = Clock() };
                 node.Children.Add(part, child);
-                node.Modified = DateTime.UtcNow;
+                node.Modified = Clock();
                 changes.Add(new RegistryChange(RegistryChangeKind.KeyCreated, child.FullPath));
             }
             node = child;

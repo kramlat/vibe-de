@@ -236,3 +236,32 @@ public class DefaultStoreTests
         Assert.False(store.ClassesRoot.KeyExists(".txt"));   // an absent system hive is just empty
     }
 }
+
+public class SaveModeTests
+{
+    [Fact]
+    public void Saving_a_loaded_hive_keeps_its_file_permissions()
+    {
+        using var dir = new TempDir();
+        Directory.CreateDirectory(Path.GetDirectoryName(dir.Hive)!);
+        new Hive("t").Save(dir.Hive);
+        File.SetUnixFileMode(dir.Hive, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);   // 0640
+
+        var hive = Hive.Load("t", dir.Hive);
+        hive.SetValue("A", "v", RegistryValueKind.Bool, true);
+        hive.Save();
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead, File.GetUnixFileMode(dir.Hive));
+    }
+
+    [Fact]
+    public void A_hive_saved_for_the_first_time_is_private()
+    {
+        using var dir = new TempDir();
+        Directory.CreateDirectory(Path.GetDirectoryName(dir.Hive)!);
+
+        new Hive("t").Save(dir.Hive);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(dir.Hive));
+    }
+}

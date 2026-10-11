@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>mkhive</AssemblyName>
+    <RootNamespace>Mkhive</RootNamespace>
+    <!-- Installed tools run on whatever .NET the system has, if it is newer than the one we build with. -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vibe.Registry\Vibe.Registry.csproj" />
+  </ItemGroup>
+
+</Project>
