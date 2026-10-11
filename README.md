@@ -7,6 +7,7 @@ trademarks). AI features are optional and off unless enabled.
 ## Layout
 
 - `src/Vde.Freedesktop` — XDG dirs, .desktop entries, icon/sound/cursor theme lookup (LGPL-3.0-or-later)
+- `src/Vde.Shell` — shell32-style services, no UI: known folders, MIME, file associations, launching, Trash, file operations, Computer/Network (LGPL-3.0-or-later)
 - `src/libFluent` — Fluent-style Avalonia control library (LGPL-3.0-or-later)
 - `src/Vibe.Registry` — the registry: typed hive files (`.fhive`, checksummed, atomic saves) with `.reg` import/export and change events (LGPL-3.0-or-later)
 - `tests/` — xunit tests (`dotnet test`)
