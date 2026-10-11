@@ -9,6 +9,7 @@ using Avalonia.VisualTree;
 using Vde.Freedesktop;
 using Vde.Shell;
 using Vde.Shell.Controls;
+using Vde.Shell.Theme;
 
 namespace Vde.Shell.Controls.Tests;
 
@@ -202,50 +203,144 @@ public class DriveTileTests
         selected.IsSelected = true;
         panel.Children.Add(selected);
 
-        // One window, theme switched at runtime: this is what a user changing the theme does.
-        var window = new Window { Width = 320, Height = 520, Content = panel, RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Light };
-        window.Show();
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "tiles-Light.png"));
-        window.RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "tiles-Dark.png"));
+        // A new window per theme: windows opened after a base-theme swap are fully re-styled.
+        foreach (var theme in new[] { "fluent", "simple" })
+            foreach (var variant in new[] { VariantPreference.Light, VariantPreference.Dark })
+            {
+                TestTheme.Engine.Apply(new ThemeSelection(theme, variant));
+                var window = new Window { Width = 320, Height = 520, Content = panel };
+                window.Show();
+                window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"tiles-{theme}-{variant}.png"));
+                window.Content = null;
+                window.Close();
+            }
     }
 }
 
-public class ThemeSwitchTests
+public class ThemeIntegrationTests
 {
-    [AvaloniaFact]
-    public void Tile_text_and_selection_follow_a_runtime_light_to_dark_switch()
+    private static double Brightness(Color c) => (c.R * 299 + c.G * 587 + c.B * 114) / 1000.0;
+
+    private static (DriveTile tile, Window window, TextBlock detail) Show()
     {
         var tile = DriveTile.For(new NetworkShare("photos on nas", "smb://nas/photos", "/mnt/nas", "cifs"));
         tile.IsSelected = true;
-        var window = new Window { Width = 320, Height = 100, Content = tile, RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Light };
+        var window = new Window { Width = 320, Height = 100, Content = tile };
         window.Show();
-
-        var detail = tile.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "smb://nas/photos");
-        var lightColor = ((ISolidColorBrush)detail.Foreground!).Color;
-
-        window.RequestedThemeVariant = Avalonia.Styling.ThemeVariant.Dark;
-        var darkColor = ((ISolidColorBrush)detail.Foreground!).Color;
-
-        Assert.True(Brightness(lightColor) < 128, $"light theme secondary text should be dark, was {lightColor}");
-        Assert.True(Brightness(darkColor) > 128, $"dark theme secondary text should be light, was {darkColor}");
-        Assert.NotEqual(Brushes.Transparent, tile.BorderBrush);   // selected: accent outline in both themes
+        return (tile, window, tile.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "smb://nas/photos"));
     }
 
-    private static double Brightness(Color c) => (c.R * 299 + c.G * 587 + c.B * 114) / 1000.0;
+    [AvaloniaFact]
+    public void Tile_text_follows_a_runtime_light_to_dark_switch()
+    {
+        var (_, _, detail) = Show();
+
+        TestTheme.Engine.Apply(new ThemeSelection("fluent", VariantPreference.Light));
+        var light = ((ISolidColorBrush)detail.Foreground!).Color;
+        TestTheme.Engine.Apply(new ThemeSelection("fluent", VariantPreference.Dark));
+        var dark = ((ISolidColorBrush)detail.Foreground!).Color;
+
+        Assert.True(Brightness(light) < 128, $"light theme secondary text should be dark, was {light}");
+        Assert.True(Brightness(dark) > 128, $"dark theme secondary text should be light, was {dark}");
+    }
+
+    [AvaloniaFact]
+    public void Tile_follows_a_theme_change_that_keeps_the_same_variant()
+    {
+        var (tile, _, _) = Show();
+
+        TestTheme.Engine.Apply(new ThemeSelection("fluent", VariantPreference.Light));
+        var fluentBorder = ((ISolidColorBrush)tile.BorderBrush!).Color;
+        TestTheme.Engine.Apply(new ThemeSelection("simple", VariantPreference.Light));   // no light/dark change at all
+        var simpleBorder = ((ISolidColorBrush)tile.BorderBrush!).Color;
+
+        Assert.NotEqual(fluentBorder, simpleBorder);
+    }
+
+    [AvaloniaFact]
+    public void A_custom_themes_tokens_reach_the_usage_bar()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "vde-ctl-theme-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(dir, "vde", "themes", "limes"));
+            File.WriteAllText(Path.Combine(dir, "vde", "themes", "limes", "index.theme"),
+                "[VDE Theme]\nBase=Fluent\n[Tokens]\nAccent=#00ff00\nCritical=#ffff00\n");
+            TestTheme.Reset(ThemeCatalog.Discover(TestTheme.EmptyXdg(dir)));
+
+            var bar = new UsageBar { Value = 0.5, Width = 160, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+            var window = new Window { Width = 200, Height = 30, Background = Brushes.White, Content = bar };
+            window.Show();
+
+            TestTheme.Engine.Apply(new ThemeSelection("limes"));
+            var normal = ShellIconTests.Pixel(window.CaptureRenderedFrame()!, 20, 15);
+            bar.Value = 0.95;
+            var critical = ShellIconTests.Pixel(window.CaptureRenderedFrame()!, 20, 15);
+
+            Assert.Equal((0u, 255u, 0u), normal);
+            Assert.Equal((255u, 255u, 0u), critical);
+        }
+        finally
+        {
+            TestTheme.Reset();
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void Changing_the_registry_re_themes_the_controls_live()
+    {
+        var (tile, _, detail) = Show();
+        var hive = new Vibe.Registry.Hive("HKCU");
+        using (TestTheme.Engine.BindTo(hive))
+        {
+            ThemeSettings.Save(hive, new ThemeSelection("fluent", VariantPreference.Dark));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(Brightness(((ISolidColorBrush)detail.Foreground!).Color) > 128);
+
+            ThemeSettings.Save(hive, new ThemeSelection("fluent", VariantPreference.Light, Color.Parse("#ff6a00")));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.True(Brightness(((ISolidColorBrush)detail.Foreground!).Color) < 128);
+            Assert.Equal(Color.Parse("#ff6a00"), ((ISolidColorBrush)tile.BorderBrush!).Color);   // the accent from the registry
+        }
+    }
 }
 
-public class ThemeKeyTests
+
+public class BaseThemeSwapTests
 {
-    // If Avalonia renames a brush, the controls would silently fall back to grey: catch that here.
-    [AvaloniaTheory]
-    [InlineData("Light")]
-    [InlineData("Dark")]
-    public void Every_resource_the_controls_use_exists_in_the_Fluent_theme(string variant)
+    private static string Bg(Window w) => $"{(w.Background as ISolidColorBrush)?.Color}";
+
+    [AvaloniaFact]
+    public void A_window_opened_after_switching_to_simple_dark_gets_simple_dark()
     {
-        var theme = variant == "Light" ? Avalonia.Styling.ThemeVariant.Light : Avalonia.Styling.ThemeVariant.Dark;
-        var window = new Window();
-        foreach (var key in ThemeKeys.All)
-            Assert.True(window.TryFindResource(key, theme, out var value) && value is IBrush, $"{key} missing in {variant}");
+        TestTheme.Engine.Apply(new ThemeSelection("fluent", VariantPreference.Light));
+        TestTheme.Engine.Apply(new ThemeSelection("simple", VariantPreference.Dark));
+
+        var window = new Window { Content = new TextBlock { Text = "hi" } };
+        window.Show();
+
+        Assert.Equal("#ff282828", Bg(window));
+    }
+
+    [AvaloniaFact]
+    public void The_host_is_told_when_the_base_theme_changes_but_not_for_variant_or_colour_changes()
+    {
+        TestTheme.Engine.Apply(new ThemeSelection("fluent"));
+        int baseChanges = 0;
+        void Count(object? s, EventArgs e) => baseChanges++;
+        TestTheme.Engine.BaseThemeChanged += Count;
+        try
+        {
+            TestTheme.Engine.Apply(new ThemeSelection("fluent", VariantPreference.Dark));
+            TestTheme.Engine.Apply(new ThemeSelection("fluent", VariantPreference.Dark, Color.Parse("#ff6a00")));
+            Assert.Equal(0, baseChanges);
+
+            TestTheme.Engine.Apply(new ThemeSelection("simple", VariantPreference.Dark));
+            Assert.Equal(1, baseChanges);
+            TestTheme.Engine.Apply(new ThemeSelection("simple", VariantPreference.Light));
+            Assert.Equal(1, baseChanges);
+        }
+        finally { TestTheme.Engine.BaseThemeChanged -= Count; }
     }
 }

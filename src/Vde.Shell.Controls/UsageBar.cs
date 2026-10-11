@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Vde.Shell.Theme;
 
 namespace Vde.Shell.Controls;
 
@@ -39,20 +40,33 @@ public sealed class UsageBar : Control
     {
         var track = new Rect(0, 0, Bounds.Width, Bounds.Height);
         double radius = Bounds.Height / 2;
-        context.DrawRectangle(Resource(ThemeKeys.Track, Brushes.Gray), null, track, radius, radius);
+        context.DrawRectangle(Token(ThemeToken.Track, Brushes.Gray), null, track, radius, radius);
 
         double fraction = Math.Clamp(double.IsNaN(Value) ? 0 : Value, 0, 1);
         if (fraction <= 0)
             return;
 
         var fill = fraction >= WarnAt
-            ? Resource(ThemeKeys.Critical, Brushes.Crimson)
-            : Resource(ThemeKeys.Accent, Brushes.RoyalBlue);
+            ? Token(ThemeToken.Critical, Brushes.Crimson)
+            : Token(ThemeToken.Accent, Brushes.RoyalBlue);
         // Never narrower than the corner radius, or the fill degenerates into a sliver.
         double width = Math.Max(Bounds.Width * fraction, Bounds.Height);
         context.DrawRectangle(fill, null, new Rect(0, 0, width, Bounds.Height), radius, radius);
     }
 
-    private IBrush Resource(string key, IBrush fallback)
-        => this.TryFindResource(key, ActualThemeVariant, out var value) && value is IBrush brush ? brush : fallback;
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        ThemeTokens.Changed += OnThemeChanged;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        ThemeTokens.Changed -= OnThemeChanged;
+    }
+
+    private void OnThemeChanged(object? sender, EventArgs e) => InvalidateVisual();
+
+    private IBrush Token(ThemeToken token, IBrush fallback) => ThemeTokens.Find(this, token, fallback);
 }

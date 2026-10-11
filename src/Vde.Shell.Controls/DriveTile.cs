@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Vde.Shell.Theme;
 
 namespace Vde.Shell.Controls;
 
@@ -70,22 +71,30 @@ public sealed class DriveTile : Border
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
+        ThemeTokens.Changed += OnThemeChanged;
         UpdateBrushes();
     }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnDetachedFromVisualTree(e);
+        ThemeTokens.Changed -= OnThemeChanged;
+    }
+
+    private void OnThemeChanged(object? sender, EventArgs e) => UpdateBrushes();
 
     // Theme brushes are looked up here, against the current theme variant, instead of through style
     // setters: setters inside a control's own Styles did not follow a runtime light/dark switch.
     private void UpdateBrushes()
     {
-        _detail.Foreground = Find(ThemeKeys.TextSecondary, Brushes.Gray);
-        Background = IsSelected ? Find(ThemeKeys.SelectedFill, Brushes.Transparent)
-            : _hover ? Find(ThemeKeys.HoverFill, Brushes.Transparent)
+        _detail.Foreground = Token(ThemeToken.TextSecondary, Brushes.Gray);
+        Background = IsSelected ? Token(ThemeToken.SelectedFill, Brushes.Transparent)
+            : _hover ? Token(ThemeToken.HoverFill, Brushes.Transparent)
             : Brushes.Transparent;
-        BorderBrush = IsSelected ? Find(ThemeKeys.Accent, Brushes.RoyalBlue) : Brushes.Transparent;
+        BorderBrush = IsSelected ? Token(ThemeToken.Accent, Brushes.RoyalBlue) : Brushes.Transparent;
     }
 
-    private IBrush Find(string key, IBrush fallback)
-        => this.TryFindResource(key, ActualThemeVariant, out var value) && value is IBrush brush ? brush : fallback;
+    private IBrush Token(ThemeToken token, IBrush fallback) => ThemeTokens.Find(this, token, fallback);
 
     public IReadOnlyList<string>? IconNames
     {
