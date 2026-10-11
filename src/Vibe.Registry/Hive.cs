@@ -36,11 +36,13 @@ public sealed record RegistryKeyInfo(
 
 // One registry hive: a tree of keys holding typed values. Paths use '\' and are case-insensitive;
 // the empty path is the hive root. Safe to use from several threads.
-public sealed class Hive
+public sealed class Hive : IDisposable
 {
     private readonly object _gate = new();
-    private readonly Node _root;
+    private Node _root;
     private volatile bool _dirty;
+    private HiveFile? _file;          // set for hives opened with OpenShared
+    private IDisposable? _watching;
 
     public string Name { get; }
     public string? FilePath { get; set; }
@@ -76,6 +78,67 @@ public sealed class Hive
         return hive;
     }
 
+    // Opens a hive that several processes use at once (see HiveFile for the protocol). Every change is saved
+    // immediately under a file lock, so there is nothing to Save and no update is lost; changes other processes
+    // make are picked up by a file watcher and raised as Changed events. A read-only hive (the system hive,
+    // for ordinary users) never locks or writes, and any change to it throws UnauthorizedAccessException.
+    public static Hive OpenShared(string name, string path, bool watch = true, bool readOnly = false)
+    {
+        var hive = new Hive(name) { FilePath = path };
+        var file = new HiveFile(path, readOnly);
+        if (file.ReadIfChanged() is { } root)
+            hive._root = root;
+        hive._file = file;
+        if (watch)
+            hive._watching = file.Watch(hive.RefreshQuietly);
+        return hive;
+    }
+
+    public bool IsShared => _file is not null;
+    public bool IsReadOnly => _file?.ReadOnly ?? false;
+
+    // Re-reads a shared hive if another process changed it, raising Changed for each difference.
+    public void Refresh()
+    {
+        var changes = new List<RegistryChange>();
+        lock (_gate)
+        {
+            if (_file is null)
+                return;
+            ApplyExternal(changes);
+        }
+        foreach (var change in changes)
+            Changed?.Invoke(this, change);
+    }
+
+    // The watcher calls this on a thread-pool thread: a half-written or broken file must not kill the process.
+    private void RefreshQuietly()
+    {
+        try
+        {
+            Refresh();
+        }
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    // Caller holds _gate.
+    private void ApplyExternal(List<RegistryChange> changes)
+    {
+        if (_file!.ReadIfChanged() is not { } root)
+            return;
+        HiveDiff.GraftVolatile(_root, root);
+        changes.AddRange(HiveDiff.Between(_root, root));
+        _root = root;
+    }
+
+    public void Dispose()
+    {
+        _watching?.Dispose();
+        _watching = null;
+    }
+
     public static Hive Read(string name, Stream stream) => new(name, FhiveFormat.Read(stream));
 
     public void Write(Stream stream)
@@ -85,7 +148,11 @@ public sealed class Hive
     }
 
     public void Save()
-        => Save(FilePath ?? throw new InvalidOperationException("The hive has no file path."));
+    {
+        if (_file is not null)
+            return;   // shared hives are already on disk
+        Save(FilePath ?? throw new InvalidOperationException("The hive has no file path."));
+    }
 
     // Writes to a temporary file and renames it over the target, so a crash never leaves half a hive.
     public void Save(string path)
@@ -235,9 +302,28 @@ public sealed class Hive
         T result;
         lock (_gate)
         {
-            result = body(changes);
-            if (changes.Count > 0)
-                _dirty = true;
+            if (_file is null)
+            {
+                result = body(changes);
+                if (changes.Count > 0)
+                    _dirty = true;
+            }
+            else
+            {
+                if (_file.ReadOnly)
+                    throw new UnauthorizedAccessException($"The hive '{Name}' is read-only.");
+
+                // lock the file, catch up with whatever other processes did, make the change, write it back
+                using (_file.Lock())
+                {
+                    ApplyExternal(changes);
+                    var local = new List<RegistryChange>();
+                    result = body(local);
+                    if (local.Count > 0)
+                        _file.Write(_root);
+                    changes.AddRange(local);
+                }
+            }
         }
         foreach (var change in changes)
             Changed?.Invoke(this, change);

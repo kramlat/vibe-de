@@ -16,6 +16,17 @@ internal sealed class Node
         Parent = parent;
     }
 
+    // A deep copy under a new parent.
+    public Node CloneUnder(Node? parent)
+    {
+        var copy = new Node(Name, parent) { Flags = Flags, Created = Created, Modified = Modified };
+        foreach (var value in Values)
+            copy.Values.Add(value.Key, value.Value);
+        foreach (var child in Children.Values)
+            copy.Children.Add(child.Name, child.CloneUnder(copy));
+        return copy;
+    }
+
     public string FullPath => Parent is null ? string.Empty
         : Parent.Parent is null ? Name
         : Parent.FullPath + "\\" + Name;
