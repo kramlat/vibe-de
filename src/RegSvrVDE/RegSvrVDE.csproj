@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>RegSvrVDE</AssemblyName>
+    <RootNamespace>RegSvrVDE</RootNamespace>
+    <!-- Installed tools run on whatever .NET the system has, if it is newer than the one we build with. -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Reflection.MetadataLoadContext" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vde.Components\Vde.Components.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -11,6 +11,7 @@ trademarks). AI features are optional and off unless enabled.
 - `src/Vde.Shell.Controls` — Avalonia controls for shell concepts: icon view, drive tile, usage bar (LGPL-3.0-or-later)
 - `src/Vde.Shell.Theme` — theme engine: Fluent + Simple (light/dark/system) and user themes from `<data>/vde/themes/<id>/index.theme`, colour tokens, registry-backed settings (LGPL-3.0-or-later)
 - `src/mkhive` — creates and fills hive files for installers and build scripts: .reg inputs, permission rules, reproducible output, never needs root (`mkhive --help`)
+- `src/Vde.Components` + `src/RegSvrVDE` — component declaration ([VdeComponent]), COM-style registration under HKCR\CLSID, trust checks; RegSvrVDE is the regsvr32 equivalent (reads assemblies without running them) (LGPL-3.0-or-later)
 - `src/libFluent` — Fluent-style Avalonia control library (LGPL-3.0-or-later)
 - `src/Vibe.Registry` — the registry: typed hive files (`.fhive`, checksummed, atomic saves) with `.reg` import/export and change events (LGPL-3.0-or-later)
 - `tests/` — xunit tests (`dotnet test`)

@@ -87,7 +87,7 @@ public sealed class FileTypes
                 if (Read(shell + "\\" + verb + "\\command", "") is not { } command)
                     continue;
                 var label = Read(shell + "\\" + verb, "")?.Replace("&", "") ?? char.ToUpperInvariant(verb[0]) + verb[1..];
-                var trust = CommandTrust.Evaluate(_classes.GetValuePermissions(shell + "\\" + verb + "\\command", ""), _identity);
+                var trust = ExecutionTrust.Evaluate(_classes.GetValuePermissions(shell + "\\" + verb + "\\command", ""), _identity);
                 verbs.Add(new FileVerb(verb, label, command, trust.IsTrusted, trust.Reason));
             }
         }

@@ -1111,7 +1111,7 @@ public class RegistryOpenTests
     }
 }
 
-public class CommandTrustTests
+public class ExecutionTrustTests
 {
     private static readonly RegistryIdentity Alice = new(1000, 1000, [100]);
     private static readonly RegistryIdentity Bob = new(1001, 1001, [100]);
@@ -1131,15 +1131,15 @@ public class CommandTrustTests
     [InlineData(1000u, "757", false)]    // writable by anyone
     [InlineData(1000u, "777", false)]
     public void The_policy_for_an_ordinary_user(uint owner, string mode, bool trusted)
-        => Assert.Equal(trusted, CommandTrust.Evaluate(P(owner, owner, mode), Alice).IsTrusted);
+        => Assert.Equal(trusted, ExecutionTrust.Evaluate(P(owner, owner, mode), Alice).IsTrusted);
 
     [Fact]
     public void Group_execute_works_for_group_members_only()
     {
         var shared = P(0, 100, "750");   // root's, group 100 may execute
-        Assert.True(CommandTrust.Evaluate(shared, Alice).IsTrusted);
-        Assert.True(CommandTrust.Evaluate(shared, Bob).IsTrusted);
-        Assert.False(CommandTrust.Evaluate(shared, new RegistryIdentity(1002, 1002)).IsTrusted);
+        Assert.True(ExecutionTrust.Evaluate(shared, Alice).IsTrusted);
+        Assert.True(ExecutionTrust.Evaluate(shared, Bob).IsTrusted);
+        Assert.False(ExecutionTrust.Evaluate(shared, new RegistryIdentity(1002, 1002)).IsTrusted);
     }
 
     [Fact]
@@ -1147,13 +1147,13 @@ public class CommandTrustTests
     {
         var rootOnly = P(0, 0, "700");
 
-        Assert.True(CommandTrust.Evaluate(rootOnly, Root).IsTrusted);
-        var denied = CommandTrust.Evaluate(rootOnly, Alice);
+        Assert.True(ExecutionTrust.Evaluate(rootOnly, Root).IsTrusted);
+        var denied = ExecutionTrust.Evaluate(rootOnly, Alice);
         Assert.False(denied.IsTrusted);
         Assert.Contains("not executable by you", denied.Reason);
-        Assert.Contains("another user", CommandTrust.Evaluate(P(1001, 1001, "755"), Alice).Reason);
-        Assert.Contains("anyone can write", CommandTrust.Evaluate(P(1000, 1000, "757"), Alice).Reason);
-        Assert.False(CommandTrust.Evaluate(null, Alice).IsTrusted);
+        Assert.Contains("another user", ExecutionTrust.Evaluate(P(1001, 1001, "755"), Alice).Reason);
+        Assert.Contains("anyone can write", ExecutionTrust.Evaluate(P(1000, 1000, "757"), Alice).Reason);
+        Assert.False(ExecutionTrust.Evaluate(null, Alice).IsTrusted);
     }
 
     private sealed class Capture : IProcessLauncher
@@ -1533,9 +1533,9 @@ public class ElevationTests
     public void Root_still_needs_an_execute_bit_somewhere()
     {
         var root = RegistryIdentity.Root;
-        Assert.False(CommandTrust.Evaluate(new PosixPermissions(0, 0, M("644")), root).IsTrusted);   // an imported command does not run even as root
-        Assert.True(CommandTrust.Evaluate(new PosixPermissions(0, 0, M("700")), root).IsTrusted);
-        Assert.True(CommandTrust.Evaluate(new PosixPermissions(0, 0, M("010")), root).IsTrusted);
+        Assert.False(ExecutionTrust.Evaluate(new PosixPermissions(0, 0, M("644")), root).IsTrusted);   // an imported command does not run even as root
+        Assert.True(ExecutionTrust.Evaluate(new PosixPermissions(0, 0, M("700")), root).IsTrusted);
+        Assert.True(ExecutionTrust.Evaluate(new PosixPermissions(0, 0, M("010")), root).IsTrusted);
     }
 
     [Fact]
