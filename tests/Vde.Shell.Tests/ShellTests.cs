@@ -1293,3 +1293,347 @@ public class CommandTrustTests
         Assert.EndsWith("native", Assert.Single(w.Launches.Started).FileName);
     }
 }
+
+public class ElevationTests
+{
+    private static readonly RegistryIdentity Alice = new(1000, 1000, [100]);
+
+    private static ushort M(string octal) => PosixPermissions.ParseMode(octal);
+
+    private sealed class ScriptedPrompt(params ElevationResponse[] responses) : IElevationPrompt
+    {
+        private readonly Queue<ElevationResponse> _responses = new(responses);
+        public List<(ElevationRequest request, int attempt, string? error)> Asked { get; } = new();
+
+        public Task<ElevationResponse> AskAsync(ElevationRequest request, int attempt, string? previousError, CancellationToken cancel)
+        {
+            Asked.Add((request, attempt, previousError));
+            return Task.FromResult(_responses.Count > 0 ? _responses.Dequeue() : ElevationResponse.Cancel);
+        }
+    }
+
+    private sealed class FakeBackend(bool canElevate, params ElevationOutcome[] outcomes) : IElevationBackend
+    {
+        private readonly Queue<ElevationOutcome> _outcomes = new(outcomes);
+        public List<(IReadOnlyList<string> commandLine, char[] password)> Runs { get; } = new();
+
+        public bool CanElevate(RegistryIdentity identity) => canElevate;
+
+        public Task<ElevationOutcome> RunAsync(IReadOnlyList<string> commandLine, ReadOnlyMemory<char> password, CancellationToken cancel)
+        {
+            Runs.Add((commandLine, password.ToArray()));
+            return Task.FromResult(_outcomes.Count > 0 ? _outcomes.Dequeue() : ElevationOutcome.Success);
+        }
+    }
+
+    private static ElevationResponse Password(string text) => new(true, text.ToCharArray());
+
+    private sealed class Capture : IProcessLauncher
+    {
+        public List<ProcessRequest> Started { get; } = new();
+        public void Start(ProcessRequest request) => Started.Add(request);
+    }
+
+    // A command registered by an installer (root), with the mode the test asks for; Alice is the user.
+    private sealed class World : IDisposable
+    {
+        public Fixture Fx { get; } = new();
+        public Capture Launches { get; } = new();
+        public string File { get; }
+        public string Winish { get; }
+        public ShellExecute Shell { get; }
+
+        public World(string commandMode, IElevationPrompt? prompt = null, IElevationBackend? backend = null, bool freedesktopFallback = false)
+        {
+            var system = new Hive("HKLM") { Identity = RegistryIdentity.Root };
+            system.SetKeyPermissions("", new PosixPermissions(0, 0, M("755")));
+            system.SetValue(@"Software\Classes\.thing", "", RegistryValueKind.String, "Thing.Document");
+            system.SetValue(@"Software\Classes\Thing.Document\shell\open\command", "", RegistryValueKind.String, "winish --open \"%1\"");
+            system.SetValue(@"Software\Classes\Thing.Document\shell\edit\command", "", RegistryValueKind.String, "winish --edit \"%1\"");
+            foreach (var verb in new[] { "open", "edit" })
+                system.SetValuePermissions($@"Software\Classes\Thing.Document\shell\{verb}\command", "", new PosixPermissions(0, 0, M(commandMode)));
+            var hkcr = new ClassesRoot(new Hive("HKCU") { Identity = Alice }, system);
+
+            Fx.Write("usr-share/mime/globs2", "50:application/x-thing:*.thing\n");
+            Winish = Fx.Program("winish");
+            if (freedesktopFallback)
+            {
+                Fx.Program("native");
+                Fx.App("native", "Native", "native %f", "application/x-thing;");
+            }
+            File = Fx.Write("docs/a.thing", "x");
+
+            var mime = new MimeDatabase(Fx.Xdg);
+            var apps = DesktopEntryDatabase.Load(Fx.Xdg, []);
+            var types = new FileTypes(mime, hkcr, identity: Alice);
+            var elevation = prompt is null || backend is null ? null : new ElevationOptions(backend, prompt, Alice);
+            Shell = new ShellExecute(new FileAssociations(Fx.Xdg, mime, apps, ["VDE"], hkcr, mirrorToFreedesktop: false),
+                mime, Launches, Fx.Env, types: types, elevation: elevation);
+        }
+
+        public void Dispose() => Fx.Dispose();
+    }
+
+    [Fact]
+    public async Task A_trusted_action_runs_without_any_prompt()
+    {
+        var prompt = new ScriptedPrompt();
+        var backend = new FakeBackend(true);
+        using var w = new World("755", prompt, backend);
+
+        await w.Shell.InvokeAsync(w.File, "edit");
+
+        Assert.Equal(new[] { "--edit", w.File }, Assert.Single(w.Launches.Started).Arguments);
+        Assert.Empty(prompt.Asked);
+        Assert.Empty(backend.Runs);
+    }
+
+    [Fact]
+    public async Task Without_elevation_an_untrusted_action_is_rejected()
+    {
+        using var w = new World("644");
+
+        var ex = await Assert.ThrowsAsync<UntrustedCommandException>(() => w.Shell.InvokeAsync(w.File, "edit"));
+        Assert.Equal(w.File, ex.Path);
+        await Assert.ThrowsAsync<UntrustedCommandException>(() => w.Shell.OpenAsync(w.File));
+        Assert.Empty(w.Launches.Started);
+    }
+
+    [Fact]
+    public async Task A_user_who_may_not_elevate_is_rejected_before_any_prompt()
+    {
+        var prompt = new ScriptedPrompt(Password("hunter2"));
+        var backend = new FakeBackend(canElevate: false);
+        using var w = new World("700", prompt, backend);
+
+        var ex = await Assert.ThrowsAsync<ElevationDeniedException>(() => w.Shell.InvokeAsync(w.File, "edit"));
+
+        Assert.Contains("not allowed to elevate", ex.Message);
+        Assert.Empty(prompt.Asked);
+        Assert.Empty(backend.Runs);
+        Assert.Empty(w.Launches.Started);
+    }
+
+    [Fact]
+    public async Task A_user_who_may_elevate_sees_the_exact_command_and_it_runs_through_the_backend()
+    {
+        var response = Password("hunter2");
+        var prompt = new ScriptedPrompt(response);
+        var backend = new FakeBackend(true);
+        using var w = new World("700", prompt, backend);
+
+        await w.Shell.InvokeAsync(w.File, "edit");
+
+        var (request, attempt, error) = Assert.Single(prompt.Asked);
+        Assert.Equal(1, attempt);
+        Assert.Null(error);
+        Assert.Equal("Edit", request.Label);
+        Assert.Equal(new[] { w.Winish, "--edit", w.File }, request.CommandLine);
+        Assert.Equal($"{w.Winish} --edit {w.File}", request.CommandText);
+        Assert.Contains("not executable by you", request.Reason);
+
+        var run = Assert.Single(backend.Runs);
+        Assert.Equal(request.CommandLine, run.commandLine);
+        Assert.Equal("hunter2", new string(run.password));
+        Assert.All(response.Password!, c => Assert.Equal('\0', c));   // wiped after use
+        Assert.Empty(w.Launches.Started);                              // elevated runs go through the backend, not the plain launcher
+    }
+
+    [Fact]
+    public async Task Cancelling_runs_nothing_and_says_so()
+    {
+        var prompt = new ScriptedPrompt(ElevationResponse.Cancel);
+        var backend = new FakeBackend(true);
+        using var w = new World("700", prompt, backend);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => w.Shell.InvokeAsync(w.File, "edit"));
+
+        Assert.Single(prompt.Asked);
+        Assert.Empty(backend.Runs);
+        Assert.Empty(w.Launches.Started);
+    }
+
+    [Fact]
+    public async Task A_wrong_password_asks_again_up_to_three_times()
+    {
+        var wrong = new ElevationOutcome(ElevationStatus.WrongPassword, "Sorry, try again.");
+        var prompt = new ScriptedPrompt(Password("a"), Password("b"), Password("right"));
+        var backend = new FakeBackend(true, wrong, wrong, ElevationOutcome.Success);
+        using var w = new World("700", prompt, backend);
+
+        await w.Shell.InvokeAsync(w.File, "edit");
+
+        Assert.Equal(new[] { 1, 2, 3 }, prompt.Asked.Select(a => a.attempt));
+        Assert.Null(prompt.Asked[0].error);
+        Assert.Equal("Incorrect password. Try again.", prompt.Asked[1].error);
+        Assert.Equal("Incorrect password. Try again.", prompt.Asked[2].error);
+        Assert.Equal("right", new string(backend.Runs[2].password));
+    }
+
+    [Fact]
+    public async Task Three_wrong_passwords_end_in_a_denial()
+    {
+        var wrong = new ElevationOutcome(ElevationStatus.WrongPassword);
+        var prompt = new ScriptedPrompt(Password("1"), Password("2"), Password("3"), Password("4"));
+        var backend = new FakeBackend(true, wrong, wrong, wrong, wrong);
+        using var w = new World("700", prompt, backend);
+
+        var ex = await Assert.ThrowsAsync<ElevationDeniedException>(() => w.Shell.InvokeAsync(w.File, "edit"));
+
+        Assert.Contains("Too many", ex.Message);
+        Assert.Equal(3, prompt.Asked.Count);
+    }
+
+    [Fact]
+    public async Task The_backend_can_refuse_after_the_password_and_can_fail_to_start()
+    {
+        using (var denied = new World("700", new ScriptedPrompt(Password("pw")),
+                   new FakeBackend(true, new ElevationOutcome(ElevationStatus.NotAllowed, "Sorry, user alice may not run sudo."))))
+        {
+            var ex = await Assert.ThrowsAsync<ElevationDeniedException>(() => denied.Shell.InvokeAsync(denied.File, "edit"));
+            Assert.Contains("may not run sudo", ex.Message);
+        }
+
+        using var failed = new World("700", new ScriptedPrompt(Password("pw")),
+            new FakeBackend(true, new ElevationOutcome(ElevationStatus.Failed, "command not found")));
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => failed.Shell.InvokeAsync(failed.File, "edit"));
+        Assert.Contains("command not found", failure.Message);
+    }
+
+    [Fact]
+    public async Task Opening_prefers_a_trusted_alternative_to_asking_for_a_password()
+    {
+        var prompt = new ScriptedPrompt(Password("pw"));
+        using var w = new World("644", prompt, new FakeBackend(true), freedesktopFallback: true);
+
+        await w.Shell.OpenAsync(w.File);
+
+        Assert.EndsWith("native", Assert.Single(w.Launches.Started).FileName);
+        Assert.Empty(prompt.Asked);
+    }
+
+    [Fact]
+    public async Task Opening_with_nothing_else_available_asks_to_elevate_the_registered_command()
+    {
+        var prompt = new ScriptedPrompt(Password("pw"));
+        var backend = new FakeBackend(true);
+        using var w = new World("644", prompt, backend);
+
+        var plain = Assert.Throws<UntrustedCommandException>(() => w.Shell.Open(w.File));   // the synchronous call only reports it
+        Assert.Equal("open", plain.Verb);
+        Assert.Equal(w.File, plain.Path);
+
+        await w.Shell.OpenAsync(w.File);
+
+        Assert.Equal(new[] { w.Winish, "--open", w.File }, Assert.Single(prompt.Asked).request.CommandLine);
+        Assert.Single(backend.Runs);
+    }
+
+    [Fact]
+    public void Root_still_needs_an_execute_bit_somewhere()
+    {
+        var root = RegistryIdentity.Root;
+        Assert.False(CommandTrust.Evaluate(new PosixPermissions(0, 0, M("644")), root).IsTrusted);   // an imported command does not run even as root
+        Assert.True(CommandTrust.Evaluate(new PosixPermissions(0, 0, M("700")), root).IsTrusted);
+        Assert.True(CommandTrust.Evaluate(new PosixPermissions(0, 0, M("010")), root).IsTrusted);
+    }
+
+    [Fact]
+    public void The_command_text_quotes_anything_ambiguous()
+    {
+        var request = new ElevationRequest("x", "open", "/f", ["/usr/bin/tool", "--name=a b", "it's", "plain-arg_1.txt", ""], "r");
+
+        Assert.Equal(@"/usr/bin/tool '--name=a b' 'it'\''s' plain-arg_1.txt ''", request.CommandText);
+    }
+}
+
+public class SudoBackendTests
+{
+    private sealed class FakeExecutor(params ExecResult[] results) : IProcessExecutor
+    {
+        private readonly Queue<ExecResult> _results = new(results);
+        public List<(IReadOnlyList<string> commandLine, string? stdin)> Calls { get; } = new();
+        public Exception? Throw { get; init; }
+
+        public Task<ExecResult> RunAsync(IReadOnlyList<string> commandLine, string? standardInput, TimeSpan wait, CancellationToken cancel)
+        {
+            Calls.Add((commandLine, standardInput));
+            if (Throw is not null)
+                throw Throw;
+            return Task.FromResult(_results.Count > 0 ? _results.Dequeue() : new ExecResult(0, "", false));
+        }
+    }
+
+    private static readonly ExecResult Ok = new(0, "", false);
+    private static readonly ExecResult Running = new(0, "", true);
+
+    private static string GroupFile(Fixture fx) => fx.Write("etc/group", "root:x:0:\nwheel:x:998:deck\nusers:x:100:\n");
+
+    [Fact]
+    public void Administrators_may_elevate_by_group_without_asking_sudo()
+    {
+        using var fx = new Fixture();
+        var executor = new FakeExecutor(new ExecResult(1, "a password is required", false));
+        var backend = new SudoBackend(executor, GroupFile(fx));
+
+        Assert.True(backend.CanElevate(new RegistryIdentity(1000, 1000, [998])));   // in wheel
+        Assert.Empty(executor.Calls);
+        Assert.True(backend.CanElevate(RegistryIdentity.Root));
+    }
+
+    [Fact]
+    public void Others_may_elevate_only_if_sudo_lets_them_in_without_a_password()
+    {
+        using var fx = new Fixture();
+        var identity = new RegistryIdentity(1001, 1001, [100]);
+
+        Assert.True(new SudoBackend(new FakeExecutor(Ok), GroupFile(fx)).CanElevate(identity));
+        Assert.False(new SudoBackend(new FakeExecutor(new ExecResult(1, "a password is required", false)), GroupFile(fx)).CanElevate(identity));
+        Assert.False(new SudoBackend(new FakeExecutor { Throw = new System.ComponentModel.Win32Exception("no sudo") }, GroupFile(fx)).CanElevate(identity));
+    }
+
+    [Fact]
+    public async Task The_password_goes_to_stdin_only_the_command_runs_on_that_authentication_and_it_is_dropped_after()
+    {
+        var executor = new FakeExecutor(Ok, Running, Ok);
+        var backend = new SudoBackend(executor, "/nonexistent");
+
+        var outcome = await backend.RunAsync(["/usr/bin/tool", "--flag", "a b"], "hunter2".AsMemory(), CancellationToken.None);
+
+        Assert.Equal(ElevationStatus.Success, outcome.Status);
+        Assert.Equal(3, executor.Calls.Count);
+        Assert.Equal(new[] { "sudo", "-k", "-S", "-p", "", "-v" }, executor.Calls[0].commandLine);
+        Assert.Equal("hunter2\n", executor.Calls[0].stdin);
+        Assert.Equal(new[] { "sudo", "-n", "--", "/usr/bin/tool", "--flag", "a b" }, executor.Calls[1].commandLine);
+        Assert.Null(executor.Calls[1].stdin);
+        Assert.Equal(new[] { "sudo", "-k" }, executor.Calls[2].commandLine);
+        Assert.DoesNotContain(executor.Calls.SelectMany(c => c.commandLine), a => a.Contains("hunter2"));   // never on a command line
+    }
+
+    [Theory]
+    [InlineData("Sorry, try again.", ElevationStatus.WrongPassword)]
+    [InlineData("sudo: 1 incorrect password attempt", ElevationStatus.WrongPassword)]
+    [InlineData("Sorry, user bob may not run sudo on host.", ElevationStatus.NotAllowed)]
+    [InlineData("bob is not in the sudoers file.", ElevationStatus.NotAllowed)]
+    public async Task A_failed_check_is_classified(string stderr, ElevationStatus expected)
+    {
+        var executor = new FakeExecutor(new ExecResult(1, stderr, false));
+
+        var outcome = await new SudoBackend(executor, "/nonexistent").RunAsync(["/bin/true"], "pw".AsMemory(), CancellationToken.None);
+
+        Assert.Equal(expected, outcome.Status);
+        Assert.Single(executor.Calls);   // nothing was run
+    }
+
+    [Fact]
+    public async Task A_command_that_cannot_run_is_reported_and_the_authentication_is_still_dropped()
+    {
+        var executor = new FakeExecutor(Ok, new ExecResult(1, "sudo: /bin/nope: command not found", false), Ok);
+
+        var outcome = await new SudoBackend(executor, "/nonexistent").RunAsync(["/bin/nope"], "pw".AsMemory(), CancellationToken.None);
+
+        Assert.Equal(ElevationStatus.Failed, outcome.Status);
+        Assert.Contains("command not found", outcome.Message);
+        Assert.Equal(new[] { "sudo", "-k" }, executor.Calls[^1].commandLine);
+    }
+}

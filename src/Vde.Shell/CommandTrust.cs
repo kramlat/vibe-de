@@ -2,11 +2,13 @@ using Vibe.Registry;
 
 namespace Vde.Shell;
 
-public sealed class UntrustedCommandException(string verb, string reason)
+public sealed class UntrustedCommandException(string verb, string reason, string? path = null, string? command = null)
     : Exception($"The '{verb}' command is not trusted: {reason}")
 {
     public string Verb { get; } = verb;
     public string Reason { get; } = reason;
+    public string? Path { get; } = path;          // the file the action was for
+    public string? Command { get; } = command;    // the registry command line, before placeholders are filled in
 }
 
 // Whether the shell may run a command stored in the registry. The value holding the command line needs the
@@ -24,7 +26,7 @@ public sealed record CommandTrust(bool IsTrusted, string? Reason)
     {
         if (permissions is not { } p)
             return new(false, "it has no permissions");
-        if (!identity.Allows(p, Access.Execute))
+        if (!identity.Allows(p, Access.Execute) || (identity.IsRoot && (p.Mode & 0x49) == 0))   // root needs some x bit too
             return new(false, $"it is not executable by you (mode {p.ModeText})");
         if (p.Uid != 0 && p.Uid != identity.Uid)
             return new(false, $"it belongs to another user (uid {p.Uid})");
