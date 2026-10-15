@@ -4,6 +4,8 @@ A C# desktop environment for Wayland built on Avalonia, with a Windows 11-style
 look and workflow (original artwork, names and layout; no Microsoft assets or
 trademarks). AI features are optional and off unless enabled.
 
+It has no telemetry.
+
 ## Layout
 
 - `src/Vde.Freedesktop` — XDG dirs, .desktop entries, icon/sound/cursor theme lookup (LGPL-3.0-or-later)
