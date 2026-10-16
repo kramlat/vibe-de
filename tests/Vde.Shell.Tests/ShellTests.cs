@@ -2543,3 +2543,150 @@ public class AppleKeyboardInUseTests
         Assert.Equal(ShortcutStyle.Pc, Make(apple: true, "Pc").Style);                          // forcing PC labels wins over detection
     }
 }
+
+public class PropertiesTests
+{
+    [Fact]
+    public void A_files_properties_include_owner_mode_times_type_and_links_are_described_as_links()
+    {
+        using var fx = new Fixture();
+        var file = fx.Write("d/Report.txt", "hello");
+        File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead);   // 0640
+        var link = Path.Combine(fx.Root, "d", "ln"); File.CreateSymbolicLink(link, "Report.txt");
+        fx.Write("usr-share/mime/globs2", "50:text/plain:*.txt\n");
+        var types = new FileTypes(new MimeDatabase(fx.Xdg));
+
+        var p = FileProperties.Read(file, types);
+        Assert.Equal(("Report.txt", false, 5L, "text/plain"), (p.Name, p.IsDirectory, p.Size, p.MimeType));
+        Assert.Equal(Path.Combine(fx.Root, "d"), p.Folder);
+        Assert.Equal("0640", p.ModeOctal);
+        Assert.Equal("rw-r-----", p.ModeText);
+        Assert.Equal(RegistryIdentity.Current.Uid, p.Uid);
+        Assert.False(string.IsNullOrEmpty(p.Owner));
+        Assert.True(p.Inode > 0);
+        Assert.Equal(1u, p.HardLinks);
+        Assert.True(p.ModifiedUtc > DateTime.UtcNow.AddMinutes(-5));
+        Assert.True(p.ChangedUtc > DateTime.UtcNow.AddMinutes(-5));
+
+        var l = FileProperties.Read(link, types);
+        Assert.True(l.IsSymlink);
+        Assert.Equal("Report.txt", l.LinkTarget);
+        Assert.Equal("Link", l.TypeDescription);
+        var dir = FileProperties.Read(Path.Combine(fx.Root, "d"));
+        Assert.True(dir.IsDirectory); Assert.Equal("Folder", dir.TypeDescription);
+        Assert.Throws<FileNotFoundException>(() => FileProperties.Read(Path.Combine(fx.Root, "nope")));
+        Assert.Equal("/", FileProperties.Read("/").Name);
+    }
+
+    [Fact]
+    public void Names_come_from_passwd_and_group_with_numbers_as_the_fallback()
+    {
+        using var fx = new Fixture();
+        var names = new UserNames(fx.Write("etc/passwd", "root:x:0:0::/root:/bin/sh\ndeck:x:1000:1000::/home/deck:/bin/fish\n"), fx.Write("etc/group", "wheel:x:998:deck\n"));
+        Assert.Equal(("deck", "root", "4242"), (names.User(1000), names.User(0), names.User(4242)));
+        Assert.Equal(("wheel", "7"), (names.Group(998), names.Group(7)));
+        Assert.Equal("5", new UserNames("/nonexistent", "/nonexistent").User(5));
+    }
+
+    [Fact]
+    public async Task Folder_size_counts_files_and_folders_does_not_follow_links_and_can_be_cancelled()
+    {
+        using var fx = new Fixture();
+        fx.Write("t/a.bin", new string('a', 100)); fx.Write("t/sub/b.bin", new string('b', 50)); Directory.CreateDirectory(Path.Combine(fx.Root, "t", "empty"));
+        fx.Write("outside/big.bin", new string('x', 10_000));
+        File.CreateSymbolicLink(Path.Combine(fx.Root, "t", "escape"), Path.Combine(fx.Root, "outside"));
+        File.CreateSymbolicLink(Path.Combine(fx.Root, "t", "sub", "loop"), Path.Combine(fx.Root, "t"));
+
+        var size = await FolderSizer.MeasureAsync([Path.Combine(fx.Root, "t")]);
+
+        Assert.True(size.Complete);
+        Assert.Equal(150, size.Bytes);                       // the links' targets are not counted
+        Assert.Equal(4, size.Files);                         // a.bin, b.bin and the two links
+        Assert.Equal(3, size.Folders);                       // t, sub, empty
+
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        Assert.False((await FolderSizer.MeasureAsync([Path.Combine(fx.Root, "t")], null, cancelled.Token).ContinueWith(t => t.IsCanceled ? new FolderSize(0, 0, 0, false) : t.Result)).Complete);
+        Assert.Equal(300, FolderSizer.Measure([fx.Write("m/x", new string('m', 100)), fx.Write("m/y", new string('m', 200))]).Bytes);   // several items at once
+    }
+
+    [Fact]
+    public void Permission_changes_set_and_clear_bits_keep_special_bits_and_apply_recursively_without_making_files_programs()
+    {
+        using var fx = new Fixture();
+        var top = Path.Combine(fx.Root, "p"); var plain = fx.Write("p/plain.txt", "x"); var script = fx.Write("p/script.sh", "x"); var sub = Path.Combine(top, "sub"); Directory.CreateDirectory(sub);
+        File.SetUnixFileMode(plain, (UnixFileMode)Convert.ToInt32("600", 8));
+        File.SetUnixFileMode(script, (UnixFileMode)Convert.ToInt32("700", 8));
+        File.SetUnixFileMode(top, (UnixFileMode)Convert.ToInt32("700", 8));
+        File.SetUnixFileMode(sub, (UnixFileMode)Convert.ToInt32("700", 8));
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.GroupRead, PermissionEditor.Change(UnixFileMode.UserRead | UnixFileMode.UserWrite, UnixFileMode.GroupRead, UnixFileMode.UserWrite));
+        Assert.Equal(UnixFileMode.SetUser | UnixFileMode.UserRead, PermissionEditor.Change(UnixFileMode.SetUser, UnixFileMode.UserRead, UnixFileMode.None));   // setuid survives
+
+        // give the group and others read + execute, recursively
+        var changed = PermissionEditor.Apply(top, UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute, UnixFileMode.None, recursive: true);
+
+        Assert.Equal(4, changed);
+        Assert.Equal("rwxr-xr-x", FileProperties.FileModeText(File.GetUnixFileMode(top)));
+        Assert.Equal("rwxr-xr-x", FileProperties.FileModeText(File.GetUnixFileMode(sub)));       // folders gained execute (needed to enter them)
+        Assert.Equal("rwxr-xr-x", FileProperties.FileModeText(File.GetUnixFileMode(script)));    // already a program: stays one, for the others too
+        Assert.Equal("rw-r--r--", FileProperties.FileModeText(File.GetUnixFileMode(plain)));     // a plain file did not become a program
+
+        Assert.Equal(1, PermissionEditor.Apply(plain, UnixFileMode.None, UnixFileMode.GroupRead | UnixFileMode.OtherRead, recursive: false));
+        Assert.Equal("rw-------", FileProperties.FileModeText(File.GetUnixFileMode(plain)));
+        Assert.Equal(0, PermissionEditor.Apply(plain, UnixFileMode.None, UnixFileMode.GroupRead, recursive: false));   // nothing to change
+    }
+
+    [Fact]
+    public void Links_are_never_followed_by_a_recursive_change_and_the_group_can_be_set_to_ones_own()
+    {
+        using var fx = new Fixture();
+        var top = Path.Combine(fx.Root, "q"); Directory.CreateDirectory(top);
+        var outside = fx.Write("out/secret", "s"); File.SetUnixFileMode(outside, (UnixFileMode)Convert.ToInt32("600", 8));
+        File.CreateSymbolicLink(Path.Combine(top, "ln"), outside);
+
+        PermissionEditor.Apply(top, UnixFileMode.OtherRead, UnixFileMode.None, recursive: true);
+        Assert.Equal("rw-------", FileProperties.FileModeText(File.GetUnixFileMode(outside)));   // the file a link points to is untouched
+
+        var file = fx.Write("q/f", "x");
+        PermissionEditor.SetGroup(file, RegistryIdentity.Current.Gid);                           // own group: allowed
+        Assert.Equal(RegistryIdentity.Current.Gid, FileProperties.Read(file).Gid);
+        if (!RegistryIdentity.Current.IsRoot)
+            Assert.Throws<UnauthorizedAccessException>(() => PermissionEditor.SetOwner(file, 0));   // only root can give files away
+    }
+
+    [Fact]
+    public void Property_sheet_handlers_are_found_by_class_and_trust_decides_which_may_load()
+    {
+        var dll = Path.GetTempFileName();
+        try
+        {
+            var user = new Hive("HKCU") { Identity = RegistryIdentity.Current };
+            var hkcr = new ClassesRoot(user);
+            string Reg(string clsid, string name)
+            {
+                ComponentRegistrar.Register(hkcr, new ComponentInfo(clsid, name, dll, "A", ThreadingModel.Free));
+                return clsid;
+            }
+            var all = Reg("{11111111-0000-4000-8000-0000000000A1}", "N.AllFiles");
+            var png = Reg("{11111111-0000-4000-8000-0000000000A2}", "N.Png");
+            var dir = Reg("{11111111-0000-4000-8000-0000000000A3}", "N.Dir");
+            var prog = Reg("{11111111-0000-4000-8000-0000000000A4}", "N.ProgId");
+            var inert = Reg("{11111111-0000-4000-8000-0000000000A5}", "N.Inert");
+            void Handler(string cls, string name, string clsid) => hkcr.SetValue($@"{cls}\{PropertyHandlers.HandlersKey}\{name}", "", RegistryValueKind.String, clsid);
+            Handler("*", "all", all); Handler(".png", "png", png); Handler("Directory", "dir", dir); Handler("pngfile", "prog", prog); Handler(".png", "inert", inert);
+            hkcr.SetValue(".png", "", RegistryValueKind.String, "pngfile");
+            var server = $@"CLSID\{inert}\InprocServer32";
+            hkcr.SetValuePermissions(server, "", hkcr.GetValuePermissions(server, "")!.Value.WithMode(PosixPermissions.ValueDefault));   // registered but not executable
+            var handlers = new PropertyHandlers(hkcr);
+
+            Assert.Equal(new[] { "N.AllFiles", "N.Inert", "N.Png", "N.ProgId" }, handlers.For("/x/pic.PNG", false).Select(r => r.Component.ClassName));
+            Assert.Equal(new[] { "N.Dir" }, handlers.For("/x/folder", true).Select(r => r.Component.ClassName));         // folders get only Directory handlers
+            Assert.Equal(new[] { "N.AllFiles" }, handlers.For("/x/readme.txt", false).Select(r => r.Component.ClassName));
+            var (loadable, refused) = handlers.Split("/x/pic.png", false);
+            Assert.Equal(new[] { "N.AllFiles", "N.Png", "N.ProgId" }, loadable.Select(r => r.Component.ClassName));
+            Assert.Equal("N.Inert", Assert.Single(refused).Component.ClassName);
+            Assert.Empty(new PropertyHandlers(new ClassesRoot(new Hive("empty"))).For("/x/a.png", false));
+        }
+        finally { File.Delete(dll); }
+    }
+}

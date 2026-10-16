@@ -57,3 +57,23 @@ public interface ILauncherSearchProvider
     // The user picked one of this provider's hits.
     Task ActivateAsync(SearchHit hit, CancellationToken cancel);
 }
+
+// ---- property sheets: what a component implements to add a tab to a file's Properties window ----
+
+// What the property sheet is about: the files and folders it was opened for.
+public sealed record PropertyTarget(IReadOnlyList<string> Paths, string MimeType)
+{
+    public bool IsSingle => Paths.Count == 1;
+}
+
+// One extra tab. CreateContent returns an Avalonia Control (typed as object so this assembly needs no UI
+// dependency); the sheet calls it on the UI thread when the tab is first shown. Apply is called when the user
+// presses OK or Apply, on the UI thread, and returns false to keep the sheet open (after explaining why).
+public sealed record PropertyPageInfo(string Title, Func<object> CreateContent, Func<bool>? Apply = null, int Order = 100);
+
+// Implemented by components registered under  <class>\shellex\PropertySheetHandlers\<name>  (default value =
+// the component's CLSID), where <class> is "*" (every file), "Directory", an extension such as ".png", or a ProgID.
+public interface IPropertyPageProvider
+{
+    IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target);
+}

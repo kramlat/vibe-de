@@ -56,3 +56,24 @@ public sealed class SampleInstaller : IVdeInstaller
         context.Registry.SetValue("Sample.Settings", "Assembly", RegistryValueKind.String, Path.GetFileName(context.AssemblyPath));
     }
 }
+
+[VdeComponent("{5A0E2D4C-0000-4000-8000-000000000010}", ProgId = "Sample.PropertyPages", Description = "Sample property pages",
+    ThreadingModel = ThreadingModel.Free)]
+public class SamplePropertyPages : IPropertyPageProvider
+{
+    public IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target)
+        => [new PropertyPageInfo("Sample", () => "content for " + string.Join(",", target.Paths.Select(Path.GetFileName)), () => true, Order: 50)];
+}
+
+[VdeComponent("{5A0E2D4C-0000-4000-8000-000000000011}", ThreadingModel = ThreadingModel.Apartment)]
+public class ApartmentThing : IPropertyPageProvider
+{
+    public IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target) => [];
+}
+
+[VdeComponent("{5A0E2D4C-0000-4000-8000-000000000012}", ThreadingModel = ThreadingModel.Free)]
+public class ThrowsWhenCreated : IPropertyPageProvider
+{
+    public ThrowsWhenCreated() => throw new InvalidOperationException("cannot be created");
+    public IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target) => [];
+}

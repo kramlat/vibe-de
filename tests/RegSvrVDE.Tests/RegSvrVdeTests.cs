@@ -69,7 +69,7 @@ public class RegSvrVdeTests
 
             Assert.Equal("Free", hkcr.GetValue($@"CLSID\{Env.Worker}\InprocServer32", "ThreadingModel")!.Data);
             Assert.False(hkcr.KeyExists($@"CLSID\{Env.Worker}\ProgID"));
-            Assert.Equal(2, hkcr.GetSubKeyNames("CLSID").Count);   // the unusable ones were not registered
+            Assert.Equal(5, hkcr.GetSubKeyNames("CLSID").Count);   // the unusable ones were not registered (2 portal/worker + 3 property-page samples)
         }
 
         Assert.Contains($"registered {Env.Portal} Sample.Component.PortalBackend (Apartment)", env.Out.ToString());
@@ -98,7 +98,8 @@ public class RegSvrVdeTests
             Assert.Equal(2, portal.Component.Categories!.Count);
 
             Assert.Equal(Env.Portal, catalog.FindByProgId("Sample.Portal")!.Component.Clsid);
-            Assert.Equal(new[] { Env.Portal, Env.Worker }, catalog.All().Select(r => r.Component.Clsid));
+            Assert.Equal(new[] { Env.Portal, Env.Worker }, catalog.All().Select(r => r.Component.Clsid).Where(c => c == Env.Portal || c == Env.Worker));
+            Assert.Equal(5, catalog.All().Count);
             Assert.Null(catalog.Find("not a guid"));
             Assert.Null(catalog.Find("{5A0E2D4C-0000-4000-8000-0000000000FF}"));
         }
@@ -388,4 +389,78 @@ public class ComponentLibraryTests
     [InlineData(null, null)]
     public void Guids_are_normalised_to_one_spelling(string? input, string? expected)
         => Assert.Equal(expected, ComponentInfo.NormalizeGuid(input));
+}
+
+public class ComponentLoaderTests
+{
+    private static (ComponentCatalog catalog, Env env, Hive hive) Registered()
+    {
+        var env = new Env();
+        env.Run(env.Sample);
+        var (hkcr, hive) = env.Open();
+        return (new ComponentCatalog(hkcr), env, hive);
+    }
+
+    [Fact]
+    public void A_trusted_component_is_loaded_once_and_used_through_its_interface()
+    {
+        var (catalog, env, hive) = Registered();
+        using (env) using (hive)
+        {
+            var registration = catalog.Find("{5A0E2D4C-0000-4000-8000-000000000010}")!;   // Free-threaded
+            var loader = new ComponentLoader();
+
+            var provider = loader.Get<IPropertyPageProvider>(registration);
+            Assert.Same(provider, loader.Get<IPropertyPageProvider>(registration));
+            var page = Assert.Single(provider.GetPages(new PropertyTarget(["/x/a.png", "/x/b.png"], "image/png")));
+            Assert.Equal("Sample", page.Title);
+            Assert.Equal("content for a.png,b.png", page.CreateContent());
+            Assert.True(page.Apply!());
+            Assert.Equal(50, page.Order);
+        }
+    }
+
+    [Fact]
+    public void An_untrusted_registration_is_never_loaded()
+    {
+        var (catalog, env, hive) = Registered();
+        using (env) using (hive)
+        {
+            var (hkcr, _) = (new ClassesRoot(hive), 0);
+            var server = @"CLSID\{5A0E2D4C-0000-4000-8000-000000000010}\InprocServer32";
+            hkcr.SetValuePermissions(server, "", hkcr.GetValuePermissions(server, "")!.Value.WithMode(PosixPermissions.ValueDefault));   // not executable
+            var registration = catalog.Find("{5A0E2D4C-0000-4000-8000-000000000010}")!;
+
+            var ex = Assert.Throws<ComponentLoadException>(() => new ComponentLoader().Get<IPropertyPageProvider>(registration));
+            Assert.Contains("not trusted", ex.Message);
+        }
+    }
+
+    [Fact]
+    public void Apartment_components_refuse_other_threads_free_ones_do_not_and_failures_are_explained()
+    {
+        var (catalog, env, hive) = Registered();
+        using (env) using (hive)
+        {
+            var loader = new ComponentLoader();
+            var apartment = catalog.Find("{5A0E2D4C-0000-4000-8000-000000000011}")!;
+            var free = catalog.Find("{5A0E2D4C-0000-4000-8000-000000000010}")!;
+            var broken = catalog.Find("{5A0E2D4C-0000-4000-8000-000000000012}")!;
+
+            loader.Get<IPropertyPageProvider>(apartment);                                        // created here, on this thread
+            Assert.NotNull(loader.Get<IPropertyPageProvider>(apartment));
+            Exception? other = null, otherFree = null;
+            var t = new Thread(() =>
+            {
+                try { loader.Get<IPropertyPageProvider>(apartment); } catch (Exception e) { other = e; }
+                try { loader.Get<IPropertyPageProvider>(free); } catch (Exception e) { otherFree = e; }
+            });
+            t.Start(); t.Join();
+            Assert.Contains("apartment-threaded", Assert.IsType<ComponentLoadException>(other).Message);
+            Assert.Null(otherFree);                                                              // Free: any thread
+
+            Assert.Contains("cannot be created", Assert.Throws<ComponentLoadException>(() => loader.Get<IPropertyPageProvider>(broken)).Message);
+            Assert.Throws<ComponentLoadException>(() => loader.Get<IDisposable>(free));          // the wrong interface
+        }
+    }
 }
