@@ -2756,3 +2756,70 @@ public class OwnershipAndFolderIconTests
 
     private static string? Roundtrip(string folder, string icon) { FolderIcon.Write(folder, icon); return FolderIcon.Read(folder); }
 }
+
+public class OpenWithTests
+{
+    private static (OpenWithModel model, FileAssociations assoc, DesktopEntryDatabase apps, Fixture fx) Make()
+    {
+        var fx = new Fixture();
+        fx.Write("usr-share/mime/globs2", "50:text/plain:*.txt\n");
+        fx.App("kate", "Kate", "kate %f", "text/plain;", "Comment=Advanced text editor\n");
+        fx.App("nano", "Nano", "nano %f", "text/plain;");
+        fx.App("gimp", "GIMP", "gimp %f", "image/png;", "GenericName=Image Editor\n");
+        fx.App("vlc", "VLC", "vlc %f", "video/mp4;");
+        fx.App("hidden", "Hidden", "h", "", "NoDisplay=true\n");
+        fx.App("settings", "Sound Settings", "s", "", "Categories=Settings;\n");
+        var mime = new MimeDatabase(fx.Xdg);
+        var apps = DesktopEntryDatabase.Load(fx.Xdg, []);
+        var assoc = new FileAssociations(fx.Xdg, mime, apps, ["VDE"], new ClassesRoot(new Hive("HKCU") { Identity = RegistryIdentity.Root }), mirrorToFreedesktop: false);
+        return (new OpenWithModel(assoc, apps, ["VDE"], "text/plain"), assoc, apps, fx);
+    }
+
+    [Fact]
+    public void Recommended_apps_claim_the_type_and_the_others_are_everything_else_startable()
+    {
+        var (model, _, _, fx) = Make(); using (fx)
+        {
+            Assert.Equal(new[] { "Kate", "Nano" }, model.Recommended.Select(a => a.Name));
+            Assert.Equal(new[] { "GIMP", "VLC" }, model.Others.Select(a => a.Name));          // not hidden ones, not settings programs, not already recommended
+        }
+    }
+
+    [Fact]
+    public void The_search_narrows_both_lists_by_name_generic_name_and_comment()
+    {
+        var (model, _, _, fx) = Make(); using (fx)
+        {
+            model.Filter = "editor";
+            Assert.Equal(new[] { "Kate" }, model.Recommended.Select(a => a.Name));            // from its comment
+            Assert.Equal(new[] { "GIMP" }, model.Others.Select(a => a.Name));                 // from its generic name
+            model.Filter = "  vl ";
+            Assert.Empty(model.Recommended);
+            Assert.Equal(new[] { "VLC" }, model.Others.Select(a => a.Name));
+            model.Filter = "";
+            Assert.Equal(2, model.Recommended.Count);
+        }
+    }
+
+    [Fact]
+    public void Choosing_always_makes_the_app_the_default_choosing_once_does_not_and_nothing_chosen_is_an_error()
+    {
+        var (model, assoc, apps, fx) = Make(); using (fx)
+        {
+            Assert.False(model.CanOpen);
+            Assert.Throws<InvalidOperationException>(() => model.Commit());
+
+            model.Selected = apps.Find("nano");
+            Assert.Equal("Nano", model.Commit().Name);                                        // once: the default stays whatever it was
+            Assert.Equal("Kate", assoc.GetDefault("text/plain")!.Name);                       // (alphabetical: Kate first)
+
+            model.Always = true;
+            model.Commit();
+            Assert.Equal("Nano", assoc.GetDefault("text/plain")!.Name);                       // now it is the default
+
+            var other = new OpenWithModel(assoc, apps, ["VDE"], "text/plain") { Selected = apps.Find("gimp"), Always = true };
+            other.Commit();                                                                   // an app that did not claim the type can be chosen too
+            Assert.Equal("GIMP", assoc.GetDefault("text/plain")!.Name);
+        }
+    }
+}

@@ -59,7 +59,7 @@ public sealed class ShellApp : Application
         var start = folder is null ? new KnownFolders(xdg).Get(KnownFolder.Home) : Path.GetFullPath(folder);
         return new FileManagerWindow(start, new KnownFolders(xdg), path =>
         {
-            _ = OpenAsync(shell, path);   // an untrusted command asks for the password here instead of failing
+            _ = OpenAsync(shell, path, associations, apps);   // no application: the chooser; an untrusted command: the password prompt
         }, types, shortcuts: Shortcuts, properties: paths => PropertyContext(host, paths));
     }
 
@@ -78,14 +78,26 @@ public sealed class ShellApp : Application
             Handlers = host.PropertyHandlers,
             Loader = host.Loader,
             OpensWith = m => associations.GetDefault(m)?.Name,
+            ChangeOpensWith = m => _ = CommonDialogs.ChooseApplicationAsync(ActiveWindow, associations, DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment()), Desktops(), m),
             BuiltInProviders = [(PropertyPages.Clsid, new PropertyPages(Elevation))],   // the shell's own tabs: Permissions, Checksums, Customize
         };
     }
 
-    private static async Task OpenAsync(ShellExecute shell, string path)
+    public static Window? ActiveWindow => (Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Windows.LastOrDefault();
+
+    // Opens a path. When nothing is associated with its type, asks "How do you want to open this?" and opens it with the
+    // choice (making it the default when the user ticks "always").
+    public static async Task OpenAsync(ShellExecute shell, string path, FileAssociations? associations = null, DesktopEntryDatabase? apps = null)
     {
         try { await shell.OpenAsync(path); }
         catch (OperationCanceledException) { }   // the user said no
+        catch (NoAssociationException e) when (associations is not null && apps is not null)
+        {
+            var app = await CommonDialogs.ChooseApplicationAsync(ActiveWindow, associations, apps, Desktops(), e.MimeType);
+            if (app is null) return;
+            try { shell.OpenWith(app, [path]); }
+            catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException) { Console.Error.WriteLine("vexplore: " + ex.Message); }
+        }
         catch (Exception e) when (e is NoAssociationException or FileNotFoundException or UntrustedCommandException or ElevationDeniedException or InvalidOperationException)
         {
             Console.Error.WriteLine("vexplore: " + e.Message);

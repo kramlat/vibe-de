@@ -603,3 +603,62 @@ public class TakeOwnershipTests
         Assert.False(owned.Page<PermissionsPage>().CanTakeOwnership);                  // already the owner: nothing to take
     }
 }
+
+public class OpenWithWindowTests
+{
+    private static (OpenWithWindow window, FileAssociations assoc, Vde.Freedesktop.DesktopEntryDatabase apps, string root) Make()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "openwith-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "applications")); Directory.CreateDirectory(Path.Combine(root, "mime"));
+        File.WriteAllText(Path.Combine(root, "mime", "globs2"), "50:text/plain:*.txt\n");
+        foreach (var (id, name, mime) in new[] { ("kate", "Kate", "text/plain;"), ("nano", "Nano", "text/plain;"), ("gimp", "GIMP", "image/png;") })
+            File.WriteAllText(Path.Combine(root, "applications", id + ".desktop"), $"[Desktop Entry]\nType=Application\nName={name}\nExec={id} %f\nMimeType={mime}\n");
+        var env = new Dictionary<string, string> { ["HOME"] = root, ["XDG_DATA_HOME"] = root, ["XDG_DATA_DIRS"] = "/nonexistent", ["XDG_CONFIG_HOME"] = Path.Combine(root, "cfg") };
+        var xdg = new Vde.Freedesktop.XdgDirectories(k => env.GetValueOrDefault(k));
+        var apps = Vde.Freedesktop.DesktopEntryDatabase.Load(xdg, []);
+        var assoc = new FileAssociations(xdg, new MimeDatabase(xdg), apps, ["VDE"], new Vibe.Registry.ClassesRoot(new Vibe.Registry.Hive("x") { Identity = Vibe.Registry.RegistryIdentity.Root }), false);
+        var window = new OpenWithWindow(new OpenWithModel(assoc, apps, ["VDE"], "text/plain"), "text files");
+        window.Show();
+        return (window, assoc, apps, root);
+    }
+
+    [AvaloniaFact]
+    public void The_chooser_lists_recommended_then_other_apps_filters_and_returns_the_choice()
+    {
+        var (window, _, apps, root) = Make();
+        try
+        {
+            Assert.Equal(new[] { "Kate", "Nano", "GIMP" }, window.Names);
+            Assert.False(window.OpenEnabled);                                                  // nothing chosen yet
+
+            window.Search("gim");
+            Assert.Equal(new[] { "GIMP" }, window.Names);
+
+            window.Choose(apps.Find("gimp")!);
+            Assert.True(window.OpenEnabled);
+            window.Accept();
+            Assert.Equal("GIMP", window.Result!.Name);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [AvaloniaFact]
+    public void Always_changes_the_default_and_cancelling_gives_nothing()
+    {
+        var (window, assoc, apps, root) = Make();
+        try
+        {
+            window.Choose(apps.Find("nano")!);
+            window.SetAlways(true);
+            window.Accept();
+            Assert.Equal("Nano", assoc.GetDefault("text/plain")!.Name);
+            Assert.Equal("Nano", window.Result!.Name);
+
+            var (cancelled, assoc2, _, root2) = Make();
+            cancelled.Close();
+            Assert.Null(cancelled.Result);
+            Directory.Delete(root2, recursive: true);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+}

@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using Vde.Freedesktop;
 using Vde.Shell;
 
 namespace Vde.Shell.ComDlg;
@@ -36,6 +37,15 @@ public static class CommonDialogs
     public static async Task<string?> PasswordAsync(Window? owner, string prompt, string title = "VDE")
     {
         var window = new InputWindow(prompt, title, "", password: true);
+        await DialogHost.RunAsync(window, owner);
+        return window.Result;
+    }
+
+    // The "Open with" chooser. Null when cancelled; with "always" ticked the type's default application is changed too.
+    public static async Task<DesktopEntry?> ChooseApplicationAsync(Window? owner, FileAssociations associations, DesktopEntryDatabase apps,
+        IReadOnlyList<string> desktops, string mimeType, string description = "this kind of file")
+    {
+        var window = new OpenWithWindow(new OpenWithModel(associations, apps, desktops, mimeType), description);
         await DialogHost.RunAsync(window, owner);
         return window.Result;
     }

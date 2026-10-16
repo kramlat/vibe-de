@@ -107,9 +107,9 @@ public static class ExplorerCommand
             try
             {
                 if (Directory.Exists(path)) new ShellExecute(associations, mime, types: types).Run("vexplore --files " + ExecLineQuote(path));
-                else shell.Open(path);
+                else _ = ShellApp.OpenAsync(shell, path, associations, apps);
             }
-            catch (Exception e) when (e is NoAssociationException or FileNotFoundException or UntrustedCommandException or InvalidOperationException or ArgumentException)
+            catch (Exception e) when (e is FileNotFoundException or ArgumentException)
             {
                 Console.Error.WriteLine("vexplore: " + e.Message);
             }
