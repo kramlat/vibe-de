@@ -2188,3 +2188,106 @@ public class ElevationAccountTests
         Assert.Equal("root", prompt.Seen!.Account);
     }
 }
+
+public class FileTransferTests
+{
+    [Fact]
+    public void Copy_and_cut_round_trip_through_the_formats_other_file_managers_use()
+    {
+        var paths = new[] { "/home/u/a b.txt", "/home/u/ü.png" };
+        foreach (var kind in new[] { TransferKind.Copy, TransferKind.Cut })
+        {
+            var formats = new FileTransfer(kind, paths).ToFormats();
+
+            Assert.Equal(kind == TransferKind.Cut ? "1" : "0", System.Text.Encoding.UTF8.GetString(formats[FileTransfer.KdeCutSelection]));
+            var gnome = System.Text.Encoding.UTF8.GetString(formats[FileTransfer.GnomeCopiedFiles]);
+            Assert.StartsWith((kind == TransferKind.Cut ? "cut" : "copy") + "\nfile:///home/u/a%20b.txt\n", gnome);
+            Assert.EndsWith("\r\n", System.Text.Encoding.UTF8.GetString(formats[FileTransfer.UriList]));
+
+            var back = FileTransfer.FromFormats(formats)!;
+            Assert.Equal(kind, back.Kind);
+            Assert.Equal(paths, back.Paths);
+        }
+    }
+
+    [Fact]
+    public void Each_single_format_alone_is_understood_and_foreign_or_missing_data_is_not()
+    {
+        byte[] B(string s) => System.Text.Encoding.UTF8.GetBytes(s);
+        var onlyList = FileTransfer.FromFormats(new Dictionary<string, byte[]> { [FileTransfer.UriList] = B("# a comment\r\nfile:///x/a.txt\r\nhttps://example.org/\r\n") })!;
+        Assert.Equal(new[] { "/x/a.txt" }, onlyList.Paths);            // the web link is not a file
+        Assert.Equal(TransferKind.Copy, onlyList.Kind);
+
+        var kdeCut = FileTransfer.FromFormats(new Dictionary<string, byte[]> { [FileTransfer.UriList] = B("file:///x/a.txt"), [FileTransfer.KdeCutSelection] = B("1") })!;
+        Assert.Equal(TransferKind.Cut, kdeCut.Kind);
+
+        Assert.Null(FileTransfer.FromFormats(new Dictionary<string, byte[]>()));
+        Assert.Null(FileTransfer.FromFormats(new Dictionary<string, byte[]> { [FileTransfer.UriList] = B("file://otherhost/x/a.txt\r\n") }));   // another machine's file
+        Assert.Null(FileTransfer.FromFormats(new Dictionary<string, byte[]> { [FileTransfer.GnomeCopiedFiles] = B("cut\n") }));
+    }
+
+    [Fact]
+    public void Drop_effects_follow_the_modifier_keys_and_refuse_nonsense()
+    {
+        using var fx = new Fixture();
+        var a = fx.Write("one/a.txt", "x"); var target = Path.Combine(fx.Root, "two"); Directory.CreateDirectory(target);
+        var folder = Path.Combine(fx.Root, "one"); Directory.CreateDirectory(Path.Combine(folder, "inner"));
+        Func<string, string, bool> same = (_, _) => true, other = (_, _) => false;
+
+        Assert.Equal(DropEffect.Move, DropRules.Decide([a], target, false, false, same));      // same disk: move
+        Assert.Equal(DropEffect.Copy, DropRules.Decide([a], target, false, false, other));     // other disk: copy
+        Assert.Equal(DropEffect.Copy, DropRules.Decide([a], target, true, false, same));       // Ctrl: copy
+        Assert.Equal(DropEffect.Move, DropRules.Decide([a], target, false, true, other));      // Shift: move
+        Assert.Equal(DropEffect.Link, DropRules.Decide([a], target, true, true, same));
+        Assert.Equal(DropEffect.None, DropRules.Decide([a], folder, false, false, same));      // already there
+        Assert.Equal(DropEffect.None, DropRules.Decide([folder], Path.Combine(folder, "inner"), false, false, same));   // into itself
+        Assert.Equal(DropEffect.None, DropRules.Decide([folder], folder, true, false, same));
+        Assert.Equal(DropEffect.None, DropRules.Decide([a], Path.Combine(fx.Root, "nope"), false, false, same));       // not a folder
+        Assert.Equal(DropEffect.None, DropRules.Decide([a], a, false, false, same));
+        Assert.Equal(DropEffect.None, DropRules.Decide([], target, false, false, same));
+    }
+
+    [Fact]
+    public void Pasting_cut_moves_copy_copies_and_files_deleted_meanwhile_are_skipped()
+    {
+        using var fx = new Fixture();
+        var actions = new FileActions(new Trash(fx.Xdg));
+        var a = fx.Write("src/a.txt", "A"); var b = fx.Write("src/b.txt", "B"); var gone = Path.Combine(fx.Root, "src", "gone.txt");
+        var dst = Path.Combine(fx.Root, "dst"); Directory.CreateDirectory(dst);
+
+        var copied = actions.Paste(new FileTransfer(TransferKind.Copy, [a, gone]), dst);
+        Assert.Equal(new[] { Path.Combine(dst, "a.txt") }, copied);
+        Assert.True(File.Exists(a));
+
+        var moved = actions.Paste(new FileTransfer(TransferKind.Cut, [b]), dst);
+        Assert.Equal("B", File.ReadAllText(moved[0]));
+        Assert.False(File.Exists(b));
+
+        var linked = actions.Drop([a], dst, DropEffect.Link);
+        Assert.Equal("a.txt - link", Path.GetFileName(linked[0]));
+        Assert.Equal(a, new FileInfo(linked[0]).LinkTarget);
+        Assert.Equal("a.txt - link 2", Path.GetFileName(actions.Drop([a], dst, DropEffect.Link)[0]));   // never overwrites an earlier link
+        Assert.Empty(actions.Drop([a], dst, DropEffect.None));
+    }
+
+    [Fact]
+    public void Rename_new_folder_and_delete_go_through_the_trash_unless_permanent()
+    {
+        using var fx = new Fixture();
+        var trash = new Trash(fx.Xdg);
+        var actions = new FileActions(trash);
+        var file = fx.Write("d/a.txt", "x"); var folder = Path.Combine(fx.Root, "d");
+
+        Assert.Equal(Path.Combine(folder, "b.txt"), actions.Rename(file, "b.txt"));
+        Assert.EndsWith("New folder", actions.NewFolder(folder));
+        Assert.EndsWith("New folder (2)", actions.NewFolder(folder));
+
+        actions.Delete([Path.Combine(folder, "b.txt")]);
+        Assert.False(File.Exists(Path.Combine(folder, "b.txt")));
+        Assert.Single(trash.List());                                                   // recoverable
+
+        actions.Delete([Path.Combine(folder, "New folder")], permanent: true);
+        Assert.False(Directory.Exists(Path.Combine(folder, "New folder")));
+        Assert.Single(trash.List());                                                   // permanent ones never reach the trash
+    }
+}

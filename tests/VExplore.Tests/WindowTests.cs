@@ -4,6 +4,7 @@ using Avalonia.VisualTree;
 using Avalonia.Headless.XUnit;
 using Vde.Freedesktop;
 using Vde.Shell;
+using Vde.Shell;
 using Vibe.Registry;
 using VExplore.Windows;
 
@@ -160,5 +161,115 @@ public class Screenshots
         var window = new FileManagerWindow(new KnownFolders(xdg).Get(KnownFolder.Home), new KnownFolders(xdg), _ => { }, types) { Width = 980, Height = 560 };
         window.Show();
         window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "filemanager.png"));
+    }
+}
+
+public class FileActionWindowTests
+{
+    private sealed class Env : IDisposable
+    {
+        public string Root { get; } = Path.Combine(Path.GetTempPath(), "vexplore-act-" + Guid.NewGuid().ToString("N"));
+        public KnownFolders Folders { get; }
+        public Trash Trash { get; }
+        public Vde.Shell.Controls.InMemoryFileClipboard Clip { get; } = new();
+        public Env()
+        {
+            Directory.CreateDirectory(Path.Combine(Root, "home", "a")); Directory.CreateDirectory(Path.Combine(Root, "home", "b"));
+            File.WriteAllText(Path.Combine(Root, "home", "a", "one.txt"), "1");
+            File.WriteAllText(Path.Combine(Root, "home", "a", "two.txt"), "2");
+            var env = new Dictionary<string, string> { ["HOME"] = Path.Combine(Root, "home"), ["XDG_DATA_HOME"] = Path.Combine(Root, "data") };
+            var xdg = new XdgDirectories(k => env.GetValueOrDefault(k));
+            Folders = new KnownFolders(xdg);
+            Trash = new Trash(xdg);
+        }
+        public string A => Path.Combine(Root, "home", "a");
+        public string B => Path.Combine(Root, "home", "b");
+        public FileManagerWindow Open(string folder) => new(folder, Folders, _ => { }, null, new FileActions(Trash), Clip);
+        public void Dispose() => Directory.Delete(Root, recursive: true);
+    }
+
+    [AvaloniaFact]
+    public async Task Copy_then_paste_elsewhere_copies_and_cut_then_paste_moves_and_empties_the_clipboard()
+    {
+        using var e = new Env();
+        var from = e.Open(e.A); from.Show();
+        from.SelectEntries("one.txt");
+        await from.CopyAsync();
+        Assert.Equal(TransferKind.Copy, e.Clip.Current!.Kind);
+
+        var to = e.Open(e.B); to.Show();
+        await to.PasteAsync();
+        Assert.True(File.Exists(Path.Combine(e.B, "one.txt")));
+        Assert.True(File.Exists(Path.Combine(e.A, "one.txt")));                 // copy leaves the original
+        Assert.NotNull(e.Clip.Current);                                          // and can be pasted again
+
+        await to.PasteAsync();                                                   // same name there: the copy is renamed, nothing overwritten
+        Assert.True(File.Exists(Path.Combine(e.B, "one (copy).txt")));
+
+        from.SelectEntries("two.txt");
+        await from.CutAsync();
+        await to.PasteAsync();
+        Assert.True(File.Exists(Path.Combine(e.B, "two.txt")));
+        Assert.False(File.Exists(Path.Combine(e.A, "two.txt")));
+        Assert.Null(e.Clip.Current);                                             // a cut is used up by pasting it
+    }
+
+    [AvaloniaFact]
+    public void Delete_goes_to_the_trash_new_folder_and_rename_work_and_bad_names_are_explained()
+    {
+        using var e = new Env();
+        var w = e.Open(e.A); w.Show();
+
+        w.SelectEntries("one.txt");
+        w.DeleteSelected();
+        Assert.False(File.Exists(Path.Combine(e.A, "one.txt")));
+        Assert.Single(e.Trash.List());
+
+        var made = w.NewFolder();
+        Assert.EndsWith("New folder", made);
+        Assert.Equal(new[] { "New folder" }, w.SelectedPaths.Select(Path.GetFileName));   // the new folder is selected, ready to be renamed
+
+        Assert.False(w.Rename("bad/name"));
+        Assert.Contains("cannot contain", w.StatusText);
+        Assert.True(w.Rename("Projects"));
+        Assert.True(Directory.Exists(Path.Combine(e.A, "Projects")));
+
+        w.SelectEntries("two.txt");
+        w.DeleteSelected(permanent: true);
+        Assert.False(File.Exists(Path.Combine(e.A, "two.txt")));
+        Assert.Single(e.Trash.List());                                             // permanent deletes skip the trash
+    }
+
+    [AvaloniaFact]
+    public void Dropping_files_moves_copies_or_links_by_the_rules_and_never_overwrites()
+    {
+        using var e = new Env();
+        var w = e.Open(e.B); w.Show();
+        var source = Path.Combine(e.A, "one.txt");
+
+        var copied = w.HandleDrop([source], null, ctrl: true, shift: false);
+        Assert.Equal(new[] { Path.Combine(e.B, "one.txt") }, copied);
+        Assert.True(File.Exists(source));
+
+        var again = w.HandleDrop([source], null, ctrl: true, shift: false);
+        Assert.Equal(Path.Combine(e.B, "one (copy).txt"), again[0]);
+
+        Assert.Empty(w.HandleDrop([Path.Combine(e.B, "one.txt")], null, false, false));   // dropped where it already is: nothing
+        Assert.Empty(w.HandleDrop([e.B], Path.Combine(e.B, "nope"), false, false));        // not a folder
+        var moved = w.HandleDrop([Path.Combine(e.A, "two.txt")], null, ctrl: false, shift: true);
+        Assert.False(File.Exists(Path.Combine(e.A, "two.txt")));
+        Assert.True(File.Exists(moved[0]));
+    }
+
+    [AvaloniaFact]
+    public async Task A_clipboard_with_nothing_usable_pastes_nothing()
+    {
+        using var e = new Env();
+        var w = e.Open(e.B); w.Show();
+
+        await w.PasteAsync();
+        await w.CopyAsync();                                                       // nothing selected: nothing copied
+        Assert.Null(e.Clip.Current);
+        Assert.Empty(Directory.GetFileSystemEntries(e.B));
     }
 }

@@ -19,6 +19,7 @@
     <ProjectReference Include="..\Vde.Components\Vde.Components.csproj" />
     <ProjectReference Include="..\Vde.Shell.Controls\Vde.Shell.Controls.csproj" />
     <ProjectReference Include="..\Vde.Shell.Theme\Vde.Shell.Theme.csproj" />
+    <ProjectReference Include="..\Vde.Shell.ComDlg\Vde.Shell.ComDlg.csproj" />
     <ProjectReference Include="..\Vde.Shell.Notifications\Vde.Shell.Notifications.csproj" />
     <ProjectReference Include="..\Vibe.Registry.Remote\Vibe.Registry.Remote.csproj" />
   </ItemGroup>

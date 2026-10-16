@@ -65,6 +65,16 @@ public sealed class FileListView : UserControl
 
     public void SelectAll() => _list.SelectAll();
 
+    // Selects the entries with these names (for tests, and for "select the file I just created").
+    public void Select(params string[] names)
+    {
+        _list.SelectedItems?.Clear();
+        foreach (var entry in _entries.Where(e => names.Contains(e.Name)))
+            _list.SelectedItems?.Add(entry);
+    }
+
+    public ListBox InnerList => _list;
+
     // Raised for a double click or Enter on the selection; the host decides what opening means.
     public event EventHandler<IReadOnlyList<FileEntry>>? ItemsInvoked;
 
