@@ -34,12 +34,12 @@ internal sealed class ManualClock : IScheduler
     }
 }
 
-public class CenterTests
+public class ServiceTests
 {
-    private static (NotificationCenter center, ManualClock clock, List<string> log) Make(NotificationSettings? settings = null)
+    private static (NotificationService center, ManualClock clock, List<string> log) Make(NotificationSettings? settings = null)
     {
         var clock = new ManualClock();
-        var center = new NotificationCenter(clock, () => clock.Now, settings);
+        var center = new NotificationService(clock, () => clock.Now, settings);
         var log = new List<string>();
         center.Added += (_, n) => log.Add($"added {n.Id}");
         center.Updated += (_, n) => log.Add($"updated {n.Id}");
@@ -283,7 +283,7 @@ public class CenterTests
     [Fact]
     public void Many_threads_notifying_and_closing_stay_consistent()
     {
-        var center = new NotificationCenter(settings: new NotificationSettings { MaxActive = 1000, MaxPerApp = 1000 });
+        var center = new NotificationService(settings: new NotificationSettings { MaxActive = 1000, MaxPerApp = 1000 });
         var ids = new System.Collections.Concurrent.ConcurrentBag<uint>();
 
         Parallel.For(0, 8, worker =>
@@ -372,7 +372,7 @@ public class SettingsTests
     public void The_center_follows_the_registry_live_and_stops_when_unbound()
     {
         var hive = new Hive("HKCU");
-        var center = new NotificationCenter();
+        var center = new NotificationService();
 
         using (center.BindTo(hive))
         {

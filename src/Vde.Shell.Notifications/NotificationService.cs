@@ -45,7 +45,7 @@ public sealed record NotificationSettings
 // Holds the notifications: what is showing, what was shown, and the rules between them. It knows nothing of
 // D-Bus or of how a notification is drawn; the D-Bus server feeds it, and the shell UI listens to it.
 // Thread-safe; events are raised on the thread that caused them, after the internal lock is released.
-public sealed class NotificationCenter
+public sealed class NotificationService
 {
     private static readonly TimeSpan MinTimeout = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan MaxTimeout = TimeSpan.FromHours(1);
@@ -65,7 +65,7 @@ public sealed class NotificationCenter
     private NotificationSettings _settings;
     private uint _lastId;
 
-    public NotificationCenter(IScheduler? scheduler = null, Func<DateTime>? clock = null, NotificationSettings? settings = null)
+    public NotificationService(IScheduler? scheduler = null, Func<DateTime>? clock = null, NotificationSettings? settings = null)
     {
         _scheduler = scheduler ?? new TimerScheduler();
         _clock = clock ?? (() => DateTime.UtcNow);

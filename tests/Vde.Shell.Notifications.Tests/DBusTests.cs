@@ -144,10 +144,10 @@ public sealed class Client(DBusConnection connection) : IDisposable
 
 public class DBusTests
 {
-    private static async Task<(PrivateBus bus, NotificationCenter center, NotificationsDBusServer server)> Start()
+    private static async Task<(PrivateBus bus, NotificationService center, NotificationsDBusServer server)> Start()
     {
         var bus = new PrivateBus();
-        var center = new NotificationCenter(settings: new NotificationSettings { MaxPerApp = 100 });
+        var center = new NotificationService(settings: new NotificationSettings { MaxPerApp = 100 });
         var server = await NotificationsDBusServer.StartAsync(center, bus.Address);
         return (bus, center, server);
     }
@@ -285,7 +285,7 @@ public class DBusTests
         using (bus) using (server)
         using (var client = new Client(bus.Connect()))
         {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => NotificationsDBusServer.StartAsync(new NotificationCenter(), bus.Address));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => NotificationsDBusServer.StartAsync(new NotificationService(), bus.Address));
 
             await Assert.ThrowsAsync<DBusErrorReplyException>(() => client.CallWrongAsync());
             Assert.Equal(1u, await client.NotifyAsync("A", "still works"));   // the server carried on

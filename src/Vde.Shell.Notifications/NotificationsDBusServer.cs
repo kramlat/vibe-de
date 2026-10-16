@@ -4,7 +4,7 @@ using Tmds.DBus.Protocol;
 namespace Vde.Shell.Notifications;
 
 // org.freedesktop.Notifications (Desktop Notifications spec 1.2) on the session bus, in front of a
-// NotificationCenter. D-Bus is only the way applications reach the shell; every rule lives in the center.
+// NotificationService. D-Bus is only the way applications reach the shell; every rule lives in the center.
 public sealed class NotificationsDBusServer : IPathMethodHandler, IDisposable
 {
     public const string ServiceName = "org.freedesktop.Notifications";
@@ -13,13 +13,13 @@ public sealed class NotificationsDBusServer : IPathMethodHandler, IDisposable
 
     private static readonly string[] Capabilities = ["actions", "body", "body-markup", "body-hyperlinks", "icon-static", "persistence"];
 
-    private readonly NotificationCenter _center;
+    private readonly NotificationService _center;
     private readonly DBusConnection _connection;
     private readonly string _version;
     private readonly Dictionary<uint, string> _owners = new();   // notification id -> the bus name that sent it
     private readonly object _gate = new();
 
-    private NotificationsDBusServer(NotificationCenter center, DBusConnection connection, string version)
+    private NotificationsDBusServer(NotificationService center, DBusConnection connection, string version)
     {
         _center = center;
         _connection = connection;
@@ -36,7 +36,7 @@ public sealed class NotificationsDBusServer : IPathMethodHandler, IDisposable
 
     // Connects to the bus at address (DBusAddress.Session for the real one), serves the interface and takes the
     // well-known name. Fails if another notification daemon already owns it: two must never fight over it.
-    public static async Task<NotificationsDBusServer> StartAsync(NotificationCenter center, string address, string version = "0.1")
+    public static async Task<NotificationsDBusServer> StartAsync(NotificationService center, string address, string version = "0.1")
     {
         var connection = new DBusConnection(new DBusConnectionOptions(address) { AutoConnect = false });
         await connection.ConnectAsync();

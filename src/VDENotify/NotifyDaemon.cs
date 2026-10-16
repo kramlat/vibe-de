@@ -6,12 +6,12 @@ using Vibe.Registry.Remote;
 namespace VdeNotify;
 
 // VDENotify: the notification daemon. It owns org.freedesktop.Notifications on the session bus, keeps the
-// notifications in a NotificationCenter and follows the user's settings in the registry
+// notifications in a NotificationService and follows the user's settings in the registry
 // (HKCU\Software\Vde\Notifications, e.g. DoNotDisturb). Run by systemd as a user service, started on demand by
 // the first application that sends a notification.
 //
 // It does not draw anything itself yet: every event is written to the log (journal). The shell's toast UI will
-// listen to the same NotificationCenter.
+// listen to the same NotificationService.
 public static class NotifyDaemon
 {
     public const int Ok = 0, UsageError = 1, BusError = 2, LostBus = 3;
@@ -60,7 +60,7 @@ public static class NotifyDaemon
             return UsageError;
         }
 
-        var center = new NotificationCenter();
+        var center = new NotificationService();
         center.Added += (_, n) => output.WriteLine($"notification {n.Id} from {n.AppName}: {n.Summary}{(string.IsNullOrEmpty(n.Body) ? "" : " - " + n.PlainBody)} [{n.Urgency}{(n.Silenced ? ", silenced" : "")}]");
         center.Updated += (_, n) => output.WriteLine($"notification {n.Id} updated: {n.Summary}");
         center.Closed += (_, e) => output.WriteLine($"notification {e.Id} closed: {e.Reason}");
