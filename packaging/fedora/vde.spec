@@ -38,6 +38,7 @@ BuildRequires:  pkgconfig(xcb-ewmh)
 BuildRequires:  pkgconfig(xcb-errors)
 BuildRequires:  pkgconfig(xcb-renderutil)
 BuildRequires:  pkgconfig(libdisplay-info)
+BuildRequires:  pkgconfig(xwayland)
 
 # libraries linked by the native programs are found by rpm itself; these are loaded at run time or are other programs
 Requires:       dotnet-runtime-9.0
