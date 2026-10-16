@@ -6,6 +6,11 @@ set -e
 here=$(cd "$(dirname "$0")" && pwd)
 native=$(dirname "$here")
 prefix=$native/build/prefix
+# run a command quietly, but show everything it said if it fails
+quiet() {
+  log=$(mktemp)
+  if "$@" >"$log" 2>&1; then rm -f "$log"; else status=$?; cat "$log"; rm -f "$log"; exit $status; fi
+}
 export PKG_CONFIG_PATH=$prefix/share/pkgconfig:$prefix/lib/pkgconfig:$prefix/lib64/pkgconfig:$PKG_CONFIG_PATH
 
 # the vendored sources: present in a release tarball, fetched with git in a checkout that has not got them yet
@@ -13,13 +18,13 @@ if [ ! -f "$native/third_party/wlroots/meson.build" ] || [ ! -f "$native/third_p
   git -C "$native/.." submodule update --init native/third_party/wayland-protocols native/third_party/wlroots
 fi
 if [ ! -f "$prefix/share/pkgconfig/wayland-protocols.pc" ]; then
-  meson setup "$native/build/wp" "$native/third_party/wayland-protocols" --prefix="$prefix" -Dtests=false >/dev/null
-  ninja -C "$native/build/wp" install >/dev/null
+  quiet meson setup "$native/build/wp" "$native/third_party/wayland-protocols" --prefix="$prefix" -Dtests=false
+  quiet ninja -C "$native/build/wp" install
 fi
 if [ ! -f "$prefix/lib/pkgconfig/wlroots-0.19.pc" ]; then
-  meson setup "$native/build/wlr" "$native/third_party/wlroots" --prefix="$prefix" -Ddefault_library=static -Dexamples=false \
-    -Dxwayland=enabled -Drenderers=gles2 -Dbackends=drm,libinput,x11 -Dallocators=gbm -Dcolor-management=disabled -Dsession=enabled >/dev/null
-  ninja -C "$native/build/wlr" install >/dev/null
+  quiet meson setup "$native/build/wlr" "$native/third_party/wlroots" --prefix="$prefix" -Ddefault_library=static -Dexamples=false \
+    -Dxwayland=enabled -Drenderers=gles2 -Dbackends=drm,libinput,x11 -Dallocators=gbm -Dcolor-management=disabled -Dsession=enabled
+  quiet ninja -C "$native/build/wlr" install
 fi
 
 out=$native/build/vwm

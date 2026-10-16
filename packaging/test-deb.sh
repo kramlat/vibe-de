@@ -18,7 +18,7 @@ tarball=$(packaging/make-tarball.sh 0.1.0 /tmp)
     mkdir /build && tar -xzf /src/vde.tar.gz -C /build && cd /build/vde-0.1.0
     sed -i "s/ dotnet-sdk-9.0,//" debian/control
     wget -q https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh
-    sh /tmp/dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet >/dev/null
+    bash /tmp/dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet >/dev/null
     ln -sf /usr/share/dotnet/dotnet /usr/bin/dotnet
     mk-build-deps -ir -t "apt-get -y -qq --no-install-recommends" debian/control >/dev/null
     dpkg-buildpackage -us -uc -b

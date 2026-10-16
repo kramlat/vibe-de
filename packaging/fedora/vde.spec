@@ -16,7 +16,7 @@ BuildRequires:  gcc
 BuildRequires:  make
 BuildRequires:  meson
 BuildRequires:  ninja-build
-BuildRequires:  hwdata
+BuildRequires:  hwdata-devel
 BuildRequires:  systemd-rpm-macros
 BuildRequires:  pkgconfig(wayland-server)
 BuildRequires:  pkgconfig(wayland-protocols)
