@@ -45,3 +45,29 @@ through roll-forward), PAM, Wayland and its libraries, Xwayland, the Breeze icon
 | `/etc/hive/System.fhive` | the machine's registry (made once; yours to edit) |
 | `/etc/pam.d/vdedm*` | PAM services of the display manager (kept as configuration) |
 | `/usr/lib/systemd/{system,user}` | `fhived`, `vdedm`, `vdenotify` units |
+
+## Package names by distribution
+
+The programs need these libraries at run time; the package names differ. The Arch column is what `packaging/arch/PKGBUILD`
+uses and is what the package was built against. **The Debian and Fedora columns are from memory and have not been
+checked against a release**: names move between versions, so confirm with `apt-cache search` or `dnf provides`.
+
+| Library | Arch / CachyOS | Debian / Ubuntu | Fedora |
+| --- | --- | --- | --- |
+| libseat | `seatd` | `libseat1` (build: `libseat-dev`) | `libseat` |
+| Wayland | `wayland` | `libwayland-server0` | `wayland` |
+| xkbcommon | `libxkbcommon` | `libxkbcommon0` | `libxkbcommon` |
+| libinput | `libinput` | `libinput10` | `libinput` |
+| libdrm | `libdrm` | `libdrm2` | `libdrm` |
+| EGL, GLES, gbm | `mesa`, `libglvnd` | `libegl1`, `libgles2`, `libgbm1` | `mesa-libEGL`, `mesa-libGLES`, `mesa-libgbm` |
+| pixman | `pixman` | `libpixman-1-0` | `pixman` |
+| PAM | `pam` | `libpam0g` | `pam` |
+| libdisplay-info | `libdisplay-info` | `libdisplay-info1` (recent releases only) | `libdisplay-info` |
+| xcb-util wm / errors / renderutil | `xcb-util-wm`, `xcb-util-errors`, `xcb-util-renderutil` | `libxcb-ewmh2`, `libxcb-icccm4`, `libxcb-errors0`, `libxcb-render-util0` | `xcb-util-wm`, `xcb-util-errors`, `xcb-util-renderutil` |
+| Xwayland | `xorg-xwayland` | `xwayland` | `xorg-x11-server-Xwayland` |
+| Breeze icons | `breeze-icons` | `breeze-icon-theme` | `breeze-icon-theme` |
+| polkit | `polkit` | `polkitd` | `polkit` |
+| .NET 9 runtime | `dotnet-runtime-9.0` | Microsoft's package feed (or the distribution's, where it has 9) | `dotnet-runtime-9.0` |
+
+For a `.deb`, do not write the library list by hand: `dpkg-shlibdeps` computes it from `vwm` and the other native
+binaries, which is how Debian packages normally get names like `libseat1` right.
