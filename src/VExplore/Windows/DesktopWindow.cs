@@ -49,6 +49,8 @@ public sealed class DesktopWindow : Window
         _shortcuts.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() => _canvas.ContextMenu = BuildMenu());
         _folder = desktopFolder;
         _hive = hive;
+        // The Desktop settings page changes these values: the wallpaper follows at once (icon positions are a subkey: not these).
+        _hive.Changed += (_, c) => { if (c.KeyPath.Equals(DesktopSettingsStore.KeyPath, StringComparison.OrdinalIgnoreCase)) Avalonia.Threading.Dispatcher.UIThread.Post(Rebuild); };
         _open = openFile;
         _types = types;
         _openSettings = openSettings;
@@ -121,7 +123,7 @@ public sealed class DesktopWindow : Window
     private void Rebuild()
     {
         var settings = DesktopSettingsStore.Load(_hive);
-        Background = Wallpaper(settings);
+        Background = WallpaperBrush.Create(settings);
         _canvas.Children.Clear();
         _icons.Clear();
         _layout = DesktopLayout.Arrange(_entries.Select(e => e.Name), DesktopSettingsStore.LoadPositions(_hive), Columns, Rows);
@@ -167,23 +169,6 @@ public sealed class DesktopWindow : Window
         border.PointerReleased += (_, e) => OnIconReleased(border, e);
         border.DoubleTapped += (_, _) => OpenSelected();
         return border;
-    }
-
-    private IBrush Wallpaper(DesktopSettings settings)
-    {
-        var color = Color.TryParse(settings.BackgroundColor, out var c) ? c : Color.Parse("#1E1E2E");
-        if (settings.Wallpaper is { } path && File.Exists(path))
-            try
-            {
-                return new ImageBrush(new Bitmap(path))
-                {
-                    Stretch = settings.Mode switch { WallpaperMode.Fit => Stretch.Uniform, WallpaperMode.Stretch => Stretch.Fill, WallpaperMode.Center => Stretch.None, WallpaperMode.Tile => Stretch.None, _ => Stretch.UniformToFill },
-                    TileMode = settings.Mode == WallpaperMode.Tile ? TileMode.Tile : TileMode.None,
-                    AlignmentX = AlignmentX.Center, AlignmentY = AlignmentY.Center,
-                };
-            }
-            catch (Exception e) when (e is IOException or ArgumentException or NotSupportedException or InvalidOperationException) { }   // an unreadable image: just the colour
-        return new SolidColorBrush(color);
     }
 
     // ---- selection ----

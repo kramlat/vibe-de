@@ -88,6 +88,8 @@ public static class BuiltInPages
     [
         new("appearance", "Appearance", "Theme, light or dark mode and accent colour", "preferences-desktop-theme", ControlPanelCategories.Appearance,
             ["theme", "dark", "light", "colour", "color", "accent", "look"], ItemSource.BuiltIn) { PageId = "appearance" },
+        new("desktop", "Desktop", "Wallpaper, background colour and desktop icons", "preferences-desktop-wallpaper", ControlPanelCategories.Appearance,
+            ["wallpaper", "background", "picture", "image", "desktop", "icons", "colour", "color"], ItemSource.BuiltIn) { PageId = "desktop" },
         new("startmenu", "Start menu", "Windows 11 or Windows 10 layout", "start-here-vde", ControlPanelCategories.Appearance,
             ["start", "launcher", "layout", "tiles", "menu"], ItemSource.BuiltIn) { PageId = "startmenu" },
         new("windows", "Windows", "What double-clicking a titlebar does", "preferences-system-windows", ControlPanelCategories.Appearance,

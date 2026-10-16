@@ -15,6 +15,7 @@ public sealed class ControlPanelWindow : Window
     private readonly IHive _hive;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<SettingChoice>> _choices;
     private readonly Action<ControlPanelItem> _openExternal;
+    private readonly Func<string, Control?>? _customPages;
     private readonly TextBox _search = new() { Watermark = "Find a setting" };
     private readonly ListBox _categories = new();
     private readonly ListBox _items = new();
@@ -23,8 +24,9 @@ public sealed class ControlPanelWindow : Window
 
     // openExternal starts items that are not pages of ours (a command, a component, a .desktop settings program).
     public ControlPanelWindow(ControlPanelCatalog catalog, IHive hive, Action<ControlPanelItem> openExternal,
-        IReadOnlyDictionary<string, IReadOnlyList<SettingChoice>>? choices = null)
+        IReadOnlyDictionary<string, IReadOnlyList<SettingChoice>>? choices = null, Func<string, Control?>? customPages = null)
     {
+        _customPages = customPages;
         _catalog = catalog;
         _hive = hive;
         _openExternal = openExternal;
@@ -66,7 +68,7 @@ public sealed class ControlPanelWindow : Window
     }
 
     public IReadOnlyList<ControlPanelItem> ShownItems => _shown;
-    public string? OpenPageId => (_page.Content as SettingsPageView)?.PageId;
+    public string? OpenPageId => (_page.Content as SettingsPageView)?.PageId ?? (_page.Content is DesktopPageView ? DesktopPageView.PageId : null);
     public SettingsPageView? Page => _page.Content as SettingsPageView;
 
     public void Search(string text)
@@ -82,7 +84,9 @@ public sealed class ControlPanelWindow : Window
     // Our own pages show on the right; everything else is started by the shell.
     public void Open(ControlPanelItem item)
     {
-        if (item.PageId is { } id && BuiltInPages.Find(id) is { } page)
+        if (item.PageId is { } custom && _customPages?.Invoke(custom) is { } control)
+            _page.Content = control;   // a page that is more than a list of settings
+        else if (item.PageId is { } id && BuiltInPages.Find(id) is { } page)
             _page.Content = new SettingsPageView(page, _hive, _choices);
         else
             _openExternal(item);

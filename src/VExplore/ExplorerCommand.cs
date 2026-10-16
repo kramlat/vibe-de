@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Vde.Freedesktop;
 using Vde.Shell;
+using Vde.Shell.Controls;
 using Vde.Compositor;
 using VExplore.Windows;
 
@@ -93,6 +94,8 @@ public static class ExplorerCommand
         var xdg = XdgDirectories.Default;
         var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
         var catalog = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
+        var folders = new KnownFolders(xdg);
+        var wallpapers = WallpaperCatalog.Find(xdg);
         return new ControlPanelWindow(catalog, host.CurrentUser, item =>
         {
             if (item.Entry is { } entry)
