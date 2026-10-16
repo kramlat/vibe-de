@@ -48,8 +48,8 @@ install:
 	install -m755 native/build/vwm/vwm native/build/vterm/vterm-launch $(DESTDIR)$(LIBDIR)/
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m755 data/session/start-vde $(DESTDIR)$(PREFIX)/bin/start-vde
-	for b in $(BIN_LINKS); do ln -sf $(LIBDIR)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; done
-	ln -sf $(LIBDIR)/RegSvrVDE $(DESTDIR)$(PREFIX)/bin/regsvrvde
+	for b in $(BIN_LINKS); do ln -sfr $(DESTDIR)$(LIBDIR)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; done
+	ln -sfr $(DESTDIR)$(LIBDIR)/RegSvrVDE $(DESTDIR)$(PREFIX)/bin/regsvrvde
 	# data
 	install -d $(DESTDIR)$(DATADIR)/vde/terminal $(DESTDIR)$(DATADIR)/vde/registry
 	install -m644 data/terminal/* $(DESTDIR)$(DATADIR)/vde/terminal/
