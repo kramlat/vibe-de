@@ -32,6 +32,7 @@ public sealed class FileListView : UserControl
 
         _list.ItemTemplate = new Avalonia.Controls.Templates.FuncDataTemplate<FileEntry>((entry, _) => entry is null ? null : Row(entry));
         _list.DoubleTapped += (_, _) => InvokeSelected();
+        _list.SelectionChanged += (_, _) => SelectionChanged?.Invoke(this, EventArgs.Empty);
         _list.KeyDown += (_, e) =>
         {
             if (e.Key == Key.Enter) { InvokeSelected(); e.Handled = true; }
@@ -66,6 +67,9 @@ public sealed class FileListView : UserControl
 
     // Raised for a double click or Enter on the selection; the host decides what opening means.
     public event EventHandler<IReadOnlyList<FileEntry>>? ItemsInvoked;
+
+    // The selection changed (click, keyboard or SelectAll).
+    public event EventHandler? SelectionChanged;
 
     // Raised after the order changed because a heading was clicked.
     public event EventHandler? SortChanged;

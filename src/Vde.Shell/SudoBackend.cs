@@ -59,11 +59,33 @@ public sealed class SudoBackend : IElevationBackend
     private readonly string _groupFile;
     private readonly string _sudo;
 
-    public SudoBackend(IProcessExecutor? executor = null, string groupFile = "/etc/group", string sudo = "sudo")
+    private readonly string _passwdFile;
+    private readonly bool _rootPassword;
+
+    // rootPassword: sudo is configured with rootpw, so it asks for root's password instead of the user's.
+    public SudoBackend(IProcessExecutor? executor = null, string groupFile = "/etc/group", string sudo = "sudo",
+        string passwdFile = "/etc/passwd", bool rootPassword = false)
     {
         _executor = executor ?? new ProcessExecutor();
         _groupFile = groupFile;
         _sudo = sudo;
+        _passwdFile = passwdFile;
+        _rootPassword = rootPassword;
+    }
+
+    // By default sudo asks for the invoking user's own password; with rootpw it asks for root's.
+    public string? PasswordAccount(RegistryIdentity identity)
+    {
+        if (_rootPassword)
+            return "root";
+        if (File.Exists(_passwdFile))
+            foreach (var line in File.ReadLines(_passwdFile))
+            {
+                var fields = line.Split(':');   // name:x:uid:gid:...
+                if (fields.Length >= 3 && fields[0].Length > 0 && uint.TryParse(fields[2], out var uid) && uid == identity.Uid)
+                    return fields[0];
+            }
+        return null;
     }
 
     // Root needs no elevation; members of the usual administrator groups may; so may anyone sudo lets in without

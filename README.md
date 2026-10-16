@@ -16,6 +16,7 @@ It has no telemetry.
 - `src/Vde.Components` + `src/RegSvrVDE` — component declaration ([VdeComponent]), COM-style registration under HKCR\CLSID, trust checks; RegSvrVDE is the regsvr32 equivalent (reads assemblies without running them) (LGPL-3.0-or-later)
 - `src/Vibe.Registry.Remote` + `src/fhived` — the registry daemon: socket protocol (`docs/fhive-protocol.md`), RemoteHive client, HiveServer; permissions enforced against the kernel-reported identity; systemd units in `data/systemd` (LGPL-3.0-or-later)
 - `src/VExplore` — Vibe Explorer (`vexplore`): the shell host (taskbar, notification flyout, file manager, portal backends); wiring only so far (LGPL-3.0-or-later for libs; executable GPL-3.0-or-later)
+- `src/Vde.Shell.ComDlg` — common dialogs: message box, Open/Save/Folder, input and password, elevation (sudo credentials) prompt, progress (LGPL-3.0-or-later)
 - `src/libFluent` — Fluent-style Avalonia control library (LGPL-3.0-or-later)
 - `src/Vibe.Registry` — the registry: typed hive files (`.fhive`, checksummed, atomic saves) with `.reg` import/export and change events (LGPL-3.0-or-later)
 - `tests/` — xunit tests (`dotnet test`); `Vde.Policy.Tests` enforces the no-telemetry promise (no reporting packages, no internet APIs, Unix sockets only)

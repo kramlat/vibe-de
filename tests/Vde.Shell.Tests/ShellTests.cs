@@ -2117,3 +2117,74 @@ public class FileSearchTests
         Assert.EndsWith("Invoice 2026.txt", hit.FilePath);
     }
 }
+
+public class ElevationAccountTests
+{
+    [Fact]
+    public void Sudo_asks_for_the_invoking_users_password_or_roots_when_configured_that_way()
+    {
+        using var fx = new Fixture();
+        var passwd = fx.Write("etc/passwd", "root:x:0:0:root:/root:/bin/bash\ndeck:x:1000:1000:Deck:/home/deck:/bin/fish\n");
+        var alice = new RegistryIdentity(1000, 1000);
+
+        Assert.Equal("deck", new SudoBackend(passwdFile: passwd).PasswordAccount(alice));
+        Assert.Equal("root", new SudoBackend(passwdFile: passwd, rootPassword: true).PasswordAccount(alice));
+        Assert.Null(new SudoBackend(passwdFile: passwd).PasswordAccount(new RegistryIdentity(4242, 4242)));   // unknown uid: the prompt falls back to "your password"
+        Assert.Null(new SudoBackend(passwdFile: "/nonexistent").PasswordAccount(alice));
+    }
+
+    [Fact]
+    public void The_setting_comes_from_the_system_hive_and_anything_else_means_the_users_own_password()
+    {
+        var hive = new Hive("HKLM") { Identity = RegistryIdentity.Root };
+        Assert.False(ElevationSettings.AsksForRootPassword(hive));
+        Assert.False(ElevationSettings.AsksForRootPassword(null));
+
+        hive.SetValue(ElevationSettings.KeyPath, "PasswordFor", RegistryValueKind.String, "Root");
+        Assert.True(ElevationSettings.AsksForRootPassword(hive));
+        hive.SetValue(ElevationSettings.KeyPath, "PasswordFor", RegistryValueKind.String, "user");
+        Assert.False(ElevationSettings.AsksForRootPassword(hive));
+        hive.SetValue(ElevationSettings.KeyPath, "PasswordFor", RegistryValueKind.DWord, 1u);
+        Assert.False(ElevationSettings.AsksForRootPassword(hive));
+    }
+
+    private sealed class Backend : IElevationBackend
+    {
+        public bool CanElevate(RegistryIdentity identity) => true;
+        public string? PasswordAccount(RegistryIdentity identity) => "root";
+        public Task<ElevationOutcome> RunAsync(IReadOnlyList<string> commandLine, ReadOnlyMemory<char> password, CancellationToken cancel) => Task.FromResult(ElevationOutcome.Success);
+    }
+
+    private sealed class Prompt : IElevationPrompt
+    {
+        public ElevationRequest? Seen;
+        public Task<ElevationResponse> AskAsync(ElevationRequest request, int attempt, string? previousError, CancellationToken cancel)
+        {
+            Seen = request;
+            return Task.FromResult(new ElevationResponse(true, "pw".ToCharArray()));
+        }
+    }
+
+    [Fact]
+    public async Task The_shell_tells_the_prompt_whose_password_to_ask_for()
+    {
+        using var fx = new Fixture();
+        fx.Write("usr-share/mime/globs2", "50:application/x-thing:*.thing\n");
+        fx.Program("winish");
+        var system = new Hive("HKLM") { Identity = RegistryIdentity.Root };
+        system.SetKeyPermissions("", new PosixPermissions(0, 0, 0x1ED));
+        system.SetValue(@"Software\Classes\.thing", "", RegistryValueKind.String, "T");
+        system.SetValue(@"Software\Classes\T\shell\open\command", "", RegistryValueKind.String, "winish %1");
+        system.SetValuePermissions(@"Software\Classes\T\shell\open\command", "", new PosixPermissions(0, 0, 0x1C0));   // 0700: root only
+        var hkcr = new ClassesRoot(new Hive("HKCU") { Identity = new RegistryIdentity(1000, 1000) }, system);
+        var mime = new MimeDatabase(fx.Xdg);
+        var prompt = new Prompt();
+        var shell = new ShellExecute(new FileAssociations(fx.Xdg, mime, DesktopEntryDatabase.Load(fx.Xdg, []), ["VDE"], hkcr, false), mime,
+            env: fx.Env, types: new FileTypes(mime, hkcr, identity: new RegistryIdentity(1000, 1000)),
+            elevation: new ElevationOptions(new Backend(), prompt, new RegistryIdentity(1000, 1000)));
+
+        await shell.OpenAsync(fx.Write("a.thing", "x"));
+
+        Assert.Equal("root", prompt.Seen!.Account);
+    }
+}

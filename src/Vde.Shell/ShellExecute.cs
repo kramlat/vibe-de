@@ -168,7 +168,7 @@ public sealed class ShellExecute
         var program = FindExecutable(argv[0]) ?? throw new FileNotFoundException($"Cannot find '{argv[0]}'.", argv[0]);
         var commandLine = new List<string>(argv) { [0] = program };
         var label = _types?.GetVerbs(path).FirstOrDefault(v => string.Equals(v.Id, verbId, StringComparison.OrdinalIgnoreCase))?.Label ?? verbId;
-        var request = new ElevationRequest(label, verbId, path, commandLine, reason);
+        var request = new ElevationRequest(label, verbId, path, commandLine, reason) { Account = options.Backend.PasswordAccount(options.Identity) };
 
         string? error = null;
         for (int attempt = 1; attempt <= ElevationOptions.MaxAttempts; attempt++)

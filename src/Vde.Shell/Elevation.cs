@@ -13,6 +13,9 @@ public sealed record ElevationRequest(
     IReadOnlyList<string> CommandLine,     // program and arguments, exactly as they will be run
     string Reason)                         // why it needed elevation: "it is not executable by you (mode 0644)"
 {
+    // Whose password sudo is waiting for (the user's own, or root's when sudo is set up with rootpw); shown in the prompt.
+    public string? Account { get; init; }
+
     // The command line for display, quoted so that every argument is unambiguous.
     public string CommandText => string.Join(' ', CommandLine.Select(Quote));
 
@@ -52,6 +55,9 @@ public interface IElevationBackend
     // A quick check that does not ask for a password, so a user who cannot elevate is rejected before any prompt.
     bool CanElevate(RegistryIdentity identity);
 
+    // The account whose password the prompt must ask for, or null when it is just "your password".
+    string? PasswordAccount(RegistryIdentity identity) => null;
+
     Task<ElevationOutcome> RunAsync(IReadOnlyList<string> commandLine, ReadOnlyMemory<char> password, CancellationToken cancel);
 }
 
@@ -62,3 +68,13 @@ public sealed record ElevationOptions(IElevationBackend Backend, IElevationPromp
 }
 
 public sealed class ElevationDeniedException(string message) : Exception(message);
+
+// How this machine's sudo is set up, as the administrator recorded it in the system hive:
+// HKLM\Software\Vde\Elevation, PasswordFor = "user" (the default) or "root" (sudo uses rootpw).
+public static class ElevationSettings
+{
+    public const string KeyPath = @"Software\Vde\Elevation";
+
+    public static bool AsksForRootPassword(IHive? system)
+        => system?.GetValue(KeyPath, "PasswordFor") is { Kind: RegistryValueKind.String, Data: string s } && s.Equals("root", StringComparison.OrdinalIgnoreCase);
+}
