@@ -8,11 +8,17 @@
     <AssemblyName>vexplore</AssemblyName>
     <RootNamespace>VExplore</RootNamespace>
     <RollForward>Major</RollForward>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
     <ProjectReference Include="..\Vde.Shell\Vde.Shell.csproj" />
     <ProjectReference Include="..\Vde.Components\Vde.Components.csproj" />
+    <ProjectReference Include="..\Vde.Shell.Controls\Vde.Shell.Controls.csproj" />
+    <ProjectReference Include="..\Vde.Shell.Theme\Vde.Shell.Theme.csproj" />
     <ProjectReference Include="..\Vde.Shell.Notifications\Vde.Shell.Notifications.csproj" />
     <ProjectReference Include="..\Vibe.Registry.Remote\Vibe.Registry.Remote.csproj" />
   </ItemGroup>

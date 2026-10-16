@@ -1,3 +1,9 @@
+using Avalonia;
+using Avalonia.Controls;
+using Vde.Freedesktop;
+using Vde.Shell;
+using VExplore.Windows;
+
 namespace VExplore;
 
 public static class ExplorerCommand
@@ -7,10 +13,12 @@ public static class ExplorerCommand
 
     public const string UsageText = """
         Vibe Explorer: the VDE shell (taskbar, notification flyout, file manager).
-        usage: vexplore [--list-components]
-
-          --list-components   show the registered components and whether the shell would load them
-          -h, --help
+        usage: vexplore [folder]
+               vexplore --files [folder]    a file manager window (the default)
+               vexplore --settings          the Settings (Control Panel) window
+               vexplore --launcher          the app launcher
+               vexplore --list-components   show registered components and whether the shell would load them
+               -h, --help
 
         """;
 
@@ -26,14 +34,37 @@ public static class ExplorerCommand
             using var host = ExplorerHost.Open();
             return ListComponents(host, output);
         }
-        if (args.Length > 0)
+
+        var window = args.Length switch
+        {
+            0 => "files",
+            _ when args[0] == "--settings" && args.Length == 1 => "settings",
+            _ when args[0] == "--launcher" && args.Length == 1 => "launcher",
+            _ when args[0] == "--files" && args.Length <= 2 => "files",
+            _ when !args[0].StartsWith('-') && args.Length == 1 => "files",
+            _ => null,
+        };
+        if (window is null)
         {
             error.Write(UsageText);
             return 1;
         }
+        var folder = args.FirstOrDefault(a => !a.StartsWith('-'));
+        if (window == "files" && folder is not null && !Directory.Exists(folder))
+        {
+            error.WriteLine($"vexplore: {folder}: not a folder");
+            return 2;
+        }
 
-        error.WriteLine("Vibe Explorer: the shell windows are not built yet (see --list-components)");
-        return 0;
+        using var host2 = ExplorerHost.Open();
+        ShellApp.Host = host2;
+        ShellApp.FirstWindow = () => window switch
+        {
+            "settings" => NewSettings(host2),
+            "launcher" => NewLauncher(host2),
+            _ => ShellApp.NewFileManager(host2, folder),
+        };
+        return ShellApp.Build().StartWithClassicDesktopLifetime([]);
     }
 
     internal static int ListComponents(ExplorerHost host, TextWriter output)
@@ -43,5 +74,52 @@ public static class ExplorerCommand
         foreach (var r in host.RefusedComponents)
             output.WriteLine($"refused  {r.Component.Clsid} {r.Component.ClassName}: {r.Trust.Reason}");
         return 0;
+    }
+
+    private static Window NewSettings(ExplorerHost host)
+    {
+        var xdg = XdgDirectories.Default;
+        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var catalog = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
+        return new ControlPanelWindow(catalog, host.CurrentUser, item =>
+        {
+            if (item.Entry is { } entry)
+                Launch(host, entry);
+            else if (item.Command is { } command)
+                Launch(host, command);
+        });
+    }
+
+    private static Window NewLauncher(ExplorerHost host)
+    {
+        var xdg = XdgDirectories.Default;
+        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var settings = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
+        var model = new LauncherModel(host.CurrentUser, apps, ShellApp.Desktops(), settings)
+        {
+            FileRoots = [new KnownFolders(xdg).Get(KnownFolder.Documents), new KnownFolders(xdg).Get(KnownFolder.Desktop), new KnownFolders(xdg).Get(KnownFolder.Downloads)],
+        };
+        return new LauncherWindow(model, entry => Launch(host, entry), item =>
+        {
+            if (item.Entry is { } entry) Launch(host, entry);
+        });
+    }
+
+    private static void Launch(ExplorerHost host, DesktopEntry entry)
+    {
+        var xdg = XdgDirectories.Default;
+        var mime = new MimeDatabase(xdg);
+        var associations = new FileAssociations(xdg, mime, DesktopEntryDatabase.Load(xdg, []), ShellApp.Desktops(), host.Classes);
+        try { new ShellExecute(associations, mime).Launch(entry); }
+        catch (Exception e) when (e is FileNotFoundException or InvalidOperationException) { Console.Error.WriteLine("vexplore: " + e.Message); }
+    }
+
+    private static void Launch(ExplorerHost host, string commandLine)
+    {
+        var xdg = XdgDirectories.Default;
+        var mime = new MimeDatabase(xdg);
+        var associations = new FileAssociations(xdg, mime, DesktopEntryDatabase.Load(xdg, []), ShellApp.Desktops(), host.Classes);
+        try { new ShellExecute(associations, mime).Run(commandLine); }
+        catch (Exception e) when (e is FileNotFoundException or ArgumentException) { Console.Error.WriteLine("vexplore: " + e.Message); }
     }
 }

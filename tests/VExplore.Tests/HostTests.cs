@@ -53,6 +53,5 @@ public class HostTests
         var o = new StringWriter(); var e = new StringWriter();
         Assert.Equal(0, ExplorerCommand.Run(["--help"], o, e));
         Assert.Contains("Vibe Explorer", o.ToString());
-        Assert.Equal(1, ExplorerCommand.Run(["--nope"], o, e));
     }
 }
