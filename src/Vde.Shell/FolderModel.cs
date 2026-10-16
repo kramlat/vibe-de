@@ -6,6 +6,13 @@ public sealed record FileEntry(
     string Name, string FullPath, bool IsDirectory, bool IsSymlink, bool IsHidden, long Size, DateTime ModifiedUtc, string Extension)
 {
     public string? LinkTarget { get; init; }
+
+    // Entries of a shell folder (This Computer, Trash...) are not files: they bring their own icon, type text and
+    // second line, and the item they came from.
+    public IReadOnlyList<string>? IconNames { get; init; }
+    public string? TypeText { get; init; }
+    public string? Detail { get; init; }
+    public object? Tag { get; init; }
 }
 
 public enum SortKey { Name, Size, Modified, Type }
@@ -96,7 +103,7 @@ public sealed class NavigationHistory
     public string Current => _entries[_index];
     public bool CanGoBack => _index > 0;
     public bool CanGoForward => _index < _entries.Count - 1;
-    public string? Parent => Path.GetDirectoryName(Current.TrimEnd('/')) is { Length: > 0 } p ? p : Current == "/" ? null : "/";
+    public string? Parent => AddressPath.IsShellPath(Current) ? null : Path.GetDirectoryName(Current.TrimEnd('/')) is { Length: > 0 } p ? p : Current == "/" ? null : "/";
     public bool CanGoUp => Parent is not null;
 
     // Going somewhere new drops the forward list, as a browser does. Going to where you already are changes nothing.
@@ -120,7 +127,7 @@ public sealed class NavigationHistory
     }
 
     private static string Normalize(string path)
-        => path.Length > 1 ? Path.GetFullPath(path).TrimEnd('/') is { Length: > 0 } p ? p : "/" : path;
+        => AddressPath.IsShellPath(path) ? path : path.Length > 1 ? Path.GetFullPath(path).TrimEnd('/') is { Length: > 0 } p ? p : "/" : path;
 }
 
 // The text in the address bar: breadcrumb segments, and turning what the user typed back into a path.
@@ -128,9 +135,14 @@ public static class AddressPath
 {
     public sealed record Crumb(string Name, string Path);
 
+    // "shell:Computer" or "::{clsid}": a place made by a shell folder rather than a directory.
+    public static bool IsShellPath(string path) => path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase) || path.StartsWith("::{", StringComparison.Ordinal);
+
     // "/home/deck/Music" -> / , home, deck, Music, each with the path that clicking it goes to.
     public static IReadOnlyList<Crumb> Crumbs(string path, string? home = null)
     {
+        if (IsShellPath(path))
+            return [new Crumb(path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase) ? path[6..] : path, path)];
         var crumbs = new List<Crumb> { new("/", "/") };
         var built = "";
         foreach (var part in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
@@ -149,6 +161,7 @@ public static class AddressPath
             return null;
         if (text.StartsWith("file://", StringComparison.Ordinal))
             return Uri.TryCreate(text, UriKind.Absolute, out var uri) ? uri.LocalPath : null;
+        if (IsShellPath(text)) return text;   // shell folders are resolved by the window, which knows the catalog
         if (text == "~") return home;
         if (text.StartsWith("~/", StringComparison.Ordinal)) return Path.GetFullPath(Path.Combine(home, text[2..]));
         if (text.Contains("://", StringComparison.Ordinal)) return null;   // other schemes are not folders

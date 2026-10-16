@@ -60,7 +60,7 @@ public sealed class ShellApp : Application
         return new FileManagerWindow(start, new KnownFolders(xdg), path =>
         {
             _ = OpenAsync(shell, path, associations, apps);   // no application: the chooser; an untrusted command: the password prompt
-        }, types, shortcuts: Shortcuts, properties: paths => PropertyContext(host, paths));
+        }, types, shortcuts: Shortcuts, properties: paths => PropertyContext(host, paths), shellFolders: ShellFolders(host));
     }
 
     // What a Properties window needs: file types, rename, the tabs registered components add, and the groups the user is in.
@@ -81,6 +81,20 @@ public sealed class ShellApp : Application
             ChangeOpensWith = m => _ = CommonDialogs.ChooseApplicationAsync(ActiveWindow, associations, DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment()), Desktops(), m),
             BuiltInProviders = [(PropertyPages.Clsid, new PropertyPages(Elevation))],   // the shell's own tabs: Permissions, Checksums, Customize
         };
+    }
+
+    // Shell folders: the shell's own (built in) plus whatever components registered, loaded on the UI thread through the host's loader.
+    public static ShellFolderCatalog ShellFolders(ExplorerHost host)
+    {
+        var catalog = new ShellFolderCatalog(host.Classes, host.LocalMachine, host.CurrentUser, host.Loader);
+        ShellFolderSetup.AddBuiltIns(catalog);
+        ControlPanelShellFolder.Opener = item =>
+        {
+            if (item.Entry is { } entry) ExplorerCommand.Launch(host, entry);
+            else if (item.Command is { } command) ExplorerCommand.Launch(host, command);
+            else new ShellExecute(new FileAssociations(XdgDirectories.Default, new MimeDatabase(XdgDirectories.Default), DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment()), Desktops(), host.Classes), new MimeDatabase(XdgDirectories.Default)).Run("vexplore --settings");
+        };
+        return catalog;
     }
 
     public static Window? ActiveWindow => (Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Windows.LastOrDefault();

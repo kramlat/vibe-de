@@ -29,13 +29,16 @@ public sealed class FileManagerWindow : Window
     private readonly FileActions _actions;
     private readonly ShortcutStyleService _shortcuts;
     private readonly Func<IReadOnlyList<string>, PropertySheetContext>? _properties;
+    private readonly ShellFolderCatalog? _shell;
+    private IShellFolder? _openShellFolder;
     private readonly IFileClipboard _clipboard;
 
     public FileManagerWindow(string startFolder, KnownFolders folders, Action<string> openFile, FileTypes? types = null,
         FileActions? actions = null, IFileClipboard? clipboard = null, ShortcutStyleService? shortcuts = null,
-        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null)
+        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, ShellFolderCatalog? shellFolders = null)
     {
         _properties = properties;
+        _shell = shellFolders;
         _openFile = openFile;
         _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
         _shortcuts.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(ApplyShortcutStyle);
@@ -47,7 +50,7 @@ public sealed class FileManagerWindow : Window
 
         _list.Types = types;
         _address.Home = Home;
-        _places.Places = Places.Default(folders);
+        _places.Places = Places.Default(folders, shellFolders);
 
         _back.Click += (_, _) => Go(_history.Back(), record: false);
         _forward.Click += (_, _) => Go(_history.Forward(), record: false);
@@ -57,13 +60,16 @@ public sealed class FileManagerWindow : Window
         _address.PathRequested += (_, path) => Navigate(path);
         _places.PlaceInvoked += (_, place) =>
         {
-            if (place.Kind == PlaceKind.Folder && place.Path is not null)
-                Navigate(place.Path);
+            if (place.Path is not null)
+                Navigate(place.Path);   // a folder, or "shell:..." for a shell folder
             else
-                _status.Text = place.Name + " is not available in this window yet.";
+                _status.Text = place.Name + " is not available here.";
         };
         _list.ItemsInvoked += (_, items) => Open(items);
         _list.SortChanged += (_, _) => Reload();
+        var menu = new ContextMenu();
+        menu.Opening += (_, _) => FillContextMenu(menu);
+        _list.InnerList.ContextMenu = menu;
         KeyDown += OnKeyDown;
         DragDrop.SetAllowDrop(_list, true);
         _list.AddHandler(DragDrop.DragOverEvent, OnDragOver);
@@ -122,7 +128,8 @@ public sealed class FileManagerWindow : Window
     public string? Notice => StatusText;
 
     public void SelectEntries(params string[] names) => _list.Select(names);
-    public IReadOnlyList<string> SelectedPaths => _list.SelectedEntries.Select(e => e.FullPath).ToList();
+    public IReadOnlyList<string> SelectedPaths
+        => _list.SelectedEntries.Select(e => e.Tag is ShellItem item ? item.FileSystemPath : e.FullPath).Where(p => p is not null).Select(p => p!).ToList();
 
     public Task CopyAsync() => SetClipboardAsync(TransferKind.Copy);
     public Task CutAsync() => SetClipboardAsync(TransferKind.Cut);
@@ -136,6 +143,7 @@ public sealed class FileManagerWindow : Window
     // Pastes into the current folder. Existing names are never overwritten: the copy gets "name (copy)".
     public async Task PasteAsync()
     {
+        if (InShell) { _status.Text = "Nothing can be pasted here."; return; }
         if (await _clipboard.GetAsync() is not { } transfer)
             return;
         try
@@ -150,6 +158,7 @@ public sealed class FileManagerWindow : Window
 
     public void DeleteSelected(bool permanent = false)
     {
+        if (InShell) { _ = InvokeShellActionAsync("delete"); return; }   // in the Trash, Delete means delete permanently
         try { _actions.Delete(SelectedPaths, permanent); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _status.Text = e.Message; }
         Reload();
@@ -157,6 +166,7 @@ public sealed class FileManagerWindow : Window
 
     public string? NewFolder()
     {
+        if (InShell) { _status.Text = "Folders cannot be made here."; return null; }
         try
         {
             var path = _actions.NewFolder(CurrentFolder);
@@ -198,6 +208,7 @@ public sealed class FileManagerWindow : Window
     // Files dropped on this window (from here or from another one): into the current folder, or into the folder row they were dropped on.
     public IReadOnlyList<string> HandleDrop(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift)
     {
+        if (InShell && targetFolder is null) return [];
         var target = targetFolder ?? CurrentFolder;
         var effect = DropRules.Decide(sources, target, ctrl, shift);
         if (effect == DropEffect.None) return [];
@@ -259,6 +270,107 @@ public sealed class FileManagerWindow : Window
         catch (Exception e) when (e is FileNotFoundException or IOException or UnauthorizedAccessException) { _status.Text = e.Message; return null; }
     }
 
+    // ---- shell folders (This Computer, Network, Trash, anything a component registers) ----
+
+    public bool InShell => AddressPath.IsShellPath(_history.Current);
+    public string? ShellFolderName => _openShellFolder?.DisplayName;
+
+    private void ReloadShell()
+    {
+        _list.PreserveOrder = true;
+        _address.Path = _history.Current;
+        _places.ShowCurrent(_history.Current);
+        _back.IsEnabled = _history.CanGoBack;
+        _forward.IsEnabled = _history.CanGoForward;
+        _up.IsEnabled = false;
+
+        var info = _shell?.Resolve(_history.Current);
+        if (info is null)
+        {
+            Title = "Not available";
+            _list.Entries = [];
+            _status.Text = "This place is not available.";
+            return;
+        }
+        try
+        {
+            var folder = _shell!.Open(info);
+            folder.Changed += OnShellChanged;
+            _openShellFolder = folder;
+            Title = folder.DisplayName;
+            var items = folder.GetItems();
+            var path = _history.Current;
+            _list.Entries = items.Select(i => new FileEntry(i.Name, path + "/" + i.Id, i.IsFolder, false, false, i.Size ?? 0, i.ModifiedUtc ?? default, "")
+                { IconNames = i.IconNames, TypeText = i.TypeText, Detail = i.Detail, Tag = i }).ToList();
+            _status.Text = items.Count == 1 ? "1 item" : $"{items.Count} items";
+        }
+        catch (Exception e) when (e is ComponentLoadException or InvalidOperationException or IOException)
+        {
+            _list.Entries = [];
+            _status.Text = e.Message;
+        }
+    }
+
+    private void OnShellChanged(object? sender, EventArgs e) => Avalonia.Threading.Dispatcher.UIThread.Post(Reload);
+
+    private void OpenShellItem(ShellItem item)
+    {
+        if (item.ChildFolder is { } child) { Navigate(child); return; }
+        if (item.FileSystemPath is { } path)
+        {
+            if (Directory.Exists(path)) Navigate(path);
+            else if (File.Exists(path)) _openFile(path);
+            return;
+        }
+        if (item.DefaultAction is { } action && _openShellFolder is not null)
+        {
+            _ = RunDefaultActionAsync(_openShellFolder, action, item);
+            return;
+        }
+        _status.Text = $"\"{item.Name}\" cannot be opened.";
+    }
+
+    // The actions the folder offers for the selected item, or for the folder itself when nothing is selected.
+    public IReadOnlyList<ShellAction> ShellActions
+    {
+        get
+        {
+            if (_openShellFolder is null) return [];
+            var selected = _list.SelectedEntries;
+            return _openShellFolder.GetActions(selected.Count == 1 ? selected[0].Tag as ShellItem : null);
+        }
+    }
+
+    private async Task RunDefaultActionAsync(IShellFolder folder, string action, ShellItem item)
+    {
+        try { await folder.InvokeAsync(action, item, CancellationToken.None); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { _status.Text = e.Message; }
+    }
+
+    public async Task InvokeShellActionAsync(string actionId)
+    {
+        if (_openShellFolder is null) return;
+        var selected = _list.SelectedEntries;
+        var item = selected.Count == 1 ? selected[0].Tag as ShellItem : null;
+        if (!_openShellFolder.GetActions(item).Any(a => a.Id == actionId)) return;   // the folder does not offer it for this selection
+        try { await _openShellFolder.InvokeAsync(actionId, item, CancellationToken.None); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { _status.Text = e.Message; }
+        Reload();
+    }
+
+    private void FillContextMenu(ContextMenu menu)
+    {
+        menu.Items.Clear();
+        foreach (var action in ShellActions)
+        {
+            var entry = new MenuItem { Header = action.Label };
+            var id = action.Id;
+            entry.Click += async (_, _) => await InvokeShellActionAsync(id);
+            menu.Items.Add(entry);
+        }
+        if (menu.Items.Count == 0) menu.Items.Add(new MenuItem { Header = "No actions", IsEnabled = false });
+    }
+
     public void Navigate(string path) => Go(path, record: true);
 
     public void GoBack() => Go(_history.Back(), record: false);
@@ -268,6 +380,7 @@ public sealed class FileManagerWindow : Window
     // A folder opens here; a file is handed to the shell. Several selected files are all opened.
     public void Open(IReadOnlyList<FileEntry> items)
     {
+        if (items.Count == 1 && items[0].Tag is ShellItem shellItem) { OpenShellItem(shellItem); return; }
         if (items.Count == 1 && items[0].IsDirectory)
         {
             Navigate(items[0].FullPath);
@@ -281,6 +394,9 @@ public sealed class FileManagerWindow : Window
     {
         _watcher?.Dispose();
         _watcher = null;
+        if (_openShellFolder is not null) { _openShellFolder.Changed -= OnShellChanged; _openShellFolder = null; }
+        if (AddressPath.IsShellPath(_history.Current)) { ReloadShell(); return; }
+        _list.PreserveOrder = false;
         Title = Path.GetFileName(_history.Current.TrimEnd('/')) is { Length: > 0 } name ? name : "/";
         _address.Path = _history.Current;
         _places.ShowCurrent(_history.Current);

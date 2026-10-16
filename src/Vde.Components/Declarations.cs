@@ -43,6 +43,7 @@ public sealed record VdeInstallContext(ClassesRoot Registry, bool Installing, st
 public static class ComponentCategories
 {
     public const string LauncherSearchProvider = "{6C0E5A7B-4D0A-4F63-9B2E-5A5C1F6D0001}";
+    public const string ShellFolder = "{6C0E5A7B-4D0A-4F63-9B2E-5A5C1F6D0002}";
 }
 
 public sealed record SearchHit(string Title, string Subtitle = "", string Icon = "", string? ActivationId = null);
@@ -78,4 +79,48 @@ public sealed record PropertyPageInfo(string Title, Func<object> CreateContent, 
 public interface IPropertyPageProvider
 {
     IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target);
+}
+
+// ---- shell folders: virtual folders (This Computer, Network, Trash, ...) that a component presents to the file manager ----
+
+[Flags]
+public enum ShellFolderAttributes : uint
+{
+    None = 0,
+    Folder = 1,          // behaves as a folder: the file manager can navigate into it
+    BrowseInPlace = 2,   // opens in the same window rather than a new one
+    HasSubFolder = 4,    // shows an expander in a folder tree
+    Hidden = 8,          // exists, but is not listed in the sidebar or on the desktop unless asked for by name
+}
+
+// One entry in a shell folder. It may stand for something real (FileSystemPath: a drive's mount point, a file),
+// or open another shell folder (ChildFolder: its parsing name, e.g. "shell:Network"), or be just a row.
+public sealed record ShellItem(string Id, string Name, bool IsFolder, IReadOnlyList<string> IconNames)
+{
+    public string? Detail { get; init; }              // a second line: "93 GB free of 466 GB"
+    public string? TypeText { get; init; }            // "Local disk"
+    public long? Size { get; init; }
+    public DateTime? ModifiedUtc { get; init; }
+    public string? FileSystemPath { get; init; }
+    public string? ChildFolder { get; init; }
+    public string? DefaultAction { get; init; }       // run by double-click when there is no path or child folder ("open")
+}
+
+public sealed record ShellAction(string Id, string Label, bool Dangerous = false);
+
+// What a ShellFolder component implements. Register it as a component in ComponentCategories.ShellFolder with
+// ThreadingModel.Apartment: shell folders are used from the UI thread only. Registration adds, next to the
+// usual InprocServer32, a  CLSID\{guid}\ShellFolder  key with ParsingName (the name after "shell:") and Attributes.
+public interface IShellFolder
+{
+    string DisplayName { get; }
+    IReadOnlyList<string> IconNames { get; }
+    IReadOnlyList<ShellItem> GetItems();
+
+    // Actions for the item (null: for the folder itself, e.g. "Empty Trash").
+    IReadOnlyList<ShellAction> GetActions(ShellItem? item);
+    Task InvokeAsync(string actionId, ShellItem? item, CancellationToken cancel);
+
+    // Raised when the contents changed on their own (a drive was mounted); the window then lists again.
+    event EventHandler? Changed;
 }

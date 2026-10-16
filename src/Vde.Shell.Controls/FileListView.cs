@@ -54,12 +54,15 @@ public sealed class FileListView : UserControl
     public SortKey SortKey { get; private set; } = SortKey.Name;
     public bool SortDescending { get; private set; }
 
+    // True for the items of a shell folder, whose own order (folders first, then drives) is the right one.
+    public bool PreserveOrder { get; set; }
+
     public IReadOnlyList<FileEntry> Entries
     {
         get => _entries;
         set
         {
-            _entries = FolderLister.Sort(value, SortKey, SortDescending);
+            _entries = PreserveOrder ? value.ToList() : FolderLister.Sort(value, SortKey, SortDescending);
             _list.ItemsSource = _entries;
         }
     }
@@ -109,14 +112,18 @@ public sealed class FileListView : UserControl
 
     private Control Row(FileEntry entry)
     {
-        var info = entry.IsDirectory ? null : Types?.Describe(entry.FullPath);
-        var icon = new ShellIcon { IconNames = entry.IsDirectory ? FolderIcons(entry.FullPath) : info?.IconNames ?? ["text-x-generic"], IconSize = 20, Margin = new Thickness(4, 2, 6, 2) };
+        bool virtual_ = entry.IconNames is not null;   // an item of a shell folder, not a file
+        var info = entry.IsDirectory || virtual_ ? null : Types?.Describe(entry.FullPath);
+        var icon = new ShellIcon { IconNames = entry.IconNames ?? (entry.IsDirectory ? FolderIcons(entry.FullPath) : info?.IconNames ?? ["text-x-generic"]), IconSize = virtual_ ? 32 : 20, Margin = new Thickness(4, 2, 6, 2) };
 
         var name = new TextBlock { Text = entry.Name, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
-        var nameCell = new StackPanel { Orientation = Orientation.Horizontal, Children = { icon, name } };
-        var modified = Cell(entry.ModifiedUtc.ToLocalTime().ToString("g"), 1);
-        var type = Cell(entry.IsDirectory ? "Folder" : info?.Description ?? "File", 2);
-        var size = Cell(entry.IsDirectory ? "" : ByteFormat.Format(entry.Size), 3);
+        Control label = name;
+        if (entry.Detail is { Length: > 0 } detail)   // a second, smaller line (free space on a drive, where a trashed file came from)
+            label = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Children = { name, new TextBlock { Text = detail, FontSize = 11, Opacity = 0.65, TextTrimming = TextTrimming.CharacterEllipsis } } };
+        var nameCell = new StackPanel { Orientation = Orientation.Horizontal, Children = { icon, label } };
+        var modified = Cell(entry.ModifiedUtc == default ? "" : entry.ModifiedUtc.ToLocalTime().ToString("g"), 1);
+        var type = Cell(entry.TypeText ?? (entry.IsDirectory ? "Folder" : info?.Description ?? "File"), 2);
+        var size = Cell(entry.IsDirectory || virtual_ && entry.Size == 0 ? "" : ByteFormat.Format(entry.Size), 3);
         size.HorizontalAlignment = HorizontalAlignment.Right;
         size.Margin = new Thickness(8, 2, 14, 2);
         foreach (var secondary in new[] { modified, type, size })

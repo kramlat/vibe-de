@@ -133,7 +133,7 @@ public static class ExplorerCommand
         });
     }
 
-    private static void Launch(ExplorerHost host, DesktopEntry entry)
+    internal static void Launch(ExplorerHost host, DesktopEntry entry)
     {
         var xdg = XdgDirectories.Default;
         var mime = new MimeDatabase(xdg);
@@ -142,7 +142,7 @@ public static class ExplorerCommand
         catch (Exception e) when (e is FileNotFoundException or InvalidOperationException) { Console.Error.WriteLine("vexplore: " + e.Message); }
     }
 
-    private static void Launch(ExplorerHost host, string commandLine)
+    internal static void Launch(ExplorerHost host, string commandLine)
     {
         var xdg = XdgDirectories.Default;
         var mime = new MimeDatabase(xdg);

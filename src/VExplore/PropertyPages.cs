@@ -54,6 +54,7 @@ public sealed class VExploreInstaller : IVdeInstaller
 
     public void Install(VdeInstallContext context)
     {
+        ShellFolderSetup.Register(context.Registry, context.Installing);
         foreach (var cls in Classes)
         {
             var key = $@"{cls}\{PropertyHandlers.HandlersKey}\VExplore";
