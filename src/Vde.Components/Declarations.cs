@@ -37,3 +37,23 @@ public interface IVdeInstaller
 
 // Registry is HKCR of the hive being registered into.
 public sealed record VdeInstallContext(ClassesRoot Registry, bool Installing, string? CommandLine, string AssemblyPath);
+
+// A component in this category adds results to the launcher's search. The user must authorize each one (see
+// the launcher's provider list); an unauthorized provider is never loaded or asked anything.
+public static class ComponentCategories
+{
+    public const string LauncherSearchProvider = "{6C0E5A7B-4D0A-4F63-9B2E-5A5C1F6D0001}";
+}
+
+public sealed record SearchHit(string Title, string Subtitle = "", string Icon = "", string? ActivationId = null);
+
+// What a launcher search plugin implements. Implementations must be quick and must not assume they are
+// called on a particular thread; the launcher cancels slow ones and ignores their results.
+public interface ILauncherSearchProvider
+{
+    string Name { get; }
+    Task<IReadOnlyList<SearchHit>> SearchAsync(string query, CancellationToken cancel);
+
+    // The user picked one of this provider's hits.
+    Task ActivateAsync(SearchHit hit, CancellationToken cancel);
+}

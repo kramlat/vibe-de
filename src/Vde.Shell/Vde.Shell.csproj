@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Vde.Freedesktop\Vde.Freedesktop.csproj" />
+    <ProjectReference Include="..\Vde.Components\Vde.Components.csproj" />
     <ProjectReference Include="..\Vibe.Registry\Vibe.Registry.csproj" />
   </ItemGroup>
 

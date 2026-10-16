@@ -344,3 +344,137 @@ public class BaseThemeSwapTests
         finally { TestTheme.Engine.BaseThemeChanged -= Count; }
     }
 }
+
+public class FileManagerControlTests
+{
+    private static FileEntry E(string name, bool dir = false, long size = 10) => new(name, "/x/" + name, dir, false, false, size, new DateTime(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc), dir ? "" : Path.GetExtension(name));
+
+    [AvaloniaFact]
+    public void The_file_list_sorts_flips_on_a_second_click_and_reports_invocation()
+    {
+        var list = new FileListView { Entries = [E("b.txt"), E("a.txt"), E("dir", true)] };
+        var window = new Window { Width = 700, Height = 300, Content = list };
+        window.Show();
+
+        Assert.Equal(new[] { "dir", "a.txt", "b.txt" }, list.Entries.Select(e => e.Name));
+        int changes = 0;
+        list.SortChanged += (_, _) => changes++;
+        list.Sort(SortKey.Name, true);
+        Assert.Equal(new[] { "dir", "b.txt", "a.txt" }, list.Entries.Select(e => e.Name));   // folders stay first
+        Assert.Equal(1, changes);
+
+        IReadOnlyList<FileEntry>? invoked = null;
+        list.ItemsInvoked += (_, items) => invoked = items;
+        list.SelectAll();
+        Assert.Equal(3, list.SelectedEntries.Count);
+    }
+
+    [AvaloniaFact]
+    public void The_address_bar_shows_segments_navigates_on_click_and_parses_typed_text()
+    {
+        var bar = new AddressBar { Home = "/home/deck", Path = "/home/deck/Music" };
+        var window = new Window { Width = 600, Height = 60, Content = bar };
+        window.Show();
+        var requested = new List<string>();
+        var rejected = new List<string>();
+        bar.PathRequested += (_, p) => requested.Add(p);
+        bar.TextRejected += (_, t) => rejected.Add(t);
+
+        var buttons = bar.GetVisualDescendants().OfType<Button>().ToList();
+        Assert.Equal(new[] { "/", "home", "Home", "Music" }, buttons.Select(b => (string)b.Content!));
+        buttons[2].RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal(new[] { "/home/deck" }, requested);
+
+        bar.BeginEdit();
+        Assert.True(bar.IsEditing);
+        Assert.Equal("/home/deck/Music", bar.EditText);
+        bar.EditText = "~/Documents";
+        bar.Commit();
+        Assert.False(bar.IsEditing);
+        Assert.Equal("/home/deck/Documents", requested[^1]);
+
+        bar.BeginEdit(); bar.EditText = "smb://nas/share"; bar.Commit();
+        Assert.Equal(new[] { "smb://nas/share" }, rejected);
+    }
+
+    [AvaloniaFact]
+    public void The_places_sidebar_lists_places_and_raises_the_one_picked()
+    {
+        var sidebar = new PlacesSidebar { Places = [new Place("Home", ["user-home"], PlaceKind.Folder, "/home/deck"), new Place("Trash", ["user-trash"], PlaceKind.Trash)] };
+        var window = new Window { Width = 220, Height = 300, Content = sidebar };
+        window.Show();
+        var picked = new List<Place>();
+        sidebar.PlaceInvoked += (_, p) => picked.Add(p);
+
+        sidebar.ShowCurrent("/home/deck");                       // highlighting the current folder is not a click
+        Assert.Empty(picked);
+        Assert.Equal("Home", sidebar.SelectedPlace!.Name);
+        sidebar.SelectedPlace = sidebar.Places[1];
+        Assert.Equal("Trash", Assert.Single(picked).Name);
+    }
+
+    [AvaloniaFact]
+    public void A_settings_page_edits_the_registry_refuses_bad_values_and_follows_outside_changes()
+    {
+        var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+        var view = new SettingsPageView(BuiltInPages.Notifications, hive);
+        var window = new Window { Width = 500, Height = 500, Content = view };
+        window.Show();
+
+        var dnd = (ToggleSwitch)view.ControlFor("dnd");
+        var timeout = (NumericUpDown)view.ControlFor("timeout");
+        Assert.False(dnd.IsChecked);
+        Assert.Equal(5000m, timeout.Value);
+
+        dnd.IsChecked = true;
+        Assert.Equal(1u, hive.GetValue(@"Software\Vde\Notifications", "DoNotDisturb")!.Data);   // written straight to the registry
+        timeout.Value = 8000;
+        Assert.Equal(8000u, hive.GetValue(@"Software\Vde\Notifications", "DefaultTimeoutMs")!.Data);
+        timeout.Value = 10;                                                                      // below the 500 minimum: refused
+        Assert.Equal(8000u, hive.GetValue(@"Software\Vde\Notifications", "DefaultTimeoutMs")!.Data);
+
+        hive.SetValue(@"Software\Vde\Notifications", "DoNotDisturb", Vibe.Registry.RegistryValueKind.DWord, 0u);   // a script flips it
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.False(dnd.IsChecked);
+    }
+
+    [AvaloniaFact]
+    public void The_launcher_shows_pinned_and_recent_all_apps_and_local_search_and_runs_what_is_picked()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "vde-launch-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "applications"));
+        foreach (var (id, name) in new[] { ("kate", "Kate"), ("zip", "Zip Tool") })
+            File.WriteAllText(Path.Combine(dir, "applications", id + ".desktop"), $"[Desktop Entry]\nType=Application\nName={name}\nExec={id}\n");
+        try
+        {
+            var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+            var apps = Vde.Freedesktop.DesktopEntryDatabase.Load(TestTheme.EmptyXdg(dir), []);
+            var model = new LauncherModel(hive, apps, ["VDE"], ControlPanelCatalog.Load(null, hive, null, []));
+            model.Pin("kate");
+            var view = new LauncherView(model);
+            var window = new Window { Width = 400, Height = 600, Content = view };
+            window.Show();
+            var started = new List<string>();
+            view.AppInvoked += (_, app) => started.Add(app.Id);
+
+            Assert.Contains("Kate", view.VisibleTitles);
+            Assert.DoesNotContain("Zip Tool", view.VisibleTitles);
+
+            view.ShowAllApps = true;
+            Assert.Equal(new[] { "Kate", "Zip Tool" }, view.VisibleTitles);
+
+            view.ShowAllApps = false;
+            view.SearchText = "zip";
+            var button = view.GetVisualDescendants().OfType<Button>().Single(b => (string?)b.Tag == "Zip Tool");
+            button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(new[] { "zip.desktop" }, started);
+            Assert.Equal("zip.desktop", model.Recent[0].Id);                                       // launching records it
+
+            view.SearchText = "dark";
+            Assert.Contains("Appearance", view.VisibleTitles);                                      // settings come up in the same search
+            view.SearchText = "qqqq";
+            Assert.Empty(view.VisibleTitles);                                                       // and nothing from anywhere else
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+}

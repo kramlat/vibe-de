@@ -1,5 +1,6 @@
 using Vde.Freedesktop;
 using Vde.Shell;
+using Vde.Components;
 using Vibe.Registry;
 
 namespace Vde.Shell.Tests;
@@ -1827,5 +1828,210 @@ public class ControlPanelTests
         var hive = Reg();
         hive.SetValue(@"Software\Vde\Notifications", "DoNotDisturb", RegistryValueKind.String, "yes");
         Assert.Equal(false, new SettingBinding(hive, BuiltInPages.Notifications.Settings[0]).Read());
+    }
+}
+
+public class LauncherTests
+{
+    private static (LauncherModel model, Hive hive, Fixture fx) Make()
+    {
+        var fx = new Fixture();
+        foreach (var (id, name, extra) in new[] { ("zip", "Zip Tool", "Comment=Compress files\n"), ("alpha", "alpha editor", ""), ("beta", "Beta Browser", "GenericName=Web Browser\n"),
+                     ("num", "7 Tools", ""), ("hid", "Hidden Thing", "NoDisplay=true\n"), ("kcm", "Sound Settings", "Categories=Settings;\n"), ("kate", "Kate", "") })
+            fx.Write($"usr-share/applications/{id}.desktop", $"[Desktop Entry]\nType=Application\nName={name}\nExec={id}\n{extra}");
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var settings = ControlPanelCatalog.Load(null, hive, null, []);
+        return (new LauncherModel(hive, DesktopEntryDatabase.Load(fx.Xdg, []), ["VDE"], settings), hive, fx);
+    }
+
+    [Fact]
+    public void All_apps_are_alphabetical_with_headings_and_leave_out_hidden_and_settings_programs()
+    {
+        var (model, _, fx) = Make(); using (fx)
+        {
+            Assert.Equal(new[] { "7 Tools", "alpha editor", "Beta Browser", "Kate", "Zip Tool" }, model.AllApps.Select(a => a.Name));
+            Assert.Equal(new[] { "A", "B", "K", "Z", "#" }, model.Alphabetical().Select(g => g.Heading));   // "#" (non-letters) goes last
+            Assert.Equal("alpha editor", model.Alphabetical()[0].Apps.Single().Name);
+        }
+    }
+
+    [Fact]
+    public void Pinning_orders_and_survives_uninstalled_apps()
+    {
+        var (model, hive, fx) = Make(); using (fx)
+        {
+            model.Pin("kate.desktop"); model.Pin("zip"); model.Pin("kate.desktop"); model.Pin("ghost.desktop");   // a duplicate and an unknown app change nothing
+            Assert.Equal(new[] { "kate.desktop", "zip.desktop" }, model.Pinned.Select(a => a.Id));
+
+            model.MovePinned("zip.desktop", 0);
+            Assert.Equal(new[] { "zip.desktop", "kate.desktop" }, model.Pinned.Select(a => a.Id));
+            model.MovePinned("zip.desktop", 99);
+            Assert.Equal("zip.desktop", model.Pinned[^1].Id);
+
+            hive.SetValue(LauncherModel.KeyPath, "Pinned", RegistryValueKind.MultiString, new[] { "kate.desktop", "uninstalled.desktop" });
+            Assert.Equal("kate.desktop", Assert.Single(model.Pinned).Id);
+
+            model.Unpin("kate.desktop");
+            Assert.Empty(model.Pinned);
+            Assert.False(hive.GetValue(LauncherModel.KeyPath, "Pinned") is not null && ((string[])hive.GetValue(LauncherModel.KeyPath, "Pinned")!.Data!).Contains("kate.desktop"));
+        }
+    }
+
+    [Fact]
+    public void Recent_puts_the_newest_first_without_repeats_and_can_be_cleared()
+    {
+        var (model, _, fx) = Make(); using (fx)
+        {
+            foreach (var id in new[] { "kate", "zip", "alpha", "kate" })
+                model.RecordLaunch(id);
+            model.RecordLaunch("ghost");
+
+            Assert.Equal(new[] { "kate.desktop", "alpha.desktop", "zip.desktop" }, model.Recent.Select(a => a.Id));
+            model.ClearRecent();
+            Assert.Empty(model.Recent);
+        }
+    }
+
+    [Fact]
+    public void Search_is_local_ranks_name_matches_first_and_includes_settings()
+    {
+        var (model, hive, fx) = Make(); using (fx)
+        {
+            var key = ControlPanelCatalog.RegistryKey + "\\snd"; hive.SetValue(key, "Name", RegistryValueKind.String, "Sound"); hive.SetValue(key, "Command", RegistryValueKind.String, "/bin/true");
+            model = new LauncherModel(hive, DesktopEntryDatabase.Load(fx.Xdg, []), ["VDE"], ControlPanelCatalog.Load(null, hive, null, []));
+
+            Assert.Equal(new[] { "Zip Tool" }, model.Search("zip").Select(r => r.Title));
+            Assert.Equal("Beta Browser", model.Search("web").Single().Title);                  // generic name
+            Assert.Equal("Zip Tool", model.Search("compress").Single().Title);                 // comment
+            var sound = model.Search("sound");
+            Assert.Equal("Sound", sound[0].Title);                                              // the setting; the "Sound Settings" program is not an app here
+            Assert.Equal("Setting", sound[0].Kind);
+            Assert.Equal(new[] { "Kate" }, model.Search("kat").Select(r => r.Title));
+            Assert.Empty(model.Search("   "));
+            Assert.Empty(model.Search("nothing matches this"));
+            // dark/theme search reaches the built-in Appearance page, in the same list
+            Assert.Contains(model.Search("dark"), r => r.Kind == "Setting" && r.Title == "Appearance");
+        }
+    }
+}
+
+public class LauncherPluginTests
+{
+    private const string Clsid = "{11111111-0000-4000-8000-0000000000AA}";
+
+    private sealed class Plugin(string name, Func<string, Task<IReadOnlyList<SearchHit>>> search) : ILauncherSearchProvider
+    {
+        public string Name { get; } = name;
+        public List<SearchHit> Activated { get; } = new();
+        public int Calls;
+        public Task<IReadOnlyList<SearchHit>> SearchAsync(string query, CancellationToken cancel) { Interlocked.Increment(ref Calls); return search(query); }
+        public Task ActivateAsync(SearchHit hit, CancellationToken cancel) { Activated.Add(hit); return Task.CompletedTask; }
+    }
+
+    private static Task<IReadOnlyList<SearchHit>> Hits(params string[] titles) => Task.FromResult<IReadOnlyList<SearchHit>>(titles.Select(t => new SearchHit(t, "note")).ToList());
+
+    private static (LauncherModel model, LauncherProviders providers, Hive user, Fixture fx) Make(string dll)
+    {
+        var fx = new Fixture();
+        fx.Write("usr-share/applications/zip.desktop", "[Desktop Entry]\nType=Application\nName=Zip Tool\nExec=zip\n");
+        var user = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var hkcr = new ClassesRoot(user);
+        ComponentRegistrar.Register(hkcr, new ComponentInfo(Clsid, "Plug.Notes", dll, "Plug", ThreadingModel.Free, null, "Notes search",
+            [ComponentCategories.LauncherSearchProvider]));
+        var providers = new LauncherProviders(hkcr, user, RegistryIdentity.Root);
+        var model = new LauncherModel(user, DesktopEntryDatabase.Load(fx.Xdg, []), ["VDE"]) { Authorizer = providers, PluginTimeout = TimeSpan.FromMilliseconds(300) };
+        return (model, providers, user, fx);
+    }
+
+    [Fact]
+    public async Task A_plugin_is_never_asked_anything_until_the_user_authorizes_it_and_revoking_stops_it_at_once()
+    {
+        var dll = Path.GetTempFileName();
+        var (model, providers, _, fx) = Make(dll); using (fx)
+        {
+            var plugin = new Plugin("Notes", q => Hits("note about " + q));
+            model.AddPlugin(Clsid, plugin);
+
+            Assert.False(Assert.Single(providers.List()).IsAuthorized);
+            Assert.Equal(new[] { "Zip Tool" }, (await model.SearchAsync("zip")).Select(r => r.Title));
+            Assert.Equal(0, plugin.Calls);                                                      // not authorized: never called
+
+            providers.Authorize(Clsid.ToLowerInvariant());
+            var results = await model.SearchAsync("zip");
+            Assert.Equal(new[] { "Zip Tool", "note about zip" }, results.Select(r => r.Title));  // local first, plugin after
+            Assert.Equal("Plugin", results[1].Kind);
+            Assert.Equal("note · Notes", results[1].Subtitle);                                  // labelled with where it came from
+            Assert.Equal(1, plugin.Calls);
+
+            Assert.True(await model.ActivateAsync(results[1]));
+            Assert.Single(plugin.Activated);
+
+            providers.Revoke(Clsid);
+            Assert.Equal(new[] { "Zip Tool" }, (await model.SearchAsync("zip")).Select(r => r.Title));
+            Assert.False(await model.ActivateAsync(results[1]));                                // a result shown earlier cannot be run any more
+            Assert.Equal(1, plugin.Calls);
+        }
+        File.Delete(dll);
+    }
+
+    [Fact]
+    public async Task Slow_failing_and_chatty_plugins_cannot_break_or_flood_the_search()
+    {
+        var dll = Path.GetTempFileName();
+        var (model, providers, _, fx) = Make(dll); using (fx)
+        {
+            providers.Authorize(Clsid);
+            model.AddPlugin(Clsid, new Plugin("Slow", async _ => { await Task.Delay(5000); return [new SearchHit("too late")]; }));
+            model.AddPlugin(Clsid, new Plugin("Broken", _ => throw new InvalidOperationException("bug")));
+            model.AddPlugin(Clsid, new Plugin("Chatty", _ => Hits(Enumerable.Range(0, 50).Select(i => "hit" + i).ToArray())));
+
+            var started = DateTime.UtcNow;
+            var results = await model.SearchAsync("zip");
+
+            Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(3));                   // did not wait for the slow one
+            Assert.DoesNotContain(results, r => r.Title == "too late");
+            Assert.Equal(LauncherModel.MaxPluginHits, results.Count(r => r.Kind == "Plugin"));   // capped
+            Assert.Equal("Zip Tool", results[0].Title);
+        }
+        File.Delete(dll);
+    }
+
+    [Fact]
+    public void Only_the_users_own_hive_can_authorize_and_only_provider_category_components_are_listed()
+    {
+        var dll = Path.GetTempFileName();
+        var system = new Hive("HKLM") { Identity = RegistryIdentity.Root };
+        var user = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var hkcr = new ClassesRoot(user, system);
+        ComponentRegistrar.Register(hkcr, new ComponentInfo(Clsid, "P", dll, "P", ThreadingModel.Free, null, "Mine", [ComponentCategories.LauncherSearchProvider]));
+        ComponentRegistrar.Register(hkcr, new ComponentInfo("{22222222-0000-4000-8000-000000000001}", "Other", dll, "O", ThreadingModel.Free));   // not a provider
+        var providers = new LauncherProviders(hkcr, user, RegistryIdentity.Current);
+
+        system.SetValue(LauncherProviders.KeyPath, Clsid, RegistryValueKind.DWord, 1u);        // an installer tries to pre-approve it
+        Assert.False(Assert.Single(providers.List()).IsAuthorized);
+
+        providers.Authorize(Clsid);
+        Assert.True(Assert.Single(providers.List()).MayLoad);
+        user.SetValue(LauncherProviders.KeyPath, Clsid, RegistryValueKind.String, "1");        // junk is not consent
+        Assert.False(providers.IsAuthorized(Clsid));
+        Assert.Throws<ArgumentException>(() => providers.Authorize("nope"));
+        File.Delete(dll);
+    }
+
+    [Fact]
+    public void An_authorized_provider_whose_registration_is_untrusted_may_still_not_load()
+    {
+        var dll = Path.GetTempFileName();
+        var (_, providers, user, fx) = Make(dll); using (fx)
+        {
+            providers.Authorize(Clsid);
+            var server = $@"Software\Classes\CLSID\{Clsid}\InprocServer32";
+            user.SetValuePermissions(server, "", user.GetValuePermissions(server, "")!.Value.WithMode(PosixPermissions.ValueDefault));   // no longer executable
+
+            var info = Assert.Single(providers.List());
+            Assert.True(info.IsAuthorized);
+            Assert.False(info.MayLoad);
+        }
+        File.Delete(dll);
     }
 }
