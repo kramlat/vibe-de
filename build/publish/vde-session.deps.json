@@ -1,0 +1,70 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v9.0/linux-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v9.0": {},
+    ".NETCoreApp,Version=v9.0/linux-x64": {
+      "vde-session/1.0.0": {
+        "dependencies": {
+          "Vde.Freedesktop": "1.0.0",
+          "Vibe.Registry.Remote": "1.0.0"
+        },
+        "runtime": {
+          "vde-session.dll": {}
+        }
+      },
+      "Vde.Freedesktop/1.0.0": {
+        "runtime": {
+          "Vde.Freedesktop.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Vibe.Registry/1.0.0": {
+        "runtime": {
+          "Vibe.Registry.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Vibe.Registry.Remote/1.0.0": {
+        "dependencies": {
+          "Vibe.Registry": "1.0.0"
+        },
+        "runtime": {
+          "Vibe.Registry.Remote.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "vde-session/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vde.Freedesktop/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vibe.Registry/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vibe.Registry.Remote/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

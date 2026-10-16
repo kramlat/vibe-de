@@ -1,0 +1,34 @@
+# Maintainer: Mark Toman <kram2048@gmail.com>
+#
+# Builds VDE from the checkout this file lives in (packaging/arch/ in the repository), so there is no source to
+# download: `cd packaging/arch && makepkg -d` (add -i to install it). The build needs network access once: NuGet
+# restores the Avalonia packages. Nothing is reported anywhere: the build and the desktop have no telemetry.
+pkgname=vde
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Vibe Desktop Environment: a C# / Avalonia desktop for Wayland with a Windows 11 style workflow'
+arch=(x86_64)
+url='https://github.com/kramlat/vibe-de'
+license=(GPL-3.0-or-later LGPL-3.0-or-later)
+# dotnet-runtime-9.0 is the runtime everything is built and tested against
+depends=(dotnet-runtime-9.0 pam wayland libxkbcommon libinput libdrm mesa libglvnd pixman seatd systemd-libs libxcb
+         xcb-util-wm xcb-util-renderutil xcb-util-errors libdisplay-info
+         systemd xorg-xwayland breeze-icons polkit dbus)
+makedepends=(dotnet-sdk-9.0 git meson ninja gcc pkgconf hwdata)
+optdepends=('pipewire: audio (planned quick settings)'
+            'networkmanager: network (planned quick settings)'
+            'powershell-bin: PowerShell profile in the terminal')
+backup=(etc/pam.d/vdedm etc/pam.d/vdedm-greeter etc/pam.d/vdedm-autologin)
+install=vde.install
+options=(!strip !debug)   # the .NET programs are not native code; vwm is stripped by the build
+
+build() {
+    cd "$startdir/../.."
+    git submodule update --init --recursive native/third_party || true
+    make DOTNET=/usr/bin/dotnet CONFIG=Release all
+}
+
+package() {
+    cd "$startdir/../.."
+    make DESTDIR="$pkgdir" PREFIX=/usr DOTNET=/usr/bin/dotnet install
+}

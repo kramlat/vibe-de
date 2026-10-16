@@ -1,0 +1,44 @@
+# Per-machine setup that a file list cannot do: the account for the login screen, the system registry, and the
+# registration of the shell's components in it. Nothing here starts the display manager or changes how you log in.
+
+_register() {
+    # the shell's own components (property sheets, shell folders): into the system registry
+    /usr/lib/vde/RegSvrVDE --system /s /i /usr/lib/vde/vexplore.dll >/dev/null 2>&1 || \
+        echo "vde: could not register the shell components; run: RegSvrVDE --system /i /usr/lib/vde/vexplore.dll"
+}
+
+post_install() {
+    systemd-sysusers vdedm.conf >/dev/null 2>&1 || true
+    systemd-tmpfiles --create vdedm.conf >/dev/null 2>&1 || true
+    if [ ! -e /etc/hive/System.fhive ]; then
+        install -d -m755 /etc/hive
+        /usr/lib/vde/mkhive create --type system --rules /usr/share/vde/registry/permissions.rules \
+            /etc/hive/System.fhive /usr/share/vde/registry/system.reg >/dev/null || \
+            echo "vde: could not create /etc/hive/System.fhive; see /usr/share/doc/vde/install.md"
+    fi
+    _register
+    cat <<'MSG'
+
+  VDE is installed. It does not change how you log in.
+
+  Try it first, inside your current desktop:   vde-session      (vwm opens as a window)
+  To use it as a login session:                pick "Vibe Desktop Environment" in your login manager,
+                                               or run start-vde from a text console.
+  To use its own login screen (vdedm):         read /usr/share/doc/vde/dm.md first, then
+                                               systemctl disable <your login manager> && systemctl enable vdedm
+                                               (keep a text console available: Ctrl+Alt+F2)
+  Check what vdedm would do:                   vdedm --check
+
+MSG
+}
+
+post_upgrade() {
+    systemd-sysusers vdedm.conf >/dev/null 2>&1 || true
+    systemd-tmpfiles --create vdedm.conf >/dev/null 2>&1 || true
+    _register
+    echo "vde: your system registry (/etc/hive/System.fhive) was kept; new defaults are in /usr/share/vde/registry/system.reg"
+}
+
+pre_remove() {
+    /usr/lib/vde/RegSvrVDE --system /s /u /usr/lib/vde/vexplore.dll >/dev/null 2>&1 || true
+}
