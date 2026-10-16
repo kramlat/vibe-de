@@ -46,6 +46,21 @@ through roll-forward), PAM, Wayland and its libraries, Xwayland, the Breeze icon
 | `/etc/pam.d/vdedm*` | PAM services of the display manager (kept as configuration) |
 | `/usr/lib/systemd/{system,user}` | `fhived`, `vdedm`, `vdenotify` units |
 
+## Which releases build
+
+Built in clean containers (`packaging/test-deb.sh IMAGE`, and rpmbuild in a Fedora container):
+
+| Distribution | Result |
+| --- | --- |
+| Arch / CachyOS | package builds (`makepkg -d`) |
+| Fedora 44 | RPM builds |
+| Debian 13 (trixie) | `.deb` builds, with `dpkg-shlibdeps` computing the library dependencies |
+| Ubuntu 24.04 | **does not build**: the vendored wlroots needs Wayland 1.23.1, and 24.04 has 1.22.0 |
+| Ubuntu 25.10 | see below |
+
+.NET 9 is not in Debian's repositories, so the `.deb` build gets it from Microsoft's install script (the container script
+does this); on Fedora and Arch it is a package. None of these packages has been installed on a real system yet.
+
 ## Package names by distribution
 
 The programs need these libraries at run time; the package names differ. The Arch column is what `packaging/arch/PKGBUILD`
