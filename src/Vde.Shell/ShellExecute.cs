@@ -41,6 +41,7 @@ public sealed class ShellExecute
 {
     private static readonly (string Name, string[] Prefix)[] Terminals =
     [
+        ("vterminal", ["-e"]),
         ("konsole", ["-e"]),
         ("gnome-terminal", ["--"]),
         ("xfce4-terminal", ["-x"]),

@@ -22,6 +22,7 @@ public static class SessionEnvironment
         };
         // the cursor size and theme follow the registry later; a sane default keeps toolkits from guessing
         if (string.IsNullOrEmpty(env("XCURSOR_SIZE"))) vars["XCURSOR_SIZE"] = "24";
+        if (string.IsNullOrEmpty(env("TERMINAL"))) vars["TERMINAL"] = "vterminal";   // programs that open a terminal (and the shell's "run in terminal") use ours unless told otherwise
         return vars;
     }
 

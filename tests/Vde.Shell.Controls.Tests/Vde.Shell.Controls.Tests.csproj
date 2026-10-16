@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Vde.Shell.Controls\Vde.Shell.Controls.csproj" />
+    <ProjectReference Include="..\..\src\Vde.Terminal\Vde.Terminal.csproj" />
   </ItemGroup>
 
 </Project>

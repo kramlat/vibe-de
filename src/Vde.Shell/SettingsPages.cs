@@ -57,6 +57,16 @@ public static class BuiltInPages
         },
     ]);
 
+    public const string TerminalKey = @"Software\Vde\Terminal";
+
+    public static readonly SettingsPage Terminal = new("terminal", "Terminal",
+    [
+        new("profile", "Default profile", SettingKind.Text, TerminalKey, "DefaultProfile", "The name of a shell below, e.g. PowerShell or bash. Empty: your login shell.") { Default = "" },
+        new("font", "Font", SettingKind.Text, TerminalKey, "FontFamily", "A monospace font installed on this computer.") { Default = "monospace" },
+        new("size", "Font size", SettingKind.Number, TerminalKey, "FontSize") { Min = 6, Max = 72, Default = 13L },
+        new("copy", "Copy text as soon as it is selected", SettingKind.Toggle, TerminalKey, "CopyOnSelect") { Default = false },
+    ]);
+
     public const string WindowsKey = @"Software\Vde\Windows";
 
     public static readonly SettingsPage Windows = new("windows", "Windows",
@@ -82,7 +92,7 @@ public static class BuiltInPages
         },
     ]);
 
-    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, StartMenu, Taskbar, Windows, Notifications, Keyboard];
+    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, StartMenu, Taskbar, Windows, Terminal, Notifications, Keyboard];
 
     public static readonly IReadOnlyList<ControlPanelItem> Items =
     [
@@ -96,6 +106,8 @@ public static class BuiltInPages
             ["window", "titlebar", "double click", "maximize", "minimize"], ItemSource.BuiltIn) { PageId = "windows" },
         new("taskbar", "Taskbar", "Which screen edge it sits on and how apps are aligned", "preferences-desktop", ControlPanelCategories.Appearance,
             ["taskbar", "dock", "panel", "edge", "left", "right", "top", "bottom", "center", "centre"], ItemSource.BuiltIn) { PageId = "taskbar" },
+        new("terminal", "Terminal", "Default shell, font and copy behaviour of vterminal", "utilities-terminal", ControlPanelCategories.Apps,
+            ["terminal", "shell", "powershell", "bash", "console", "font"], ItemSource.BuiltIn) { PageId = "terminal" },
         new("keyboard", "Keyboard", "Shortcut style: PC or Apple", "input-keyboard", ControlPanelCategories.Devices,
             ["shortcuts", "apple", "mac", "command", "ctrl", "hotkeys"], ItemSource.BuiltIn) { PageId = "keyboard" },
         new("notifications", "Notifications", "Do not disturb and how long notifications stay", "preferences-desktop-notification", ControlPanelCategories.System,
