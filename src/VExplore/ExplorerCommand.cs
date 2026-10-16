@@ -17,6 +17,7 @@ public static class ExplorerCommand
                vexplore --files [folder]    a file manager window (the default)
                vexplore --settings          the Settings (Control Panel) window
                vexplore --launcher          the app launcher
+               vexplore --desktop           the desktop: wallpaper and the icons of ~/Desktop
                vexplore --list-components   show registered components and whether the shell would load them
                -h, --help
 
@@ -40,6 +41,7 @@ public static class ExplorerCommand
             0 => "files",
             _ when args[0] == "--settings" && args.Length == 1 => "settings",
             _ when args[0] == "--launcher" && args.Length == 1 => "launcher",
+            _ when args[0] == "--desktop" && args.Length == 1 => "desktop",
             _ when args[0] == "--files" && args.Length <= 2 => "files",
             _ when !args[0].StartsWith('-') && args.Length == 1 => "files",
             _ => null,
@@ -62,6 +64,7 @@ public static class ExplorerCommand
         {
             "settings" => NewSettings(host2),
             "launcher" => NewLauncher(host2),
+            "desktop" => NewDesktop(host2),
             _ => ShellApp.NewFileManager(host2, folder),
         };
         return ShellApp.Build().StartWithClassicDesktopLifetime([]);
@@ -89,6 +92,31 @@ public static class ExplorerCommand
                 Launch(host, command);
         });
     }
+
+    private static Window NewDesktop(ExplorerHost host)
+    {
+        var xdg = XdgDirectories.Default;
+        var folders = new KnownFolders(xdg);
+        var mime = new MimeDatabase(xdg);
+        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var associations = new FileAssociations(xdg, mime, apps, ShellApp.Desktops(), host.Classes);
+        var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
+        var shell = new ShellExecute(associations, mime, types: types);
+        return new DesktopWindow(folders.Get(KnownFolder.Desktop), host.CurrentUser, path =>
+        {
+            try
+            {
+                if (Directory.Exists(path)) new ShellExecute(associations, mime, types: types).Run("vexplore --files " + ExecLineQuote(path));
+                else shell.Open(path);
+            }
+            catch (Exception e) when (e is NoAssociationException or FileNotFoundException or UntrustedCommandException or InvalidOperationException or ArgumentException)
+            {
+                Console.Error.WriteLine("vexplore: " + e.Message);
+            }
+        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } });
+    }
+
+    private static string ExecLineQuote(string path) => "\"" + path.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
     private static Window NewLauncher(ExplorerHost host)
     {

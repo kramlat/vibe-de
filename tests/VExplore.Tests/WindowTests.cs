@@ -273,3 +273,152 @@ public class FileActionWindowTests
         Assert.Empty(Directory.GetFileSystemEntries(e.B));
     }
 }
+
+public class DesktopWindowTests
+{
+    private sealed class Env : IDisposable
+    {
+        public string Root { get; } = Path.Combine(Path.GetTempPath(), "vexplore-desk-" + Guid.NewGuid().ToString("N"));
+        public string Desktop => Path.Combine(Root, "Desktop");
+        public Hive Hive { get; } = new("HKCU") { Identity = RegistryIdentity.Root };
+        public Trash Trash { get; }
+        public Vde.Shell.Controls.InMemoryFileClipboard Clip { get; } = new();
+        public List<string> Opened { get; } = new();
+        public Env()
+        {
+            Directory.CreateDirectory(Path.Combine(Desktop, "Projects"));
+            File.WriteAllText(Path.Combine(Desktop, "notes.txt"), "n");
+            File.WriteAllText(Path.Combine(Desktop, "todo.txt"), "t");
+            File.WriteAllText(Path.Combine(Desktop, ".hidden"), "h");
+            var env = new Dictionary<string, string> { ["HOME"] = Root, ["XDG_DATA_HOME"] = Path.Combine(Root, "data") };
+            Trash = new Trash(new XdgDirectories(k => env.GetValueOrDefault(k)));
+        }
+        public DesktopWindow Open() => new(Desktop, Hive, Opened.Add, null, new FileActions(Trash), Clip) { Width = 1000, Height = 600 };
+        public void Dispose() => Directory.Delete(Root, recursive: true);
+    }
+
+    [AvaloniaFact]
+    public void The_desktop_shows_the_folders_contents_as_icons_filling_down_the_grid_and_hides_dotfiles()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+
+        Assert.Equal(new[] { "Projects", "notes.txt", "todo.txt" }, w.Entries.Select(x => x.Name));   // folders first
+        Assert.Equal(new Cell(0, 0), w.CellOf("Projects"));
+        Assert.Equal(new Cell(0, 1), w.CellOf("notes.txt"));
+        Assert.Equal(new Cell(0, 2), w.CellOf("todo.txt"));
+        Assert.True(w.IconsVisible);
+    }
+
+    [AvaloniaFact]
+    public void Moving_an_icon_to_a_free_cell_is_remembered_and_a_taken_cell_sends_it_back()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+
+        w.SelectIcon("notes.txt");
+        w.DropIcon("notes.txt", new Cell(5, 3));
+        Assert.Equal(new Cell(5, 3), w.CellOf("notes.txt"));
+        Assert.Equal(new Cell(5, 3), DesktopSettingsStore.LoadPositions(e.Hive)["notes.txt"]);       // saved in the registry
+
+        w.DropIcon("todo.txt", new Cell(5, 3));                                                        // somebody is there already
+        Assert.NotEqual(new Cell(5, 3), w.CellOf("todo.txt"));
+        Assert.DoesNotContain("todo.txt", DesktopSettingsStore.LoadPositions(e.Hive).Keys);
+
+        var again = e.Open(); again.Show();                                                            // a new session keeps the layout
+        Assert.Equal(new Cell(5, 3), again.CellOf("notes.txt"));
+
+        File.Delete(Path.Combine(e.Desktop, "notes.txt"));
+        again.Reload();
+        Assert.DoesNotContain("notes.txt", DesktopSettingsStore.LoadPositions(e.Hive).Keys);           // forgets files that are gone
+    }
+
+    [AvaloniaFact]
+    public void Dropping_an_icon_on_a_folder_moves_the_selection_into_it()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+
+        w.SelectIcon("notes.txt"); w.SelectIcon("todo.txt", add: true);
+        w.DropIcon("todo.txt", w.CellOf("Projects"));
+
+        Assert.True(File.Exists(Path.Combine(e.Desktop, "Projects", "notes.txt")));
+        Assert.True(File.Exists(Path.Combine(e.Desktop, "Projects", "todo.txt")));
+        Assert.DoesNotContain(w.Entries, x => x.Name == "notes.txt");
+    }
+
+    [AvaloniaFact]
+    public async Task Selection_opening_and_the_file_actions_work_like_in_a_file_manager_window()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+
+        w.SelectIcon("notes.txt");
+        w.SelectIcon("todo.txt", add: true);
+        Assert.Equal(2, w.SelectedNames.Count);
+        w.SelectIcon("todo.txt", add: true);                                                           // ctrl+click again deselects
+        Assert.Equal(new[] { "notes.txt" }, w.SelectedNames);
+        w.OpenSelected();
+        Assert.Equal(new[] { Path.Combine(e.Desktop, "notes.txt") }, e.Opened);
+
+        await w.CopyAsync();
+        await w.PasteAsync();
+        Assert.Contains(w.Entries, x => x.Name == "notes (copy).txt");
+
+        Assert.True(w.Rename("renamed.txt"));
+        Assert.Contains(w.Entries, x => x.Name == "renamed.txt");
+        Assert.False(w.Rename("a/b"));
+
+        w.DeleteSelected();
+        Assert.DoesNotContain(w.Entries, x => x.Name == "renamed.txt");
+        Assert.Single(e.Trash.List());
+
+        var made = w.NewFolder();
+        Assert.EndsWith("New folder", made);
+        Assert.Equal(new[] { "New folder" }, w.SelectedNames);
+        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Desktop settings" }, w.MenuLabels);
+    }
+
+    [AvaloniaFact]
+    public void A_file_that_appears_on_the_desktop_shows_up_by_itself_and_a_renamed_icon_keeps_its_place()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+        w.SelectIcon("notes.txt"); w.DropIcon("notes.txt", new Cell(4, 4));
+
+        w.Rename("memo.txt");
+        Assert.Equal(new Cell(4, 4), w.CellOf("memo.txt"));
+
+        File.WriteAllText(Path.Combine(e.Desktop, "arrived.txt"), "x");
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!w.Entries.Any(x => x.Name == "arrived.txt") && DateTime.UtcNow < deadline)
+        {
+            Thread.Sleep(50);
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        }
+        Assert.Contains(w.Entries, x => x.Name == "arrived.txt");
+    }
+
+    [AvaloniaFact]
+    public void The_wallpaper_and_colour_come_from_the_registry_and_an_unreadable_image_falls_back_to_the_colour()
+    {
+        using var e = new Env();
+        var picture = Path.Combine(e.Root, "wall.png");
+        using (var bmp = new Avalonia.Media.Imaging.WriteableBitmap(new Avalonia.PixelSize(8, 8), new Avalonia.Vector(96, 96), Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Opaque))
+            bmp.Save(picture);
+
+        DesktopSettingsStore.Save(e.Hive, new DesktopSettings(picture, WallpaperMode.Tile, "#102030"));
+        var w = e.Open(); w.Show();
+        var brush = Assert.IsType<Avalonia.Media.ImageBrush>(w.Background);
+        Assert.Equal(Avalonia.Media.TileMode.Tile, brush.TileMode);
+
+        File.WriteAllText(picture, "not an image");
+        DesktopSettingsStore.Save(e.Hive, new DesktopSettings(picture, WallpaperMode.Fill, "#102030"));
+        var broken = e.Open(); broken.Show();
+        Assert.Equal(Avalonia.Media.Color.Parse("#102030"), Assert.IsType<Avalonia.Media.SolidColorBrush>(broken.Background).Color);
+
+        DesktopSettingsStore.Save(e.Hive, new DesktopSettings(null, WallpaperMode.Fill, "#102030", ShowIcons: false));
+        var bare = e.Open(); bare.Show();
+        Assert.False(bare.IconsVisible);
+    }
+}

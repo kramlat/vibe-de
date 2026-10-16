@@ -2291,3 +2291,77 @@ public class FileTransferTests
         Assert.Single(trash.List());                                                   // permanent ones never reach the trash
     }
 }
+
+public class DesktopTests
+{
+    [Fact]
+    public void Icons_fill_down_columns_keep_saved_cells_and_never_overlap()
+    {
+        var saved = new Dictionary<string, Cell> { ["b"] = new(0, 0), ["z"] = new(2, 1), ["dup"] = new(0, 0), ["off"] = new(99, 0), ["neg"] = new(-1, 2) };
+
+        var layout = DesktopLayout.Arrange(["a", "b", "c", "dup", "off", "neg", "z"], saved, columns: 3, rows: 2);
+
+        Assert.Equal(new Cell(0, 0), layout["b"]);        // placed by the user
+        Assert.Equal(new Cell(2, 1), layout["z"]);
+        Assert.Equal(7, layout.Values.Distinct().Count()); // no two icons share a cell
+        Assert.Equal(new Cell(0, 1), layout["a"]);        // the rest fill the free cells down each column in the given order: (0,1) first because b has (0,0)
+        Assert.Equal(new Cell(1, 0), layout["c"]);
+        Assert.All(layout.Values, c => Assert.True(c.Column >= 0 && c.Row >= 0));
+        Assert.True(layout.Values.Any(c => c.Column >= 3));   // 7 icons do not fit in 3x2: extra columns, not stacking
+    }
+
+    [Fact]
+    public void A_point_maps_to_a_cell_and_is_clamped_to_the_screen()
+    {
+        Assert.Equal(new Cell(1, 2), DesktopLayout.CellAt(110, 250, 100, 100, 10, 10));
+        Assert.Equal(new Cell(9, 0), DesktopLayout.CellAt(99999, -50, 100, 100, 10, 10));
+    }
+
+    [Fact]
+    public void Settings_and_icon_positions_round_trip_and_junk_falls_back()
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        Assert.Equal(new DesktopSettings(), DesktopSettingsStore.Load(hive));
+
+        DesktopSettingsStore.Save(hive, new DesktopSettings("/w/pic.jpg", WallpaperMode.Tile, "#102030", false));
+        Assert.Equal(new DesktopSettings("/w/pic.jpg", WallpaperMode.Tile, "#102030", false), DesktopSettingsStore.Load(hive));
+
+        hive.SetValue(DesktopSettingsStore.KeyPath, "WallpaperMode", RegistryValueKind.String, "Sideways");
+        hive.SetValue(DesktopSettingsStore.KeyPath, "BackgroundColor", RegistryValueKind.String, "red");
+        Assert.Equal(WallpaperMode.Fill, DesktopSettingsStore.Load(hive).Mode);
+        Assert.Equal("#1E1E2E", DesktopSettingsStore.Load(hive).BackgroundColor);
+
+        DesktopSettingsStore.SetPosition(hive, "a.txt", new Cell(3, 4));
+        DesktopSettingsStore.SetPosition(hive, "gone.txt", new Cell(1, 1));
+        hive.SetValue(DesktopSettingsStore.IconsKey, "junk", RegistryValueKind.String, "x,y");
+        hive.SetValue(DesktopSettingsStore.IconsKey, "neg", RegistryValueKind.String, "-1,2");
+        var positions = DesktopSettingsStore.LoadPositions(hive);
+        Assert.Equal(new Cell(3, 4), positions["a.txt"]);
+        Assert.DoesNotContain("junk", positions.Keys);
+        Assert.DoesNotContain("neg", positions.Keys);
+
+        DesktopSettingsStore.ForgetMissing(hive, ["a.txt"]);
+        Assert.Equal(new[] { "a.txt" }, DesktopSettingsStore.LoadPositions(hive).Keys);
+    }
+
+    [Fact]
+    public void Wallpapers_are_found_in_both_layouts_and_the_best_size_is_chosen()
+    {
+        using var fx = new Fixture();
+        foreach (var f in new[] { "1280x800.jpg", "1920x1080.jpg", "3840x2160.png", "notes.txt" })
+            fx.Write($"usr-share/wallpapers/Dunes/contents/images/{f}", "img");
+        fx.Write("usr-share/wallpapers/OnlySmall/contents/images/800x600.png", "img");
+        fx.Write("usr-share/wallpapers/Unsized/contents/images/pic.jpg", "img");
+        fx.Write("usr-share/backgrounds/plain.png", "img");
+        fx.Write("usr-share/backgrounds/readme", "not an image");
+        fx.Write("home/data/backgrounds/plain.png", "mine");                     // the user's copy shadows the system's of the same name
+
+        var found = WallpaperCatalog.Find(fx.Xdg, 1920, 1080);
+
+        Assert.Equal(new[] { "Dunes", "OnlySmall", "plain", "Unsized" }, found.Select(w => w.Name));
+        Assert.EndsWith("1920x1080.jpg", found.Single(w => w.Name == "Dunes").Path);                // exact size, not the bigger or smaller one
+        Assert.EndsWith("800x600.png", found.Single(w => w.Name == "OnlySmall").Path);              // nothing large enough: the best available
+        Assert.Contains("home/data/backgrounds", found.Single(w => w.Name == "plain").Path);
+        Assert.EndsWith("3840x2160.png", WallpaperCatalog.BestImage(Path.Combine(fx.Root, "usr-share/wallpapers/Dunes/contents/images"), 3000, 2000));
+    }
+}
