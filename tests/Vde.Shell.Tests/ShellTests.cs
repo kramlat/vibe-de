@@ -1726,3 +1726,106 @@ public class FolderModelTests
         Assert.Equal(1, calls);
     }
 }
+
+public class ControlPanelTests
+{
+    private static Hive Reg() => new("t") { Identity = RegistryIdentity.Root };
+
+    private static void Item(IHive hive, string id, string name, string? command = "/bin/true", string? component = null, string? category = "System",
+        string[]? keywords = null, string? description = null)
+    {
+        var key = ControlPanelCatalog.RegistryKey + "\\" + id;
+        hive.SetValue(key, "Name", RegistryValueKind.String, name);
+        if (command is not null) hive.SetValue(key, "Command", RegistryValueKind.String, command);
+        if (component is not null) hive.SetValue(key, "Component", RegistryValueKind.String, component);
+        if (category is not null) hive.SetValue(key, "Category", RegistryValueKind.String, category);
+        if (keywords is not null) hive.SetValue(key, "Keywords", RegistryValueKind.MultiString, keywords);
+        if (description is not null) hive.SetValue(key, "Description", RegistryValueKind.String, description);
+    }
+
+    [Fact]
+    public void Items_come_from_built_ins_the_registry_and_settings_programs_with_user_overriding_system()
+    {
+        using var fx = new Fixture();
+        var system = Reg(); var user = Reg();
+        Item(system, "printers", "Printers", category: "Devices", keywords: ["print"]);
+        Item(system, "appearance", "Look (system)");                          // overrides the built-in with the same id
+        Item(user, "printers", "My Printers", category: "Devices");           // and the user's overrides the system's
+        Item(user, "broken", "Nothing to open", command: null);               // no command or component: ignored
+        Item(user, "applet", "Applet", command: null, component: "{11111111-0000-4000-8000-000000000001}");
+        fx.Write("usr-share/applications/kcm.desktop", "[Desktop Entry]\nType=Application\nName=Bluetooth\nComment=Pair devices\nExec=kcm\nCategories=Settings;HardwareSettings;\n");
+        fx.Write("usr-share/applications/editor.desktop", "[Desktop Entry]\nType=Application\nName=Editor\nExec=ed\nCategories=Utility;\n");
+        var apps = DesktopEntryDatabase.Load(fx.Xdg, []);
+
+        var catalog = ControlPanelCatalog.Load(system, user, apps, ["VDE"]);
+
+        Assert.Equal("My Printers", catalog.Items.Single(i => i.Id == "printers").Name);
+        Assert.Equal("Look (system)", catalog.Items.Single(i => i.Id == "appearance").Name);
+        Assert.Contains(catalog.Items, i => i.Id == "notifications" && i.Source == ItemSource.BuiltIn && i.PageId == "notifications");
+        Assert.DoesNotContain(catalog.Items, i => i.Id == "broken");
+        Assert.Equal("{11111111-0000-4000-8000-000000000001}", catalog.Items.Single(i => i.Id == "applet").ComponentClsid);
+        var bt = catalog.Items.Single(i => i.Source == ItemSource.DesktopEntry);
+        Assert.Equal((ControlPanelCategories.Devices, "Pair devices"), (bt.Category, bt.Description));
+        Assert.DoesNotContain(catalog.Items, i => i.Name == "Editor");          // only Settings programs
+        Assert.Equal(new[] { "Applet" }, catalog.InCategory("System").Where(i => i.Id == "applet").Select(i => i.Name));
+    }
+
+    [Fact]
+    public void Search_ranks_names_over_keywords_over_descriptions_and_needs_every_word()
+    {
+        var user = Reg();
+        Item(user, "bt", "Bluetooth", keywords: ["wireless"], description: "Pair headphones");
+        Item(user, "wifi", "Wi-Fi", keywords: ["wireless", "bluetooth coexistence"], category: "Network");
+        Item(user, "snd", "Sound", description: "Speakers and bluetooth headsets");
+        var catalog = ControlPanelCatalog.Load(null, user, null, []);
+
+        Assert.Equal(new[] { "Bluetooth", "Wi-Fi", "Sound" }, catalog.Search("bluetooth").Select(i => i.Name));   // name > keyword > description
+        Assert.Equal(new[] { "Bluetooth" }, catalog.Search("bluetooth pair").Select(i => i.Name));            // both words must match
+        Assert.Equal("Appearance", catalog.Search("dark").First().Name);                                      // built-in keyword
+        Assert.Empty(catalog.Search("zzzz"));
+        Assert.Empty(catalog.Search("   "));
+    }
+
+    [Fact]
+    public void A_setting_reads_defaults_validates_writes_and_clamps_stored_junk()
+    {
+        var hive = Reg();
+        var dnd = new SettingBinding(hive, BuiltInPages.Notifications.Settings.Single(s => s.Id == "dnd"));
+        var timeout = new SettingBinding(hive, BuiltInPages.Notifications.Settings.Single(s => s.Id == "timeout"));
+        var variant = new SettingBinding(hive, BuiltInPages.Appearance.Settings.Single(s => s.Id == "variant"));
+        var accent = new SettingBinding(hive, BuiltInPages.Appearance.Settings.Single(s => s.Id == "accent"));
+
+        Assert.Equal(false, dnd.Read());
+        Assert.Equal(5000L, timeout.Read());
+        Assert.Equal("System", variant.Read());
+
+        Assert.True(dnd.Write(true));
+        Assert.Equal(true, dnd.Read());
+        Assert.Equal(1u, hive.GetValue(@"Software\Vde\Notifications", "DoNotDisturb")!.Data);   // the same value the notification service reads
+
+        Assert.True(timeout.Write(8000L));
+        Assert.False(timeout.Write(10L));                // below the minimum
+        Assert.False(timeout.Write("soon"));
+        Assert.Equal(8000L, timeout.Read());
+        hive.SetValue(@"Software\Vde\Notifications", "DefaultTimeoutMs", RegistryValueKind.DWord, 1u);   // junk stored by something else
+        Assert.Equal(500L, timeout.Read());
+
+        Assert.True(variant.Write("Dark"));
+        Assert.False(variant.Write("Sepia"));
+        Assert.Equal("Dark", variant.Read());
+
+        Assert.True(accent.Write("#D9822B"));
+        Assert.False(accent.Write("orange"));
+        Assert.Equal("#D9822B", accent.Read());
+        Assert.True(accent.Write(""));                   // empty clears it
+        Assert.Null(accent.Read());
+    }
+
+    [Fact]
+    public void Wrong_types_stored_in_the_registry_fall_back_to_the_default()
+    {
+        var hive = Reg();
+        hive.SetValue(@"Software\Vde\Notifications", "DoNotDisturb", RegistryValueKind.String, "yes");
+        Assert.Equal(false, new SettingBinding(hive, BuiltInPages.Notifications.Settings[0]).Read());
+    }
+}
