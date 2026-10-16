@@ -8,8 +8,11 @@ native=$(dirname "$here")
 prefix=$native/build/prefix
 export PKG_CONFIG_PATH=$prefix/share/pkgconfig:$prefix/lib/pkgconfig:$prefix/lib64/pkgconfig:$PKG_CONFIG_PATH
 
-if [ ! -f "$prefix/share/pkgconfig/wayland-protocols.pc" ] && [ ! -f "$prefix/share/pkgconfig/wayland-protocols.pc" ]; then
+# the vendored sources: present in a release tarball, fetched with git in a checkout that has not got them yet
+if [ ! -f "$native/third_party/wlroots/meson.build" ] || [ ! -f "$native/third_party/wayland-protocols/meson.build" ]; then
   git -C "$native/.." submodule update --init native/third_party/wayland-protocols native/third_party/wlroots
+fi
+if [ ! -f "$prefix/share/pkgconfig/wayland-protocols.pc" ]; then
   meson setup "$native/build/wp" "$native/third_party/wayland-protocols" --prefix="$prefix" -Dtests=false >/dev/null
   ninja -C "$native/build/wp" install >/dev/null
 fi
