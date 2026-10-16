@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The org.freedesktop.Notifications server. Kept apart from Vde.Shell.Notifications because Tmds.DBus.Protocol
+       0.95 clashes with the 0.21 that Avalonia's X11 backend needs: only the daemon (VDENotify) may load this one. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Vde.Shell.Notifications</RootNamespace>
+    <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vde.Shell.Notifications\Vde.Shell.Notifications.csproj" />
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
+  </ItemGroup>
+
+</Project>

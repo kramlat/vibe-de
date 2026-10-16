@@ -152,6 +152,8 @@ struct vwm_server {
 	struct vwm_ipc *ipc;
 	const char *launcher;
 	bool no_chrome;
+	char env_path[160];   /* where the session manager reads WAYLAND_DISPLAY and DISPLAY from; empty: not written */
+	const char *wayland_name;
 
 	enum cursor_mode mode;
 	struct vwm_view *grabbed;
@@ -1018,11 +1020,33 @@ static void on_new_x11(struct wl_listener *l, void *data)
 	v->x11_set_class.notify = x11_class;                 wl_signal_add(&xs->events.set_class, &v->x11_set_class);
 }
 
+/* Tells whoever starts the session's programs where to connect: written (atomically) once the Wayland socket exists
+ * and again when XWayland is ready. One KEY=value per line. */
+static void write_env_file(struct vwm_server *s)
+{
+	if (!s->env_path[0])
+		return;
+	char tmp[170];
+	snprintf(tmp, sizeof tmp, "%s.tmp", s->env_path);
+	FILE *f = fopen(tmp, "w");
+	if (!f)
+		return;
+	const char *wl = getenv("WAYLAND_DISPLAY");
+	if (wl)
+		fprintf(f, "WAYLAND_DISPLAY=%s\n", wl);
+	if (s->xwayland && s->xwayland->display_name)
+		fprintf(f, "DISPLAY=%s\n", s->xwayland->display_name);
+	fclose(f);
+	rename(tmp, s->env_path);
+}
+
 static void on_x11_ready(struct wl_listener *l, void *data)
 {
 	struct vwm_server *s = FROM(struct vwm_server, l, x11_ready);
 	wlr_xwayland_set_seat(s->xwayland, s->seat);
 	wlr_log(WLR_INFO, "XWayland ready on %s", s->xwayland->display_name);
+	setenv("DISPLAY", s->xwayland->display_name, true);
+	write_env_file(s);
 }
 
 /* ---------- panels (layer-shell) ---------- */
@@ -1780,10 +1804,11 @@ static void on_new_input(struct wl_listener *l, void *data)
 static void usage(const char *argv0)
 {
 	fprintf(stderr,
-		"usage: %s [-s command] [-l launcher] [-i socket] [-d] [-v]\n"
+		"usage: %s [-s command] [-l launcher] [-i socket] [-w name] [-d] [-v]\n"
 		"  -s  program to start once the compositor is up (the shell)\n"
 		"  -l  command for Super+Space (default: vexplore --launcher)\n"
 		"  -i  control socket (default: $XDG_RUNTIME_DIR/vde/vwm.sock)\n"
+		"  -w  Wayland socket name (default: the first free wayland-N)\n"
 		"  -d  no server-side decorations: windows draw their own titlebars\n"
 		"  -v  verbose log\n", argv0);
 }
@@ -1793,12 +1818,14 @@ int main(int argc, char **argv)
 	const char *startup = NULL, *socket_path = NULL, *launcher = "vexplore --launcher";
 	enum wlr_log_importance level = WLR_INFO;
 	bool no_chrome = false;
+	const char *wayland_name = NULL;
 	int c;
-	while ((c = getopt(argc, argv, "s:l:i:dvh")) != -1) {
+	while ((c = getopt(argc, argv, "s:l:i:w:dvh")) != -1) {
 		switch (c) {
 		case 's': startup = optarg; break;
 		case 'l': launcher = optarg; break;
 		case 'i': socket_path = optarg; break;
+		case 'w': wayland_name = optarg; break;
 		case 'd': no_chrome = true; break;
 		case 'v': level = WLR_DEBUG; break;
 		default: usage(argv[0]); return c == 'h' ? 0 : 1;
@@ -1904,7 +1931,7 @@ int main(int argc, char **argv)
 		wlr_log(WLR_ERROR, "XWayland did not start: X11 programs will not run");
 	}
 
-	const char *socket = wl_display_add_socket_auto(s.display);
+	const char *socket = wayland_name ? (wl_display_add_socket(s.display, wayland_name) == 0 ? wayland_name : NULL) : wl_display_add_socket_auto(s.display);
 	if (!socket) {
 		wlr_log(WLR_ERROR, "cannot create the Wayland socket");
 		wlr_backend_destroy(s.backend);
@@ -1929,6 +1956,13 @@ int main(int argc, char **argv)
 	}
 
 	setenv("WAYLAND_DISPLAY", socket, true);
+	{
+		char *slash = strrchr(socket_path, '/');
+		if (slash && (size_t)(slash - socket_path) < sizeof s.env_path - 12) {
+			snprintf(s.env_path, sizeof s.env_path, "%.*s/vwm.env", (int)(slash - socket_path), socket_path);
+			write_env_file(&s);
+		}
+	}
 	if (s.xwayland)
 		setenv("DISPLAY", s.xwayland->display_name, true);
 	wlr_log(WLR_INFO, "vwm running on WAYLAND_DISPLAY=%s, control socket %s", socket, socket_path);
@@ -1939,6 +1973,8 @@ int main(int argc, char **argv)
 
 	wl_display_destroy_clients(s.display);
 	vwm_ipc_destroy(s.ipc);
+	if (s.env_path[0])
+		unlink(s.env_path);
 	wl_list_remove(&s.new_input.link);
 	wlr_xcursor_manager_destroy(s.xcursor);
 	wlr_cursor_destroy(s.cursor);

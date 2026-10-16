@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Vde.Shell.Notifications\Vde.Shell.Notifications.csproj" />
+    <ProjectReference Include="..\..\src\Vde.Shell.Notifications.DBus\Vde.Shell.Notifications.DBus.csproj" />
   </ItemGroup>
 
 </Project>

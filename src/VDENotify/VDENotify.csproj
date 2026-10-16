@@ -12,7 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Vde.Shell.Notifications\Vde.Shell.Notifications.csproj" />
+    <ProjectReference Include="..\Vde.Shell.Notifications.DBus\Vde.Shell.Notifications.DBus.csproj" />
     <ProjectReference Include="..\Vibe.Registry.Remote\Vibe.Registry.Remote.csproj" />
   </ItemGroup>
 
