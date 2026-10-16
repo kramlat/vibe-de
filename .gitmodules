@@ -1,0 +1,6 @@
+[submodule "native/third_party/wlroots"]
+	path = native/third_party/wlroots
+	url = https://gitlab.freedesktop.org/wlroots/wlroots.git
+[submodule "native/third_party/wayland-protocols"]
+	path = native/third_party/wayland-protocols
+	url = https://gitlab.freedesktop.org/wayland/wayland-protocols.git

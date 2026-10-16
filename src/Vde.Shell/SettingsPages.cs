@@ -57,6 +57,17 @@ public static class BuiltInPages
         },
     ]);
 
+    public const string WindowsKey = @"Software\Vde\Windows";
+
+    public static readonly SettingsPage Windows = new("windows", "Windows",
+    [
+        new("doubleclick", "Double-clicking a titlebar", SettingKind.Choice, WindowsKey, "TitlebarDoubleClick", "Applies to windows whose titlebar vwm draws.")
+        {
+            Default = "Maximize",
+            Choices = [new("Maximize", "Maximizes or restores the window"), new("Minimize", "Minimizes the window"), new("Close", "Closes the window"), new("None", "Does nothing")],
+        },
+    ]);
+
     public static readonly SettingsPage Taskbar = new("taskbar", "Taskbar",
     [
         new("edge", "Taskbar location", SettingKind.Choice, TaskbarModel.KeyPath, "Edge")
@@ -71,7 +82,7 @@ public static class BuiltInPages
         },
     ]);
 
-    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, StartMenu, Taskbar, Notifications, Keyboard];
+    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, StartMenu, Taskbar, Windows, Notifications, Keyboard];
 
     public static readonly IReadOnlyList<ControlPanelItem> Items =
     [
@@ -79,6 +90,8 @@ public static class BuiltInPages
             ["theme", "dark", "light", "colour", "color", "accent", "look"], ItemSource.BuiltIn) { PageId = "appearance" },
         new("startmenu", "Start menu", "Windows 11 or Windows 10 layout", "start-here-vde", ControlPanelCategories.Appearance,
             ["start", "launcher", "layout", "tiles", "menu"], ItemSource.BuiltIn) { PageId = "startmenu" },
+        new("windows", "Windows", "What double-clicking a titlebar does", "preferences-system-windows", ControlPanelCategories.Appearance,
+            ["window", "titlebar", "double click", "maximize", "minimize"], ItemSource.BuiltIn) { PageId = "windows" },
         new("taskbar", "Taskbar", "Which screen edge it sits on and how apps are aligned", "preferences-desktop", ControlPanelCategories.Appearance,
             ["taskbar", "dock", "panel", "edge", "left", "right", "top", "bottom", "center", "centre"], ItemSource.BuiltIn) { PageId = "taskbar" },
         new("keyboard", "Keyboard", "Shortcut style: PC or Apple", "input-keyboard", ControlPanelCategories.Devices,

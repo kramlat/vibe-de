@@ -182,11 +182,11 @@ public class TaskbarTests
         Assert.Equal(layout == StartLayout.Classic, buttons.Contains("Konsole"));   // classic lists every app up front
         Assert.Equal(layout == StartLayout.Modern, buttons.Count(b => b == "Okular") == 1 && !buttons.Contains("Konsole"));   // modern recommends the recent one
 
-        window.View.GetVisualDescendants().OfType<Button>().First(b => (string?)b.Tag == "Kate").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
-        Assert.Equal(new[] { "kate.desktop" }, started);
-
         if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is { Length: > 0 } dir)
             window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"startmenu-{layout}.png"));
+
+        window.View.GetVisualDescendants().OfType<Button>().First(b => (string?)b.Tag == "Kate").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal(new[] { "kate.desktop" }, started);
     }
 
     [Fact]

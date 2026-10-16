@@ -1,7 +1,9 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
 using Vde.Freedesktop;
 using Vde.Shell;
+using Vde.Compositor;
 using VExplore.Windows;
 
 namespace VExplore;
@@ -18,6 +20,7 @@ public static class ExplorerCommand
                vexplore --settings          the Settings (Control Panel) window
                vexplore --launcher          the app launcher
                vexplore --desktop           the desktop: wallpaper and the icons of ~/Desktop
+               vexplore --chrome            draws window titlebars for vwm (needs vwm running; no window of its own)
                vexplore --taskbar           the taskbar, docked to the edge in HKCU\Software\Vde\Taskbar
                vexplore --list-components   show registered components and whether the shell would load them
                -h, --help
@@ -44,6 +47,7 @@ public static class ExplorerCommand
             _ when args[0] == "--launcher" && args.Length == 1 => "launcher",
             _ when args[0] == "--desktop" && args.Length == 1 => "desktop",
             _ when args[0] == "--taskbar" && args.Length == 1 => "taskbar",
+            _ when args[0] == "--chrome" && args.Length == 1 => "chrome",
             _ when args[0] == "--files" && args.Length <= 2 => "files",
             _ when !args[0].StartsWith('-') && args.Length == 1 => "files",
             _ => null,
@@ -62,6 +66,8 @@ public static class ExplorerCommand
 
         using var host2 = ExplorerHost.Open();
         ShellApp.Host = host2;
+        if (window == "chrome")
+            return RunChrome(host2, error);
         ShellApp.FirstWindow = () => window switch
         {
             "settings" => NewSettings(host2),
@@ -96,10 +102,46 @@ public static class ExplorerCommand
         });
     }
 
+    // The window list comes from vwm when it is running; elsewhere the taskbar only shows its pinned apps.
+    private static IWindowSource Windows()
+    {
+        var client = new VwmClient();
+        return client.Connect() ? client : new NoWindowSource();
+    }
+
+    // Titlebars for vwm: the same Avalonia theme as every other window, rendered offscreen and sent over its socket.
+    internal static int RunChrome(ExplorerHost host, TextWriter error)
+    {
+        var client = new VwmClient();
+        if (!client.Connect())
+        {
+            error.WriteLine("vexplore: vwm is not running (no control socket at " + VwmClient.DefaultSocketPath + ")");
+            return 1;
+        }
+        Avalonia.AppBuilder.Configure<ChromeApp>().UseSkia()
+            .UseHeadless(new Avalonia.Headless.AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false }).SetupWithoutStarting();
+        var engine = new Vde.Shell.Theme.ThemeEngine(Vde.Shell.Theme.ThemeCatalog.Discover());
+        using var binding = engine.BindTo(host.CurrentUser);
+        var apps = DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment());
+        var service = new ChromeService(client, new ChromeRenderer(apps));
+        engine.Changed += (_, _) => service.RedrawAll();
+        void PushWindowSettings()
+        {
+            var value = host.CurrentUser.GetValue(BuiltInPages.WindowsKey, "TitlebarDoubleClick") is { Kind: Vibe.Registry.RegistryValueKind.String, Data: string s } ? s : "Maximize";
+            client.SetTitlebarDoubleClick(value.ToLowerInvariant());
+        }
+        PushWindowSettings();
+        host.CurrentUser.Changed += (_, c) => { if (c.IsUnder(BuiltInPages.WindowsKey)) PushWindowSettings(); };
+        service.Run(CancellationToken.None);
+        return 0;
+    }
+
+    private sealed class ChromeApp : Application { }
+
     private static Window NewTaskbar(ExplorerHost host)
     {
         var apps = DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment());
-        var model = new TaskbarModel(host.CurrentUser, apps, new NoWindowSource(), entry => Launch(host, entry));
+        var model = new TaskbarModel(host.CurrentUser, apps, Windows(), entry => Launch(host, entry));
         return new TaskbarWindow(model, () => Launch(host, "vexplore --launcher"));
     }
 
