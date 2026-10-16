@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+remove)
+    /usr/lib/vde/RegSvrVDE --system /s /u /usr/lib/vde/vexplore.dll >/dev/null 2>&1 || true
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+configure)
+    systemd-sysusers vdedm.conf >/dev/null 2>&1 || true
+    systemd-tmpfiles --create vdedm.conf >/dev/null 2>&1 || true
+    if [ ! -e /etc/hive/System.fhive ]; then
+        install -d -m755 /etc/hive
+        /usr/lib/vde/mkhive create --type system --rules /usr/share/vde/registry/permissions.rules \
+            /etc/hive/System.fhive /usr/share/vde/registry/system.reg >/dev/null || \
+            echo "vde: could not create /etc/hive/System.fhive; see /usr/share/doc/vde/install.md" >&2
+    fi
+    /usr/lib/vde/RegSvrVDE --system /s /i /usr/lib/vde/vexplore.dll >/dev/null 2>&1 || \
+        echo "vde: could not register the shell components; run: RegSvrVDE --system /i /usr/lib/vde/vexplore.dll" >&2
+    if [ "$1" = configure ] && [ -z "$2" ]; then
+        cat <<MSG
+
+  VDE is installed. It does not change how you log in.
+  Try it inside your current desktop:  vde-session
+  As a login session: pick "Vibe Desktop Environment" in your login manager, or run start-vde on a text console.
+  Its own login screen (vdedm): read /usr/share/doc/vde/dm.md first (keep a text console available).
+
+MSG
+    fi
+    ;;
+esac
+
+#DEBHELPER#
+exit 0

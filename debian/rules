@@ -1,0 +1,33 @@
+#!/usr/bin/make -f
+# The build is the top-level Makefile (see docs/install.md); debhelper does the Debian-specific parts.
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+export DOTNET_NOLOGO=1
+export HOME=$(CURDIR)/debian/.home
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	mkdir -p $(HOME)
+
+override_dh_auto_build:
+	$(MAKE) DOTNET=dotnet CONFIG=Release all
+
+override_dh_auto_test:
+	# the test suite needs a display for some tests: run it with `make check` instead
+
+override_dh_auto_install:
+	$(MAKE) DESTDIR=$(CURDIR)/debian/vde PREFIX=/usr install
+
+# managed assemblies and the .NET apphosts must not be stripped, and have no debug symbols to split
+override_dh_strip:
+override_dh_dwz:
+override_dh_strip_nondeterminism:
+
+override_dh_shlibdeps:
+	dh_shlibdeps -- --ignore-missing-info
+
+# units are installed by the Makefile; enabling is the administrator's choice (vdedm replaces the login manager)
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start --name=fhived-system
+	dh_installsystemd --no-enable --no-start --name=vdedm
