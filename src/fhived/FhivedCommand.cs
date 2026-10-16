@@ -127,7 +127,13 @@ public static class FhivedCommand
     {
         if (env("LISTEN_PID") != Environment.ProcessId.ToString() || !int.TryParse(env("LISTEN_FDS"), out var count) || count < 1)
             throw new InvalidOperationException("--socket-activation was given but systemd passed no socket (LISTEN_FDS/LISTEN_PID)");
-        return new Socket(new SafeSocketHandle((IntPtr)3, ownsHandle: true));
+        var socket = new Socket(new SafeSocketHandle((IntPtr)3, ownsHandle: true));
+        if (socket.AddressFamily != AddressFamily.Unix)   // the registry is local-only: refuse anything that is not a Unix socket
+        {
+            socket.Dispose();
+            throw new InvalidOperationException("the socket passed by systemd is not a Unix-domain socket");
+        }
+        return socket;
     }
 
     private static async Task WatchIdleAsync(HiveServer server, TimeSpan limit, CancellationTokenSource cancel)

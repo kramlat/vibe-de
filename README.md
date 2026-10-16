@@ -17,7 +17,7 @@ It has no telemetry.
 - `src/Vibe.Registry.Remote` + `src/fhived` — the registry daemon: socket protocol (`docs/fhive-protocol.md`), RemoteHive client, HiveServer; permissions enforced against the kernel-reported identity; systemd units in `data/systemd` (LGPL-3.0-or-later)
 - `src/libFluent` — Fluent-style Avalonia control library (LGPL-3.0-or-later)
 - `src/Vibe.Registry` — the registry: typed hive files (`.fhive`, checksummed, atomic saves) with `.reg` import/export and change events (LGPL-3.0-or-later)
-- `tests/` — xunit tests (`dotnet test`)
+- `tests/` — xunit tests (`dotnet test`); `Vde.Policy.Tests` enforces the no-telemetry promise (no reporting packages, no internet APIs, Unix sockets only)
 - `data/icons` — Vibe artwork in freedesktop icon-theme layout (`start-here-vde`: launcher mark + symbolic variant; original, LGPL-3.0-or-later)
 - `src/Vibe.Shell` — taskbar, launcher, notifications, desktop (GPL-3.0-or-later)
 - compositor with X11 fallback and XWayland — later stage
