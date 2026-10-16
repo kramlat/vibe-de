@@ -1637,3 +1637,92 @@ public class SudoBackendTests
         Assert.Equal(new[] { "sudo", "-k" }, executor.Calls[^1].commandLine);
     }
 }
+
+public class FolderModelTests
+{
+    [Fact]
+    public void Lists_files_and_folders_hides_dotfiles_and_follows_symlinks_to_folders()
+    {
+        using var fx = new Fixture();
+        fx.Write("d/a.txt", "hello"); fx.Write("d/.hidden", "x"); Directory.CreateDirectory(Path.Combine(fx.Root, "d", "sub"));
+        File.CreateSymbolicLink(Path.Combine(fx.Root, "d", "link"), Path.Combine(fx.Root, "d", "sub"));
+        File.CreateSymbolicLink(Path.Combine(fx.Root, "d", "broken"), "/nonexistent/x");
+        var folder = Path.Combine(fx.Root, "d");
+
+        var shown = FolderLister.List(folder);
+        Assert.Equal(new[] { "a.txt", "broken", "link", "sub" }, shown.Select(e => e.Name).Order());
+        Assert.Contains(FolderLister.List(folder, showHidden: true), e => e.Name == ".hidden" && e.IsHidden);
+        var a = shown.Single(e => e.Name == "a.txt");
+        Assert.Equal((5L, ".txt", false), (a.Size, a.Extension, a.IsDirectory));
+        Assert.True(shown.Single(e => e.Name == "link").IsDirectory);      // a link to a folder opens as one
+        Assert.True(shown.Single(e => e.Name == "link").IsSymlink);
+        Assert.False(shown.Single(e => e.Name == "broken").IsDirectory);   // a dangling one is still listed
+    }
+
+    [Fact]
+    public void Sorting_keeps_folders_first_and_compares_numbers_naturally()
+    {
+        FileEntry F(string n, bool dir = false, long size = 0, int day = 1) => new(n, "/" + n, dir, false, false, size, new DateTime(2026, 1, day, 0, 0, 0, DateTimeKind.Utc), dir ? "" : Path.GetExtension(n));
+        var items = new[] { F("file10.txt"), F("File2.txt"), F("zdir", true), F("adir", true), F("b.md", size: 9, day: 5), F("a.zip", size: 1, day: 9) };
+
+        Assert.Equal(new[] { "adir", "zdir", "File2.txt", "file10.txt", "a.zip", "b.md" }.Length, FolderLister.Sort(items).Count);
+        Assert.Equal(new[] { "adir", "zdir", "a.zip", "b.md", "File2.txt", "file10.txt" }, FolderLister.Sort(items).Select(e => e.Name));
+        Assert.Equal(new[] { "zdir", "adir", "file10.txt", "File2.txt", "b.md", "a.zip" }, FolderLister.Sort(items, descending: true).Select(e => e.Name));
+        Assert.Equal(new[] { "File2.txt", "file10.txt", "a.zip", "b.md" }, FolderLister.Sort(items, SortKey.Size).Where(e => !e.IsDirectory).Select(e => e.Name));   // empty files first, ties by name
+        Assert.Equal("a.zip", FolderLister.Sort(items, SortKey.Modified, descending: true).First(e => !e.IsDirectory).Name);
+        Assert.Equal(-1, Math.Sign(FolderLister.NaturalCompare("a2", "a10")));
+        Assert.Equal(0, FolderLister.NaturalCompare("A1", "a1"));
+    }
+
+    [Fact]
+    public void History_goes_back_forward_up_and_forgets_the_future_on_a_new_path()
+    {
+        var h = new NavigationHistory("/home/deck");
+        h.Navigate("/home/deck/Music"); h.Navigate("/home/deck/Music/Rock");
+
+        Assert.Equal("/home/deck/Music", h.Back());
+        Assert.True(h.CanGoForward);
+        Assert.Equal("/home/deck/Music/Rock", h.Forward());
+        h.Back(); h.Navigate("/tmp");
+        Assert.False(h.CanGoForward);
+        Assert.Equal("/home/deck/Music", h.Back());
+        h.Navigate("/tmp"); h.Navigate("/tmp");                  // same place twice is one step
+        Assert.Equal("/home/deck/Music", h.Back());
+        Assert.Equal("/home/deck", h.Up());
+        Assert.Equal("/home", h.Up()); Assert.Equal("/", h.Up());
+        Assert.False(h.CanGoUp);
+        Assert.Equal("/", h.Up());
+    }
+
+    [Fact]
+    public void Address_bar_breadcrumbs_and_typed_text()
+    {
+        var crumbs = AddressPath.Crumbs("/home/deck/Music", home: "/home/deck");
+        Assert.Equal(new[] { "/", "home", "Home", "Music" }, crumbs.Select(c => c.Name));
+        Assert.Equal("/home/deck/Music", crumbs[^1].Path);
+
+        Assert.Equal("/home/deck", AddressPath.Parse("~", "/x", "/home/deck"));
+        Assert.Equal("/home/deck/Docs", AddressPath.Parse("~/Docs", "/x", "/home/deck"));
+        Assert.Equal("/x/sub", AddressPath.Parse("sub", "/x", "/home/deck"));
+        Assert.Equal("/x", AddressPath.Parse("sub/..", "/x", "/home/deck"));
+        Assert.Equal("/a b/c", AddressPath.Parse("file:///a%20b/c", "/x", "/h"));
+        Assert.Null(AddressPath.Parse("smb://nas/share", "/x", "/h"));
+        Assert.Null(AddressPath.Parse("   ", "/x", "/h"));
+    }
+
+    [Fact]
+    public void A_burst_of_changes_is_one_callback()
+    {
+        using var fx = new Fixture();
+        var folder = Path.Combine(fx.Root, "w"); Directory.CreateDirectory(folder);
+        int calls = 0;
+        using (new FolderWatcher(folder, () => Interlocked.Increment(ref calls), TimeSpan.FromMilliseconds(150)))
+        {
+            for (int i = 0; i < 10; i++) File.WriteAllText(Path.Combine(folder, $"f{i}"), "x");
+            var deadline = DateTime.UtcNow.AddSeconds(10);
+            while (calls == 0 && DateTime.UtcNow < deadline) Thread.Sleep(20);
+            Thread.Sleep(400);
+        }
+        Assert.Equal(1, calls);
+    }
+}
