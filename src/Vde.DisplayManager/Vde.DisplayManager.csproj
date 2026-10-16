@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The logic of a display manager: the greeter protocol, PAM, users and sessions, the login state machine. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Vde.DisplayManager</RootNamespace>
+    <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vde.Freedesktop\Vde.Freedesktop.csproj" />
+    <ProjectReference Include="..\Vibe.Registry\Vibe.Registry.csproj" />
+  </ItemGroup>
+
+</Project>
