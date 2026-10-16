@@ -101,7 +101,7 @@ public static class ExplorerCommand
         var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
         var associations = new FileAssociations(xdg, mime, apps, ShellApp.Desktops(), host.Classes);
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
-        var shell = new ShellExecute(associations, mime, types: types);
+        var shell = new ShellExecute(associations, mime, types: types, elevation: ShellApp.Elevation);
         return new DesktopWindow(folders.Get(KnownFolder.Desktop), host.CurrentUser, path =>
         {
             try
@@ -113,7 +113,7 @@ public static class ExplorerCommand
             {
                 Console.Error.WriteLine("vexplore: " + e.Message);
             }
-        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts);
+        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths));
     }
 
     private static string ExecLineQuote(string path) => "\"" + path.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";

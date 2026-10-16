@@ -162,45 +162,14 @@ public sealed class ShellExecute
         if (argv.Count == 0)
             throw new InvalidOperationException("The registered command is empty.");
 
+        // Rejected before anything is shown when this user may not elevate at all.
         if (!options.Backend.CanElevate(options.Identity))
             throw new ElevationDeniedException($"The '{verbId}' action needs more rights than you have ({reason}), and you are not allowed to elevate.");
 
         var program = FindExecutable(argv[0]) ?? throw new FileNotFoundException($"Cannot find '{argv[0]}'.", argv[0]);
         var commandLine = new List<string>(argv) { [0] = program };
         var label = _types?.GetVerbs(path).FirstOrDefault(v => string.Equals(v.Id, verbId, StringComparison.OrdinalIgnoreCase))?.Label ?? verbId;
-        var request = new ElevationRequest(label, verbId, path, commandLine, reason) { Account = options.Backend.PasswordAccount(options.Identity) };
-
-        string? error = null;
-        for (int attempt = 1; attempt <= ElevationOptions.MaxAttempts; attempt++)
-        {
-            var response = await options.Prompt.AskAsync(request, attempt, error, cancel);
-            if (!response.Approved || response.Password is null)
-                throw new OperationCanceledException("Elevation was cancelled.");
-
-            ElevationOutcome outcome;
-            try
-            {
-                outcome = await options.Backend.RunAsync(commandLine, response.Password, cancel);
-            }
-            finally
-            {
-                Array.Clear(response.Password);   // the password lives no longer than it takes to use it
-            }
-
-            switch (outcome.Status)
-            {
-                case ElevationStatus.Success:
-                    return;
-                case ElevationStatus.WrongPassword:
-                    error = "Incorrect password. Try again.";
-                    continue;
-                case ElevationStatus.NotAllowed:
-                    throw new ElevationDeniedException(outcome.Message ?? "You are not allowed to run this with elevated rights.");
-                default:
-                    throw new InvalidOperationException(outcome.Message ?? "The command could not be started.");
-            }
-        }
-        throw new ElevationDeniedException("Too many incorrect passwords.");
+        await ElevationRunner.RunAsync(options, new ElevationRequest(label, verbId, path, commandLine, reason), cancel);
     }
 
     private static bool IsOpen(FileVerb verb) => string.Equals(verb.Id, "open", StringComparison.OrdinalIgnoreCase);

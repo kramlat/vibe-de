@@ -1,3 +1,4 @@
+using Vde.Components;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -27,11 +28,14 @@ public sealed class FileManagerWindow : Window
 
     private readonly FileActions _actions;
     private readonly ShortcutStyleService _shortcuts;
+    private readonly Func<IReadOnlyList<string>, PropertySheetContext>? _properties;
     private readonly IFileClipboard _clipboard;
 
     public FileManagerWindow(string startFolder, KnownFolders folders, Action<string> openFile, FileTypes? types = null,
-        FileActions? actions = null, IFileClipboard? clipboard = null, ShortcutStyleService? shortcuts = null)
+        FileActions? actions = null, IFileClipboard? clipboard = null, ShortcutStyleService? shortcuts = null,
+        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null)
     {
+        _properties = properties;
         _openFile = openFile;
         _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
         _shortcuts.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(ApplyShortcutStyle);
@@ -241,6 +245,20 @@ public sealed class FileManagerWindow : Window
         await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link);
     }
 
+    // The Properties window for the selection (or for this folder when nothing is selected). Not modal, as in Explorer.
+    public PropertySheetWindow? ShowProperties()
+    {
+        var paths = SelectedPaths.Count > 0 ? SelectedPaths : [CurrentFolder];
+        var context = _properties?.Invoke(paths) ?? new PropertySheetContext { Target = new PropertyTarget(paths, ""), Actions = _actions, BuiltInProviders = [(PropertyPages.Clsid, new PropertyPages())] };
+        try
+        {
+            var sheet = new PropertySheetWindow(context);
+            sheet.Show();
+            return sheet;
+        }
+        catch (Exception e) when (e is FileNotFoundException or IOException or UnauthorizedAccessException) { _status.Text = e.Message; return null; }
+    }
+
     public void Navigate(string path) => Go(path, record: true);
 
     public void GoBack() => Go(_history.Back(), record: false);
@@ -317,6 +335,7 @@ public sealed class FileManagerWindow : Window
             case ShortcutAction.Delete: DeleteSelected(); break;
             case ShortcutAction.Rename: _ = BeginRenameAsync(); break;
             case ShortcutAction.FocusAddress: _address.BeginEdit(); break;
+            case ShortcutAction.Properties: ShowProperties(); break;
             case ShortcutAction.Open:
                 if (press.Key != "Enter") Open(_list.SelectedEntries);   // plain Enter is the list's own
                 else e.Handled = false;

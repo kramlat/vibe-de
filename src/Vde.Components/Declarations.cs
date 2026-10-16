@@ -69,7 +69,9 @@ public sealed record PropertyTarget(IReadOnlyList<string> Paths, string MimeType
 // One extra tab. CreateContent returns an Avalonia Control (typed as object so this assembly needs no UI
 // dependency); the sheet calls it on the UI thread when the tab is first shown. Apply is called when the user
 // presses OK or Apply, on the UI thread, and returns false to keep the sheet open (after explaining why).
-public sealed record PropertyPageInfo(string Title, Func<object> CreateContent, Func<bool>? Apply = null, int Order = 100);
+// IsDirty says whether Apply has anything to do (without it, a page with an Apply is always applied). Tag is the
+// provider's own object for the page, which a host or test can get back.
+public sealed record PropertyPageInfo(string Title, Func<object> CreateContent, Func<bool>? Apply = null, int Order = 100, Func<bool>? IsDirty = null, object? Tag = null);
 
 // Implemented by components registered under  <class>\shellex\PropertySheetHandlers\<name>  (default value =
 // the component's CLSID), where <class> is "*" (every file), "Directory", an extension such as ".png", or a ProgID.

@@ -1,3 +1,4 @@
+using Vde.Components;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -29,6 +30,7 @@ public sealed class DesktopWindow : Window
     private readonly IFileClipboard _clipboard;
     private readonly FileTypes? _types;
     private readonly ShortcutStyleService _shortcuts;
+    private readonly Func<IReadOnlyList<string>, PropertySheetContext>? _properties;
     private readonly Canvas _canvas = new();
     private readonly Dictionary<string, Border> _icons = new(StringComparer.Ordinal);
     private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
@@ -39,8 +41,10 @@ public sealed class DesktopWindow : Window
     private bool _moved;
 
     public DesktopWindow(string desktopFolder, IHive hive, Action<string> openFile, FileTypes? types = null,
-        FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null, ShortcutStyleService? shortcuts = null)
+        FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null, ShortcutStyleService? shortcuts = null,
+        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null)
     {
+        _properties = properties;
         _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
         _shortcuts.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() => _canvas.ContextMenu = BuildMenu());
         _folder = desktopFolder;
@@ -155,7 +159,7 @@ public sealed class DesktopWindow : Window
             Child = new StackPanel
             {
                 Spacing = 4,
-                Children = { new ShellIcon { IconNames = entry.IsDirectory ? ["folder"] : info?.IconNames ?? ["text-x-generic"], IconSize = 48, HorizontalAlignment = HorizontalAlignment.Center }, label },
+                Children = { new ShellIcon { IconNames = entry.IsDirectory ? (FolderIcon.Read(entry.FullPath) is { } custom ? [custom, "folder"] : ["folder"]) : info?.IconNames ?? ["text-x-generic"], IconSize = 48, HorizontalAlignment = HorizontalAlignment.Center }, label },
             },
         };
         border.PointerPressed += (_, e) => OnIconPressed(entry.Name, border, e);
@@ -264,6 +268,20 @@ public sealed class DesktopWindow : Window
         Rebuild();
     }
 
+    // Properties of the selected icons, or of the desktop folder when nothing is selected.
+    public PropertySheetWindow? ShowProperties()
+    {
+        var paths = SelectedPaths.Count > 0 ? SelectedPaths : [_folder];
+        var context = _properties?.Invoke(paths) ?? new PropertySheetContext { Target = new PropertyTarget(paths, ""), Actions = _actions, BuiltInProviders = [(PropertyPages.Clsid, new PropertyPages())] };
+        try
+        {
+            var sheet = new PropertySheetWindow(context);
+            sheet.Show();
+            return sheet;
+        }
+        catch (Exception e) when (e is FileNotFoundException or IOException or UnauthorizedAccessException) { return null; }
+    }
+
     // ---- actions (the same ones a file manager window has) ----
 
     public async Task CopyAsync() { if (SelectedPaths.Count > 0) await _clipboard.SetAsync(new FileTransfer(TransferKind.Copy, SelectedPaths)); }
@@ -356,6 +374,7 @@ public sealed class DesktopWindow : Window
                 Item("New folder", ShortcutAction.NewFolder, () => NewFolder()),
                 Item("Paste", ShortcutAction.Paste, () => _ = PasteAsync()),
                 Item("Refresh", ShortcutAction.Refresh, Reload),
+                Item("Properties", ShortcutAction.Properties, () => ShowProperties()),
                 new Separator(),
                 Item("Desktop settings", null, () => _openSettings?.Invoke()),
             },
@@ -378,6 +397,7 @@ public sealed class DesktopWindow : Window
             case ShortcutAction.DeletePermanently: DeleteSelected(permanent: true); break;
             case ShortcutAction.Rename: _ = RenameWithDialogAsync(); break;
             case ShortcutAction.Refresh: Reload(); break;
+            case ShortcutAction.Properties: ShowProperties(); break;
             default: e.Handled = false; break;   // back, forward, up and the address bar mean nothing on the desktop
         }
     }

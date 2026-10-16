@@ -2,6 +2,8 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Vde.Shell;
+using Vde.Components;
+using Vde.Components;
 using Vde.Shell.ComDlg;
 
 namespace Vde.Shell.ComDlg.Tests;
@@ -280,5 +282,324 @@ public class ElevationLabelTests
         window.Show();
 
         Assert.Contains(expected, window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text));
+    }
+}
+
+public class PropertySheetTests
+{
+    public sealed class Page(string title, Func<bool>? apply = null, int order = 100) : IPropertyPageProvider
+    {
+        public IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target)
+            => [new PropertyPageInfo(title, () => new TextBlock { Text = "plugin content" }, apply, order)];
+    }
+
+    public sealed class FineProvider : IPropertyPageProvider
+    {
+        public IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target)
+            => [new PropertyPageInfo("Extra", () => new TextBlock { Text = "extra for " + target.Paths.Count }, () => false, Order: 5)];
+    }
+
+    public sealed class BrokenProvider : IPropertyPageProvider
+    {
+        public IReadOnlyList<PropertyPageInfo> GetPages(PropertyTarget target) => throw new InvalidOperationException("plugin bug");
+    }
+
+    public static ElevationOptions? Elevation { get; set; }
+
+    private static PropertySheetContext Context(Dir d, params string[] names) => new()
+    {
+        Target = new PropertyTarget(names.Select(n => Path.Combine(d.Docs, n)).ToList(), "text/plain"),
+        Actions = new FileActions(new Trash()),
+        BuiltInProviders = [("{22222222-0000-4000-8000-0000000000FF}", new PosixPermissionsPages([(RegistryIdentityCurrent.Gid, "mine")], elevation: Elevation))],
+    };
+
+    private static class RegistryIdentityCurrent { public static Vibe.Registry.RegistryIdentity Value => Vibe.Registry.RegistryIdentity.Current; public static uint Gid => Value.Gid; }
+
+    private static ushort Mode(string path) => (ushort)((int)File.GetUnixFileMode(path) & 0x1FF);
+
+    [AvaloniaFact]
+    public async Task A_single_file_gets_general_permissions_and_details_tabs_with_real_values()
+    {
+        using var d = new Dir();
+        var window = new PropertySheetWindow(Context(d, "a.txt"));
+        window.Show();
+
+        Assert.Equal(new[] { "General", "Permissions", "Details" }, window.Pages.Select(p => p.Title));
+        Assert.Equal("a.txt Properties", window.Title);
+        var general = window.Page<GeneralPage>();
+        await general.SizeTask;
+        Assert.Equal("a.txt", general.Name);
+        Assert.Equal("1 byte", general.SizeText);
+        Assert.Contains(window.Page<DetailsPage>().Rows, r => r.key == "Full path" && r.value == Path.Combine(d.Docs, "a.txt"));
+        Assert.Contains(window.Page<DetailsPage>().Rows, r => r.key == "Permissions" && r.value.Contains("rw"));
+        Assert.False(window.Pages.Any(p => p.IsDirty));
+    }
+
+    [AvaloniaFact]
+    public async Task A_folder_shows_what_it_contains_and_several_items_show_a_combined_size_and_no_details()
+    {
+        using var d = new Dir();
+        var folder = new PropertySheetWindow(Context(d, "sub")); folder.Show();
+        await folder.Page<GeneralPage>().SizeTask;
+        Assert.Equal("0 files, 0 folders", folder.Page<GeneralPage>().ContainsText);
+
+        var two = new PropertySheetWindow(Context(d, "a.txt", "b b.txt")); two.Show();
+        await two.Page<GeneralPage>().SizeTask;
+        Assert.Equal("2 items Properties", two.Title);
+        Assert.Equal("2 items", two.Page<GeneralPage>().Name);
+        Assert.Equal("2 bytes", two.Page<GeneralPage>().SizeText);
+        Assert.Empty(two.Page<DetailsPage>().Rows);
+    }
+
+    [AvaloniaFact]
+    public void General_renames_refuses_bad_names_and_toggles_read_only()
+    {
+        using var d = new Dir();
+        var window = new PropertySheetWindow(Context(d, "a.txt")); window.Show();
+        var general = window.Page<GeneralPage>();
+
+        general.Name = "bad/name";
+        Assert.True(general.IsDirty);
+        Assert.False(window.ApplyAll());
+        Assert.Contains("cannot contain", general.Error);
+        Assert.True(File.Exists(Path.Combine(d.Docs, "a.txt")));
+
+        general.Name = "renamed.txt";
+        general.ReadOnly = true;
+        Assert.True(window.ApplyAll());
+        var renamed = Path.Combine(d.Docs, "renamed.txt");
+        Assert.True(File.Exists(renamed));
+        Assert.Equal(0, Mode(renamed) & 0x92);                       // no write bit for anyone
+    }
+
+    [AvaloniaFact]
+    public void Permissions_change_only_what_the_user_changed_and_folders_can_apply_recursively()
+    {
+        using var d = new Dir();
+        var file = Path.Combine(d.Docs, "a.txt");
+        File.SetUnixFileMode(file, (UnixFileMode)Convert.ToInt32("640", 8));
+        var window = new PropertySheetWindow(Context(d, "a.txt")); window.Show();
+        var page = window.Page<PermissionsPage>();
+
+        Assert.True(page.Get(UnixFileMode.GroupRead));
+        Assert.False(page.Get(UnixFileMode.OtherRead));
+        page.Set(UnixFileMode.OtherRead, true);
+        page.Set(UnixFileMode.GroupRead, false);
+        Assert.True(window.ApplyAll());
+        Assert.Equal("0604", Convert.ToString(Mode(file), 8).PadLeft(4, '0'));
+
+        var sub = Path.Combine(d.Docs, "sub"); File.WriteAllText(Path.Combine(sub, "inner.txt"), "x");
+        File.SetUnixFileMode(Path.Combine(sub, "inner.txt"), (UnixFileMode)Convert.ToInt32("600", 8));
+        var folder = new PropertySheetWindow(Context(d, "sub")); folder.Show();
+        var fp = folder.Page<PermissionsPage>();
+        fp.Set(UnixFileMode.OtherRead, true);
+        fp.Recursive = true;
+        Assert.True(folder.ApplyAll());
+        Assert.Equal("0644", Convert.ToString(Mode(Path.Combine(sub, "inner.txt")), 8).PadLeft(4, '0'));   // the contents now match the folder: group and others can read, and the file did not become a program
+    }
+
+    [AvaloniaFact]
+    public void A_selection_shows_mixed_boxes_and_leaves_mixed_ones_alone_unless_touched()
+    {
+        using var d = new Dir();
+        var a = Path.Combine(d.Docs, "a.txt"); var b = Path.Combine(d.Docs, "b b.txt");
+        File.SetUnixFileMode(a, (UnixFileMode)Convert.ToInt32("640", 8));
+        File.SetUnixFileMode(b, (UnixFileMode)Convert.ToInt32("604", 8));
+        var window = new PropertySheetWindow(Context(d, "a.txt", "b b.txt")); window.Show();
+        var page = window.Page<PermissionsPage>();
+
+        Assert.Null(page.Get(UnixFileMode.GroupRead));                               // a has it, b does not: mixed
+        Assert.Null(page.Get(UnixFileMode.OtherRead));
+        Assert.True(page.Get(UnixFileMode.UserRead));                                // both have it
+        Assert.False(page.IsDirty);
+
+        page.Set(UnixFileMode.UserExecute, true);                                    // only this is changed
+        Assert.True(window.ApplyAll());
+        Assert.Equal("0740", Convert.ToString(Mode(a), 8).PadLeft(4, '0'));
+        Assert.Equal("0704", Convert.ToString(Mode(b), 8).PadLeft(4, '0'));           // the mixed bits stayed as they were on each
+    }
+
+    [AvaloniaFact]
+    public void Giving_a_file_to_a_group_you_belong_to_works()
+    {
+        using var d = new Dir();
+        var window = new PropertySheetWindow(Context(d, "a.txt")); window.Show();
+        var page = window.Page<PermissionsPage>();
+
+        page.SelectGroup("mine");
+        Assert.True(window.ApplyAll());
+        Assert.Equal(RegistryIdentityCurrent.Gid, FileProperties.Read(Path.Combine(d.Docs, "a.txt")).Gid);
+    }
+
+    [AvaloniaFact]
+    public void Registered_handlers_add_tabs_in_order_a_refusing_tab_keeps_the_sheet_open_and_bad_ones_only_leave_a_note()
+    {
+        using var d = new Dir();
+        var dll = typeof(PropertySheetTests).Assembly.Location;
+        var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Current };
+        var hkcr = new Vibe.Registry.ClassesRoot(hive);
+        string Reg(string clsid, Type type, bool executable = true)
+        {
+            ComponentRegistrar.Register(hkcr, new ComponentInfo(clsid, type.FullName!, dll, "t", ThreadingModel.Free));
+            hkcr.SetValue($@"*\{PropertyHandlers.HandlersKey}\{type.Name}", "", Vibe.Registry.RegistryValueKind.String, clsid);
+            if (!executable)
+            {
+                var server = $@"CLSID\{clsid}\InprocServer32";
+                hkcr.SetValuePermissions(server, "", hkcr.GetValuePermissions(server, "")!.Value.WithMode(Vibe.Registry.PosixPermissions.ValueDefault));
+            }
+            return clsid;
+        }
+        Reg("{22222222-0000-4000-8000-000000000001}", typeof(FineProvider));
+        Reg("{22222222-0000-4000-8000-000000000002}", typeof(BrokenProvider));
+        Reg("{22222222-0000-4000-8000-000000000003}", typeof(Page), executable: false);   // registered, not trusted
+        var context = new PropertySheetContext
+        {
+            Target = new PropertyTarget([Path.Combine(d.Docs, "a.txt")], "text/plain"), Actions = new FileActions(new Trash()),
+            Handlers = new PropertyHandlers(hkcr), Loader = new ComponentLoader(),
+        };
+
+        var window = new PropertySheetWindow(context); window.Show();
+
+        Assert.Equal(3, window.Pages.Count);                                                  // General, Extra (order 5, from the registry), Details
+        Assert.Equal("Extra", window.Pages[1].Title);                                       // sorted by Order: after General (0), before Details (20)
+        Assert.Equal(2, window.Problems.Count);
+        Assert.Contains(window.Problems, p => p.Contains("BrokenProvider") && p.Contains("plugin bug"));
+        Assert.Contains(window.Problems, p => p.Contains("not loaded") && p.Contains("not executable"));
+        Assert.False(window.ApplyAll());                                                     // the plugin's tab said no: the window stays open
+        Assert.IsType<TextBlock>(window.Pages[1].Content);
+    }
+}
+
+public class PropertySheetScreenshots
+{
+    [AvaloniaFact]
+    public async Task Properties_screenshot()
+    {
+        var dir = Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        Vde.Shell.Controls.ShellIconProvider.Default = new Vde.Shell.Controls.ShellIconProvider();
+        var target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Projects", "vibe-de", "README.md");
+        var xdg = new Vde.Freedesktop.XdgDirectories();
+        var types = new FileTypes(new MimeDatabase(xdg), new Vibe.Registry.ClassesRoot(new Vibe.Registry.Hive("x")), Vde.Freedesktop.Locale.FromEnvironment());
+        var names = UserNames.System;
+        var context = new PropertySheetContext
+        {
+            Target = new PropertyTarget([target], "text/markdown"), Types = types, Actions = new FileActions(new Trash()),
+            BuiltInProviders = [("{22222222-0000-4000-8000-0000000000FF}", new PosixPermissionsPages(elevation: null))],
+            OpensWith = _ => "Kate", ChangeOpensWith = _ => { },
+        };
+        var window = new PropertySheetWindow(context);
+        window.Show();
+        await window.Page<GeneralPage>().SizeTask;
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window)!.Save(Path.Combine(dir, "props-general.png"));
+        window.GetVisualDescendants().OfType<TabControl>().Single().SelectedIndex = 1;
+        Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window)!.Save(Path.Combine(dir, "props-permissions.png"));
+    }
+}
+
+public class TakeOwnershipTests
+{
+    private sealed class Backend(bool canElevate = true) : IElevationBackend
+    {
+        public List<IReadOnlyList<string>> Ran { get; } = new();
+        public bool CanElevate(Vibe.Registry.RegistryIdentity identity) => canElevate;
+        public string? PasswordAccount(Vibe.Registry.RegistryIdentity identity) => "root";
+        public Task<ElevationOutcome> RunAsync(IReadOnlyList<string> commandLine, ReadOnlyMemory<char> password, CancellationToken cancel)
+        {
+            Ran.Add(commandLine);
+            return Task.FromResult(ElevationOutcome.Success);
+        }
+    }
+
+    private sealed class Prompt(bool approve) : IElevationPrompt
+    {
+        public ElevationRequest? Seen;
+        public Task<ElevationResponse> AskAsync(ElevationRequest request, int attempt, string? previousError, CancellationToken cancel)
+        {
+            Seen = request;
+            return Task.FromResult(approve ? new ElevationResponse(true, "pw".ToCharArray()) : ElevationResponse.Cancel);
+        }
+    }
+
+    // Pretends to be user 4242, so that the files (owned by the real test user) are "somebody else's".
+    private static (PropertySheetWindow window, Backend backend, Prompt prompt) Open(Dir d, string name, bool approve = true, bool canElevate = true, bool withElevation = true)
+    {
+        var backend = new Backend(canElevate); var prompt = new Prompt(approve);
+        var elevation = withElevation ? new ElevationOptions(backend, prompt, new Vibe.Registry.RegistryIdentity(4242, 4242)) : null;
+        var context = new PropertySheetContext
+        {
+            Target = new PropertyTarget([Path.Combine(d.Docs, name)], ""),
+            BuiltInProviders = [("{22222222-0000-4000-8000-0000000000FF}", new PosixPermissionsPages([(1, "g")], elevation: elevation, findExecutable: _ => "/usr/bin/chown"))],
+        };
+        var window = new PropertySheetWindow(context);
+        window.Show();
+        return (window, backend, prompt);
+    }
+
+    [AvaloniaFact]
+    public async Task Take_ownership_shows_the_exact_chown_command_asks_for_the_right_password_and_runs_it()
+    {
+        using var d = new Dir();
+        var (window, backend, prompt) = Open(d, "a.txt");
+        var page = window.Page<PermissionsPage>();
+
+        Assert.True(page.CanTakeOwnership);
+        Assert.True(await page.TakeOwnershipAsync());
+
+        Assert.Equal("Take ownership", prompt.Seen!.Label);
+        Assert.Equal("root", prompt.Seen.Account);                                     // sudo wants root's password here
+        Assert.Equal(new[] { "/usr/bin/chown", "-h", "--", "4242", Path.Combine(d.Docs, "a.txt") }, prompt.Seen.CommandLine);
+        Assert.Equal(prompt.Seen.CommandLine, Assert.Single(backend.Ran));
+        Assert.Equal("Ownership was changed.", page.Info);
+    }
+
+    [AvaloniaFact]
+    public async Task A_folder_with_apply_to_everything_inside_is_taken_recursively_and_links_are_not_followed()
+    {
+        using var d = new Dir();
+        var (window, backend, _) = Open(d, "sub");
+        var page = window.Page<PermissionsPage>();
+
+        await page.TakeOwnershipAsync();
+        Assert.DoesNotContain("-R", backend.Ran[0]);
+
+        page.Recursive = true;
+        await page.TakeOwnershipAsync();
+        Assert.Equal(new[] { "/usr/bin/chown", "-h", "-R", "--", "4242", Path.Combine(d.Docs, "sub") }, backend.Ran[1]);   // -h with -R: links are changed themselves, never followed out
+    }
+
+    [AvaloniaFact]
+    public async Task Cancelling_changes_nothing_and_a_user_who_may_not_elevate_is_told_without_any_prompt()
+    {
+        using var d = new Dir();
+        var (cancelled, cb, _) = Open(d, "a.txt", approve: false);
+        var page = cancelled.Page<PermissionsPage>();
+        Assert.False(await page.TakeOwnershipAsync());
+        Assert.Equal("Cancelled. Nothing was changed.", page.Info);
+        Assert.Empty(cb.Ran);
+
+        var (denied, db, dp) = Open(d, "a.txt", canElevate: false);
+        var deniedPage = denied.Page<PermissionsPage>();
+        Assert.False(await deniedPage.TakeOwnershipAsync());
+        Assert.Contains("not allowed to elevate", deniedPage.Info);
+        Assert.Null(dp.Seen);                                                          // rejected before anything was shown
+        Assert.Empty(db.Ran);
+    }
+
+    [AvaloniaFact]
+    public void The_button_is_only_offered_when_it_would_change_something_and_there_is_a_way_to_ask()
+    {
+        using var d = new Dir();
+        var (without, _, _) = Open(d, "a.txt", withElevation: false);
+        Assert.False(without.Page<PermissionsPage>().CanTakeOwnership);               // no elevation available
+
+        var mine = new PropertySheetContext
+        {
+            Target = new PropertyTarget([Path.Combine(d.Docs, "a.txt")], ""),
+            BuiltInProviders = [("{22222222-0000-4000-8000-0000000000FF}", new PosixPermissionsPages(elevation: new ElevationOptions(new Backend(), new Prompt(true), Vibe.Registry.RegistryIdentity.Current)))],
+        };
+        var owned = new PropertySheetWindow(mine); owned.Show();
+        Assert.False(owned.Page<PermissionsPage>().CanTakeOwnership);                  // already the owner: nothing to take
     }
 }

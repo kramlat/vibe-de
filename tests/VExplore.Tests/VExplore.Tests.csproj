@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VExplore\VExplore.csproj" />
+    <ProjectReference Include="..\..\src\RegSvrVDE\RegSvrVDE.csproj" />
   </ItemGroup>
 
 </Project>

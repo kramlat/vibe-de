@@ -3,7 +3,7 @@ namespace Vde.Shell;
 public enum ShortcutAction
 {
     Copy, Cut, Paste, SelectAll, NewFolder, Rename, Delete, DeletePermanently, Open,
-    Back, Forward, Up, Refresh, FocusAddress,
+    Back, Forward, Up, Refresh, FocusAddress, Properties,
 }
 
 [Flags]
@@ -37,6 +37,7 @@ public static class ShortcutMap
         [ShortcutAction.Up] = [new("Up", Mods.Alt), new("Back")],
         [ShortcutAction.Refresh] = [new("F5")],
         [ShortcutAction.FocusAddress] = [new("L", Mods.Primary)],
+        [ShortcutAction.Properties] = [new("Enter", Mods.Alt)],
     };
 
     private static readonly Dictionary<ShortcutAction, Shortcut[]> Mac = new()
@@ -55,6 +56,7 @@ public static class ShortcutMap
         [ShortcutAction.Up] = [new("Up", Mods.Primary)],                           // ⌘↑
         [ShortcutAction.Refresh] = [new("R", Mods.Primary)],
         [ShortcutAction.FocusAddress] = [new("L", Mods.Primary)],
+        [ShortcutAction.Properties] = [new("I", Mods.Primary)],
     };
 
     public static IReadOnlyList<Shortcut> For(ShortcutAction action, ShortcutStyle style)

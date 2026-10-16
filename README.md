@@ -18,6 +18,7 @@ It has no telemetry.
 - `src/VExplore` — Vibe Explorer (`vexplore`): the shell host (taskbar, notification flyout, file manager, portal backends); wiring only so far (LGPL-3.0-or-later for libs; executable GPL-3.0-or-later)
 - `src/Vde.Shell.ComDlg` — common dialogs: message box, Open/Save/Folder, input and password, elevation (sudo credentials) prompt, progress (LGPL-3.0-or-later)
 - `native/vdepanel` + `tools/PanelSpike` + `docs/panels.md` — layer-shell panel spike: Avalonia renders offscreen, a small C client shows it as a wlr-layer-shell surface (verified on KWin)
+- Property pages: Properties window in `Vde.Shell.ComDlg` (General, Details) plus tabs from property sheet handlers (`<class>\shellex\PropertySheetHandlers`); VExplore supplies Permissions (POSIX, with Take ownership via elevation), Checksums and Customize
 - `src/libFluent` — Fluent-style Avalonia control library (LGPL-3.0-or-later)
 - `src/Vibe.Registry` — the registry: typed hive files (`.fhive`, checksummed, atomic saves) with `.reg` import/export and change events (LGPL-3.0-or-later)
 - `tests/` — xunit tests (`dotnet test`); `Vde.Policy.Tests` enforces the no-telemetry promise (no reporting packages, no internet APIs, Unix sockets only)

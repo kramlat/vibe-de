@@ -2690,3 +2690,69 @@ public class PropertiesTests
         finally { File.Delete(dll); }
     }
 }
+
+public class OwnershipAndFolderIconTests
+{
+    [Fact]
+    public void The_chown_command_uses_double_dash_numeric_ids_h_and_only_adds_R_when_asked()
+    {
+        Assert.Equal(new[] { "/usr/bin/chown", "-h", "--", "1000", "/a/b" }, Ownership.Command("/usr/bin/chown", ["/a/b"], 1000, recursive: false));
+        Assert.Equal(new[] { "/usr/bin/chown", "-h", "-R", "--", "1000", "/a/b", "/c" }, Ownership.Command("/usr/bin/chown", ["/a/b", "/c"], 1000, recursive: true));
+        var odd = Ownership.Command("/usr/bin/chown", ["-rf"], 1000, false);
+        Assert.StartsWith("/", odd[^1]);                                              // a name starting with '-' becomes an absolute path, and sits after "--" anyway
+    }
+
+    [Fact]
+    public async Task Taking_ownership_needs_chown_and_goes_through_the_elevation_flow()
+    {
+        var backend = new ElevationAccountTests_Backend();
+        var options = new ElevationOptions(backend, new ElevationAccountTests_Prompt(), new RegistryIdentity(1000, 1000));
+
+        await Ownership.TakeAsync(["/x/file"], false, options, _ => "/usr/bin/chown");
+        Assert.Equal(new[] { "/usr/bin/chown", "-h", "--", "1000", "/x/file" }, Assert.Single(backend.Ran));
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() => Ownership.TakeAsync(["/x/file"], false, options, _ => null));
+    }
+
+    private sealed class ElevationAccountTests_Backend : IElevationBackend
+    {
+        public List<IReadOnlyList<string>> Ran { get; } = new();
+        public bool CanElevate(RegistryIdentity identity) => true;
+        public Task<ElevationOutcome> RunAsync(IReadOnlyList<string> commandLine, ReadOnlyMemory<char> password, CancellationToken cancel) { Ran.Add(commandLine); return Task.FromResult(ElevationOutcome.Success); }
+    }
+
+    private sealed class ElevationAccountTests_Prompt : IElevationPrompt
+    {
+        public Task<ElevationResponse> AskAsync(ElevationRequest request, int attempt, string? previousError, CancellationToken cancel) => Task.FromResult(new ElevationResponse(true, "x".ToCharArray()));
+    }
+
+    [Fact]
+    public void A_folders_icon_is_read_and_written_in_a_KDE_style_directory_file_and_nothing_unsafe_gets_in()
+    {
+        using var fx = new Fixture();
+        var folder = Path.Combine(fx.Root, "music"); Directory.CreateDirectory(folder);
+        Assert.Null(FolderIcon.Read(folder));
+
+        FolderIcon.Write(folder, "folder-music");
+        Assert.Equal("folder-music", FolderIcon.Read(folder));
+        Assert.Contains("[Desktop Entry]", File.ReadAllText(Path.Combine(folder, ".directory")));
+
+        File.WriteAllText(Path.Combine(folder, ".directory"), "[Desktop Entry]\nName=Mine\nIcon=folder-music\n[Other]\nKeep=me\n");
+        FolderIcon.Write(folder, "folder-video");
+        var text = File.ReadAllText(Path.Combine(folder, ".directory"));
+        Assert.Contains("Name=Mine", text); Assert.Contains("Keep=me", text);       // the rest of the file is left alone
+        Assert.Equal("folder-video", FolderIcon.Read(folder));
+
+        FolderIcon.Write(folder, null);
+        Assert.Null(FolderIcon.Read(folder));
+        Assert.Contains("Name=Mine", File.ReadAllText(Path.Combine(folder, ".directory")));
+
+        Assert.Equal("/usr/share/icons/x.png", Roundtrip(folder, "/usr/share/icons/x.png"));
+        Assert.Throws<ArgumentException>(() => FolderIcon.Write(folder, "evil\nExec=rm"));        // a newline would write another line into the file
+        Assert.Throws<ArgumentException>(() => FolderIcon.Write(folder, "has space"));
+        File.WriteAllText(Path.Combine(folder, ".directory"), "[Desktop Entry]\nIcon=bad name with spaces\n");
+        Assert.Null(FolderIcon.Read(folder));                                                       // junk already there is ignored, not shown
+    }
+
+    private static string? Roundtrip(string folder, string icon) { FolderIcon.Write(folder, icon); return FolderIcon.Read(folder); }
+}

@@ -4,7 +4,11 @@ using Avalonia.VisualTree;
 using Avalonia.Headless.XUnit;
 using Vde.Freedesktop;
 using Vde.Shell;
+using Vde.Components;
+using Vde.Shell.ComDlg;
 using Vde.Shell;
+using Vde.Components;
+using Vde.Shell.ComDlg;
 using Vibe.Registry;
 using VExplore.Windows;
 
@@ -376,7 +380,7 @@ public class DesktopWindowTests
         var made = w.NewFolder();
         Assert.EndsWith("New folder", made);
         Assert.Equal(new[] { "New folder" }, w.SelectedNames);
-        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Desktop settings" }, w.MenuLabels);
+        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Properties", "Desktop settings" }, w.MenuLabels);
     }
 
     [AvaloniaFact]
@@ -511,8 +515,8 @@ public class ShortcutWindowTests
         var w = new DesktopWindow(d.Desktop, new Hive("HKCU") { Identity = RegistryIdentity.Root }, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), null, Style(apple));
         w.Show();
 
-        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Desktop settings" }, w.MenuLabels);
-        Assert.Equal(new[] { newFolder, paste, refresh, "" }, w.MenuShortcuts);
+        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Properties", "Desktop settings" }, w.MenuLabels);
+        Assert.Equal(new[] { newFolder, paste, refresh, apple ? "⌘I" : "Alt+Enter", "" }, w.MenuShortcuts);
     }
 
     [AvaloniaFact]
@@ -534,5 +538,196 @@ public class ShortcutWindowTests
         public string Desktop { get; } = Path.Combine(Path.GetTempPath(), "vexplore-dk-" + Guid.NewGuid().ToString("N"));
         public DesktopTestEnv() => Directory.CreateDirectory(Desktop);
         public void Dispose() => Directory.Delete(Desktop, recursive: true);
+    }
+}
+
+public class PropertiesFromWindowsTests
+{
+    private static ShortcutStyleService Style(bool apple)
+        => new(new Hive("HKCU") { Identity = RegistryIdentity.Root }, () => apple ? [new KeyboardDevice("Apple Keyboard", 3, 0x05ac, 1, true)] : [new KeyboardDevice("PC", 3, 1, 1, false)]);
+
+    private sealed class Env : IDisposable
+    {
+        public string Root { get; } = Path.Combine(Path.GetTempPath(), "vexplore-props-" + Guid.NewGuid().ToString("N"));
+        public KnownFolders Folders { get; }
+        public Env()
+        {
+            Directory.CreateDirectory(Path.Combine(Root, "home", "docs"));
+            File.WriteAllText(Path.Combine(Root, "home", "docs", "a.txt"), "hello");
+            var env = new Dictionary<string, string> { ["HOME"] = Path.Combine(Root, "home"), ["XDG_DATA_HOME"] = Path.Combine(Root, "data") };
+            Folders = new KnownFolders(new XdgDirectories(k => env.GetValueOrDefault(k)));
+        }
+        public string Docs => Path.Combine(Root, "home", "docs");
+        public void Dispose() => Directory.Delete(Root, recursive: true);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, Avalonia.Input.RawInputModifiers.Alt)]      // Alt+Enter on a PC
+    [InlineData(true, Avalonia.Input.RawInputModifiers.Meta)]      // Command+I on an Apple keyboard (the key differs, see below)
+    public void The_properties_shortcut_asks_for_the_sheet_for_the_selection(bool apple, Avalonia.Input.RawInputModifiers mod)
+    {
+        using var e = new Env();
+        var asked = new List<IReadOnlyList<string>>();
+        var window = new FileManagerWindow(e.Docs, e.Folders, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), Style(apple),
+            properties: paths => { asked.Add(paths); return new PropertySheetContext { Target = new PropertyTarget(paths, "text/plain") }; });
+        window.Show();
+        window.SelectEntries("a.txt");
+
+        window.KeyPressQwerty(apple ? Avalonia.Input.PhysicalKey.I : Avalonia.Input.PhysicalKey.Enter, mod);
+
+        Assert.Equal(new[] { Path.Combine(e.Docs, "a.txt") }, Assert.Single(asked));
+    }
+
+    [AvaloniaFact]
+    public void The_sheet_opens_for_the_selection_or_for_the_folder_itself_when_nothing_is_selected()
+    {
+        using var e = new Env();
+        var window = new FileManagerWindow(e.Docs, e.Folders, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), Style(false));
+        window.Show();
+
+        var folder = window.ShowProperties()!;
+        Assert.Equal(e.Docs, folder.Items[0].FullPath);
+        Assert.Equal("docs Properties", folder.Title);
+
+        window.SelectEntries("a.txt");
+        var file = window.ShowProperties()!;
+        Assert.Equal("a.txt Properties", file.Title);
+        Assert.Equal(new[] { "General", "Permissions", "Details", "Checksums" }, file.Pages.Select(p => p.Title));   // the shell's own handler adds Checksums for a file
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, "Alt+Enter")]
+    [InlineData(true, "⌘I")]
+    public void The_desktop_menu_has_Properties_with_the_shortcut_in_the_keyboards_style(bool apple, string hint)
+    {
+        using var e = new Env();
+        var w = new DesktopWindow(e.Docs, new Hive("HKCU") { Identity = RegistryIdentity.Root }, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), null, Style(apple));
+        w.Show();
+
+        var index = w.MenuLabels.ToList().IndexOf("Properties");
+        Assert.True(index >= 0);
+        Assert.Equal(hint, w.MenuShortcuts[index]);
+
+        w.SelectIcon("a.txt");
+        Assert.Equal("a.txt Properties", w.ShowProperties()!.Title);
+    }
+}
+
+public class VExplorePropertyPagesTests
+{
+    private sealed class Dir : IDisposable
+    {
+        public string Root { get; } = Path.Combine(Path.GetTempPath(), "vexplore-pp-" + Guid.NewGuid().ToString("N"));
+        public Dir() { Directory.CreateDirectory(Path.Combine(Root, "folder")); File.WriteAllText(Path.Combine(Root, "hello.txt"), "hello"); File.WriteAllText(Path.Combine(Root, "two.txt"), "2"); }
+        public string File_ => Path.Combine(Root, "hello.txt");
+        public string Folder => Path.Combine(Root, "folder");
+        public void Dispose() => Directory.Delete(Root, recursive: true);
+    }
+
+    private static T Tag<T>(IReadOnlyList<PropertyPageInfo> pages, string title) where T : class => (T)pages.Single(p => p.Title == title).Tag!;
+
+    [AvaloniaFact]
+    public void The_shells_handler_gives_files_permissions_and_checksums_folders_permissions_and_customize()
+    {
+        using var d = new Dir();
+        var provider = new PropertyPages();
+
+        Assert.Equal(new[] { "Permissions", "Checksums" }, provider.GetPages(new PropertyTarget([d.File_], "text/plain")).Select(p => p.Title));
+        Assert.Equal(new[] { "Permissions", "Customize" }, provider.GetPages(new PropertyTarget([d.Folder], "inode/directory")).Select(p => p.Title));
+        Assert.Equal(new[] { "Permissions" }, provider.GetPages(new PropertyTarget([d.File_, Path.Combine(d.Root, "two.txt")], "")).Select(p => p.Title));   // several items: permissions only
+        Assert.Empty(provider.GetPages(new PropertyTarget([Path.Combine(d.Root, "gone")], "")));
+    }
+
+    [AvaloniaFact]
+    public async Task Checksums_match_the_known_values_and_the_compare_box_accepts_pasted_forms()
+    {
+        using var d = new Dir();
+        var page = Tag<ChecksumPage>(new PropertyPages().GetPages(new PropertyTarget([d.File_], "")), "Checksums");
+        await page.ComputeTask;
+
+        Assert.Equal("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824", page.Sha256);   // sha256("hello")
+        Assert.Equal("aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d", page.Sha1);
+        Assert.Equal("5d41402abc4b2a76b9719d911017c592", page.Md5);
+
+        page.Expected = "2CF24DBA:5FB0A30E 26E83B2A-C5B9E29E1B161E5C1FA7425E73043362938B9824";            // capitals, colons, spaces, dashes
+        Assert.Equal("Matches the SHA-256.", page.MatchText);
+        page.Expected = "5d41402abc4b2a76b9719d911017c592";
+        Assert.Equal("Matches the MD5.", page.MatchText);
+        page.Expected = "deadbeef";
+        Assert.Equal("Does not match.", page.MatchText);
+        page.Expected = "";
+        Assert.Equal("", page.MatchText);
+    }
+
+    [AvaloniaFact]
+    public void Customize_saves_a_folder_icon_in_the_directory_file_clears_it_and_refuses_unsafe_names()
+    {
+        using var d = new Dir();
+        var info = new PropertyPages().GetPages(new PropertyTarget([d.Folder], "")).Single(p => p.Title == "Customize");
+        var page = (CustomizePage)info.Tag!;
+
+        Assert.False(info.IsDirty!());
+        page.Icon = "folder-music";
+        Assert.True(info.IsDirty!());
+        Assert.True(info.Apply!());
+        Assert.Equal("folder-music", FolderIcon.Read(d.Folder));
+
+        page.Icon = "bad\nname";
+        Assert.False(info.Apply!());
+        Assert.NotEqual("", page.Error);
+        Assert.Equal("folder-music", FolderIcon.Read(d.Folder));                  // unchanged
+
+        page.Icon = "";
+        Assert.True(info.Apply!());
+        Assert.Null(FolderIcon.Read(d.Folder));
+    }
+
+    [AvaloniaFact]
+    public void The_sheet_shows_the_shells_tabs_with_no_registration_and_a_registry_entry_for_the_same_component_is_not_loaded_twice()
+    {
+        using var d = new Dir();
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Current };
+        var hkcr = new ClassesRoot(hive);
+        ComponentRegistrar.Register(hkcr, new ComponentInfo(PropertyPages.Clsid, typeof(PropertyPages).FullName!, typeof(PropertyPages).Assembly.Location, "vexplore", ThreadingModel.Apartment));
+        hkcr.SetValue($@"*\{PropertyHandlers.HandlersKey}\VExplore", "", RegistryValueKind.String, PropertyPages.Clsid);
+        var context = new PropertySheetContext
+        {
+            Target = new PropertyTarget([d.File_], "text/plain"),
+            BuiltInProviders = [(PropertyPages.Clsid, new PropertyPages())],
+            Handlers = new PropertyHandlers(hkcr), Loader = new ComponentLoader(),
+        };
+
+        var sheet = new PropertySheetWindow(context); sheet.Show();
+
+        Assert.Equal(new[] { "General", "Permissions", "Details", "Checksums" }, sheet.Pages.Select(p => p.Title));   // one Permissions, not two
+        Assert.Empty(sheet.Problems);
+    }
+
+    [AvaloniaFact]
+    public void The_installer_registers_the_tabs_for_files_and_folders_through_RegSvrVDE_and_the_registered_component_loads()
+    {
+        using var d = new Dir();
+        var userHive = Path.Combine(d.Root, "hive", "User.fhive");
+        var dll = typeof(PropertyPages).Assembly.Location;
+        var output = new StringWriter(); var error = new StringWriter();
+
+        var code = RegSvrVDE.RegSvrVdeCommand.Run(["/i", dll, "--user-hive=" + userHive], output, error);
+
+        Assert.True(code == 0, error.ToString());
+        using var hive = Hive.OpenShared("HKCU", userHive, watch: false);
+        var hkcr = new ClassesRoot(hive);
+        Assert.Equal(PropertyPages.Clsid, hkcr.GetValue($@"*\{PropertyHandlers.HandlersKey}\VExplore", "")!.Data);
+        Assert.Equal(PropertyPages.Clsid, hkcr.GetValue($@"Directory\{PropertyHandlers.HandlersKey}\VExplore", "")!.Data);
+
+        var handlers = new PropertyHandlers(hkcr);
+        var found = Assert.Single(handlers.Split(d.File_, false).loadable);
+        var provider = new ComponentLoader().Get<IPropertyPageProvider>(found);                // loaded the way the registry says
+        Assert.Contains("Permissions", provider.GetPages(new PropertyTarget([d.File_], "")).Select(p => p.Title));
+        Assert.Single(handlers.Split(d.Folder, true).loadable);
+
+        Assert.Equal(0, RegSvrVDE.RegSvrVdeCommand.Run(["/u", "/i", dll, "--user-hive=" + userHive], new StringWriter(), error));   // uninstalling removes the entries again
+        hkcr = new ClassesRoot(Hive.OpenShared("HKCU", userHive, watch: false));
+        Assert.False(hkcr.KeyExists($@"*\{PropertyHandlers.HandlersKey}\VExplore"));
+        Assert.False(hkcr.KeyExists($@"CLSID\{PropertyPages.Clsid}"));
     }
 }

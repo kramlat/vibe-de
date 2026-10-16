@@ -110,7 +110,7 @@ public sealed class FileListView : UserControl
     private Control Row(FileEntry entry)
     {
         var info = entry.IsDirectory ? null : Types?.Describe(entry.FullPath);
-        var icon = new ShellIcon { IconNames = entry.IsDirectory ? ["folder"] : info?.IconNames ?? ["text-x-generic"], IconSize = 20, Margin = new Thickness(4, 2, 6, 2) };
+        var icon = new ShellIcon { IconNames = entry.IsDirectory ? FolderIcons(entry.FullPath) : info?.IconNames ?? ["text-x-generic"], IconSize = 20, Margin = new Thickness(4, 2, 6, 2) };
 
         var name = new TextBlock { Text = entry.Name, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
         var nameCell = new StackPanel { Orientation = Orientation.Horizontal, Children = { icon, name } };
@@ -131,6 +131,8 @@ public sealed class FileListView : UserControl
         row.Children.Add(size);
         return row;
     }
+
+    private static IReadOnlyList<string> FolderIcons(string folder) => FolderIcon.Read(folder) is { } custom ? [custom, "folder"] : ["folder"];
 
     private static TextBlock Cell(string text, int column)
     {
