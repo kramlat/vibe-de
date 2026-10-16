@@ -48,12 +48,39 @@ public static class BuiltInPages
         },
     ]);
 
-    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, Notifications, Keyboard];
+    public static readonly SettingsPage StartMenu = new("startmenu", "Start menu",
+    [
+        new("layout", "Layout", SettingKind.Choice, LauncherModel.KeyPath, "Layout", "Applies the next time the Start menu opens.")
+        {
+            Default = "Modern",
+            Choices = [new("Modern", "Windows 11 style: pinned grid and recommended"), new("Classic", "Windows 10 style: app list with pinned tiles")],
+        },
+    ]);
+
+    public static readonly SettingsPage Taskbar = new("taskbar", "Taskbar",
+    [
+        new("edge", "Taskbar location", SettingKind.Choice, TaskbarModel.KeyPath, "Edge")
+        {
+            Default = "Bottom",
+            Choices = [new("Bottom", "Bottom"), new("Top", "Top"), new("Left", "Left"), new("Right", "Right")],
+        },
+        new("alignment", "Start button and apps", SettingKind.Choice, TaskbarModel.KeyPath, "Alignment")
+        {
+            Default = "Center",
+            Choices = [new("Center", "Centered"), new("Start", "Aligned to the start")],
+        },
+    ]);
+
+    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, StartMenu, Taskbar, Notifications, Keyboard];
 
     public static readonly IReadOnlyList<ControlPanelItem> Items =
     [
         new("appearance", "Appearance", "Theme, light or dark mode and accent colour", "preferences-desktop-theme", ControlPanelCategories.Appearance,
             ["theme", "dark", "light", "colour", "color", "accent", "look"], ItemSource.BuiltIn) { PageId = "appearance" },
+        new("startmenu", "Start menu", "Windows 11 or Windows 10 layout", "start-here-vde", ControlPanelCategories.Appearance,
+            ["start", "launcher", "layout", "tiles", "menu"], ItemSource.BuiltIn) { PageId = "startmenu" },
+        new("taskbar", "Taskbar", "Which screen edge it sits on and how apps are aligned", "preferences-desktop", ControlPanelCategories.Appearance,
+            ["taskbar", "dock", "panel", "edge", "left", "right", "top", "bottom", "center", "centre"], ItemSource.BuiltIn) { PageId = "taskbar" },
         new("keyboard", "Keyboard", "Shortcut style: PC or Apple", "input-keyboard", ControlPanelCategories.Devices,
             ["shortcuts", "apple", "mac", "command", "ctrl", "hotkeys"], ItemSource.BuiltIn) { PageId = "keyboard" },
         new("notifications", "Notifications", "Do not disturb and how long notifications stay", "preferences-desktop-notification", ControlPanelCategories.System,

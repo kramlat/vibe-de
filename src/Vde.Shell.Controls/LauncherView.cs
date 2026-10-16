@@ -82,19 +82,72 @@ public sealed class LauncherView : UserControl
             return;
         }
 
+        if (_model.Layout == StartLayout.Classic) RebuildClassic(); else RebuildModern();
+    }
+
+    // Windows 11 style: pinned grid, then recommended.
+    private void RebuildModern()
+    {
         _body.Children.Add(Heading("Pinned"));
         var pinned = _model.Pinned;
         if (pinned.Count == 0)
             _body.Children.Add(Muted("Pin apps from the list below."));
-        foreach (var app in pinned)
-            _body.Children.Add(Row(app.Name, "", app.Icon ?? "application-x-executable", () => Launch(app)));
+        else
+            _body.Children.Add(Tiles(pinned));
         var recent = _model.Recent;
         if (recent.Count > 0)
         {
-            _body.Children.Add(Heading("Recent"));
+            _body.Children.Add(Heading("Recommended"));
             foreach (var app in recent)
                 _body.Children.Add(Row(app.Name, "", app.Icon ?? "application-x-executable", () => Launch(app)));
         }
+    }
+
+    // Windows 10 style: every app in a list on the left, the pinned ones as tiles on the right.
+    private void RebuildClassic()
+    {
+        var list = new StackPanel();
+        foreach (var group in _model.Alphabetical())
+        {
+            list.Children.Add(new TextBlock { Text = group.Heading, FontWeight = FontWeight.SemiBold, Margin = new Thickness(4, 8, 0, 0) });
+            foreach (var app in group.Apps)
+                list.Children.Add(Row(app.Name, "", app.Icon ?? "application-x-executable", () => Launch(app)));
+        }
+        var tiles = new StackPanel { Margin = new Thickness(12, 0, 0, 0) };
+        tiles.Children.Add(Heading("Pinned"));
+        tiles.Children.Add(_model.Pinned.Count == 0 ? Muted("Pin apps to see them here.") : Tiles(_model.Pinned));
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("240,*"), Height = 520 };
+        grid.Children.Add(new ScrollViewer { Content = list });
+        var right = new ScrollViewer { Content = tiles };
+        Grid.SetColumn(right, 1);
+        grid.Children.Add(right);
+        _body.Children.Add(grid);
+    }
+
+    private Control Tiles(IReadOnlyList<DesktopEntry> apps)
+    {
+        var wrap = new WrapPanel();
+        foreach (var app in apps)
+        {
+            var tile = new Button
+            {
+                Tag = app.Name, Width = 84, Height = 84, Margin = new Thickness(2), Background = Brushes.Transparent,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                Content = new StackPanel
+                {
+                    Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center,
+                    Children =
+                    {
+                        new ShellIcon { IconName = app.Icon ?? "application-x-executable", IconSize = 32, HorizontalAlignment = HorizontalAlignment.Center },
+                        new TextBlock { Text = app.Name, FontSize = 11, TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 78 },
+                    },
+                },
+            };
+            var captured = app;
+            tile.Click += (_, _) => Launch(captured);
+            wrap.Children.Add(tile);
+        }
+        return wrap;
     }
 
     private void Launch(DesktopEntry app)

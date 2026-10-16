@@ -99,7 +99,7 @@ public class WindowTests
         var window = new ControlPanelWindow(catalog, hive, handed.Add);
         window.Show();
 
-        Assert.Equal("Appearance", Assert.Single(window.ShownItems).Name);          // the first category is selected
+        Assert.Equal(new[] { "Appearance", "Start menu", "Taskbar" }, window.ShownItems.Select(i => i.Name));          // the first category is selected
         window.Search("dark");
         Assert.Equal("Appearance", window.ShownItems[0].Name);
 

@@ -13,7 +13,7 @@ public sealed class LauncherWindow : Window
 {
     public LauncherWindow(LauncherModel model, Action<DesktopEntry> startApp, Action<ControlPanelItem> openSetting)
     {
-        Width = 460; Height = 620;
+        Width = model.Layout == StartLayout.Classic ? 640 : 460; Height = 620;
         SystemDecorations = SystemDecorations.None;
         ShowInTaskbar = false;
         Topmost = true;

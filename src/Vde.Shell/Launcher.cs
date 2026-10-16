@@ -19,6 +19,10 @@ public sealed record LauncherResult(string Kind, string Title, string Subtitle, 
 // anywhere: the lists are exactly what is installed and what the user pinned or ran. Search plugins can add
 // results, but only ones the user authorized (LauncherProviders), and only for as long as that stands.
 // Pinned and recent are kept in the registry (HKCU\Software\Vde\Launcher) so every shell window agrees.
+// Modern: search on top, a grid of pinned apps, then recommended (recent) ones, with All apps a click away (Windows 11 style).
+// Classic: the alphabetical app list on the left, the pinned apps as tiles on the right (Windows 10 style).
+public enum StartLayout { Modern, Classic }
+
 public sealed class LauncherModel
 {
     public const string KeyPath = @"Software\Vde\Launcher";
@@ -46,6 +50,13 @@ public sealed class LauncherModel
     public IReadOnlyList<LauncherGroup> Alphabetical()
         => AllApps.GroupBy(e => Initial(e.Name)).OrderBy(g => g.Key == "#" ? "￿" : g.Key, StringComparer.Ordinal)
             .Select(g => new LauncherGroup(g.Key, g.ToList())).ToList();
+
+    // HKCU\Software\Vde\Launcher  Layout (Modern or Classic)
+    public StartLayout Layout
+    {
+        get => _hive.GetValue(KeyPath, "Layout") is { Kind: RegistryValueKind.String, Data: string s } && Enum.TryParse<StartLayout>(s, true, out var l) ? l : StartLayout.Modern;
+        set => _hive.SetValue(KeyPath, "Layout", RegistryValueKind.String, value.ToString());
+    }
 
     public IReadOnlyList<DesktopEntry> Pinned => Resolve(ReadList("Pinned"));
 

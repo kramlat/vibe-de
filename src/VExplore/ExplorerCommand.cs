@@ -18,6 +18,7 @@ public static class ExplorerCommand
                vexplore --settings          the Settings (Control Panel) window
                vexplore --launcher          the app launcher
                vexplore --desktop           the desktop: wallpaper and the icons of ~/Desktop
+               vexplore --taskbar           the taskbar, docked to the edge in HKCU\Software\Vde\Taskbar
                vexplore --list-components   show registered components and whether the shell would load them
                -h, --help
 
@@ -42,6 +43,7 @@ public static class ExplorerCommand
             _ when args[0] == "--settings" && args.Length == 1 => "settings",
             _ when args[0] == "--launcher" && args.Length == 1 => "launcher",
             _ when args[0] == "--desktop" && args.Length == 1 => "desktop",
+            _ when args[0] == "--taskbar" && args.Length == 1 => "taskbar",
             _ when args[0] == "--files" && args.Length <= 2 => "files",
             _ when !args[0].StartsWith('-') && args.Length == 1 => "files",
             _ => null,
@@ -65,6 +67,7 @@ public static class ExplorerCommand
             "settings" => NewSettings(host2),
             "launcher" => NewLauncher(host2),
             "desktop" => NewDesktop(host2),
+            "taskbar" => NewTaskbar(host2),
             _ => ShellApp.NewFileManager(host2, folder),
         };
         return ShellApp.Build().StartWithClassicDesktopLifetime([]);
@@ -91,6 +94,13 @@ public static class ExplorerCommand
             else if (item.Command is { } command)
                 Launch(host, command);
         });
+    }
+
+    private static Window NewTaskbar(ExplorerHost host)
+    {
+        var apps = DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment());
+        var model = new TaskbarModel(host.CurrentUser, apps, new NoWindowSource(), entry => Launch(host, entry));
+        return new TaskbarWindow(model, () => Launch(host, "vexplore --launcher"));
     }
 
     private static Window NewDesktop(ExplorerHost host)
