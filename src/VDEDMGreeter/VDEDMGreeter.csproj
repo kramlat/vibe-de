@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vdedm-greeter</AssemblyName>
+    <RootNamespace>VdedmGreeter</RootNamespace>
+    <RollForward>Major</RollForward>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.11" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vde.DisplayManager\Vde.DisplayManager.csproj" />
+    <ProjectReference Include="..\Vde.Shell.Controls\Vde.Shell.Controls.csproj" />
+    <ProjectReference Include="..\Vde.Shell.Theme\Vde.Shell.Theme.csproj" />
+    <ProjectReference Include="..\Vde.Shell\Vde.Shell.csproj" />
+  </ItemGroup>
+
+</Project>

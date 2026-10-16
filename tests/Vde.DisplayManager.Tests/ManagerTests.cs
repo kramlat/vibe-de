@@ -283,3 +283,123 @@ public class PlanTests
         public void Dispose() { }
     }
 }
+
+public class GreeterModelTests
+{
+    private sealed class FakeConnection(Func<GreeterRequest, GreeterResponse> reply) : IGreeterConnection
+    {
+        public List<GreeterRequest> Sent { get; } = [];
+        public Task<GreeterResponse> SendAsync(GreeterRequest request, CancellationToken cancel = default) { Sent.Add(request); return Task.FromResult(reply(request)); }
+        public void Dispose() { }
+    }
+
+    private static readonly LoginUser Alice = new("alice", 1000, 1000, "/home/alice", "/bin/fish", "Alice");
+    private static readonly SessionEntry Vde = new("vde", "VDE", "", ["start-vde"], SessionKind.Wayland, "VDE");
+    private static readonly SessionEntry Xfce = new("xfce", "Xfce", "", ["startxfce4"], SessionKind.X11, null);
+
+    [Fact]
+    public async Task A_good_password_starts_the_chosen_session_and_announces_it()
+    {
+        var connection = new FakeConnection(r => r switch
+        {
+            CreateSession => new AuthMessage(AuthMessageType.Secret, "Password: "),
+            PostAuthMessageResponse => new Success(),
+            StartSession => new Success(),
+            _ => new ErrorResponse(ErrorType.Error, "?"),
+        });
+        var model = new GreeterModel(connection, [Alice], [Xfce, Vde]);
+        var started = false;
+        model.SessionStarted += () => started = true;
+
+        await model.BeginAsync("alice");
+        Assert.Equal(GreeterStage.Prompt, model.Stage);
+        Assert.Equal("Password", model.PromptText);
+        Assert.True(model.PromptSecret);
+
+        await model.AnswerAsync("hunter2");
+
+        Assert.True(started);
+        Assert.Equal(GreeterStage.Done, model.Stage);
+        var start = connection.Sent.OfType<StartSession>().Single();
+        Assert.Equal(new[] { "start-vde" }, start.Cmd);   // the VDE session, not the X11 one that cannot be started
+        Assert.Single(model.Sessions);
+    }
+
+    [Fact]
+    public async Task A_wrong_password_says_so_and_asks_again_for_the_same_user()
+    {
+        var attempts = 0;
+        var connection = new FakeConnection(r => r switch
+        {
+            CreateSession => new AuthMessage(AuthMessageType.Secret, "Password: "),
+            PostAuthMessageResponse => ++attempts == 1 ? new ErrorResponse(ErrorType.AuthError, "bad") : new Success(),
+            _ => new Success(),
+        });
+        var model = new GreeterModel(connection, [Alice], [Vde]);
+        await model.BeginAsync("alice");
+
+        await model.AnswerAsync("wrong");
+
+        Assert.Equal(GreeterStage.Prompt, model.Stage);          // asked again, without going back to the user list
+        Assert.Equal("alice", model.UserName);
+        Assert.Contains("not right", model.Message);
+        Assert.True(model.MessageIsError);
+        Assert.Equal(2, connection.Sent.OfType<CreateSession>().Count());
+    }
+
+    [Fact]
+    public async Task Notices_are_shown_and_acknowledged_automatically()
+    {
+        var step = 0;
+        var connection = new FakeConnection(r => r switch
+        {
+            CreateSession => new AuthMessage(AuthMessageType.Info, "Place your finger on the reader"),
+            PostAuthMessageResponse when ++step == 1 => new AuthMessage(AuthMessageType.Secret, "Password: "),
+            _ => new Success(),
+        });
+        var model = new GreeterModel(connection, [Alice], [Vde]);
+
+        await model.BeginAsync("alice");
+
+        Assert.Equal("Place your finger on the reader", model.Message);
+        Assert.Contains(connection.Sent, r => r is PostAuthMessageResponse { Response: null });
+        Assert.Equal(GreeterStage.Prompt, model.Stage);   // and the real question follows
+    }
+
+    [Fact]
+    public async Task Other_failures_go_back_to_the_user_list_with_the_reason_and_a_lost_connection_is_not_a_crash()
+    {
+        var model = new GreeterModel(new FakeConnection(_ => new ErrorResponse(ErrorType.Error, "that is not a valid user name")), [Alice], [Vde]);
+        await model.BeginAsync("a b");
+        Assert.Equal(GreeterStage.ChooseUser, model.Stage);
+        Assert.Equal("that is not a valid user name", model.Message);
+
+        var broken = new GreeterModel(new BrokenConnection(), [Alice], [Vde]);
+        await broken.BeginAsync("alice");
+        Assert.Equal(GreeterStage.ChooseUser, broken.Stage);
+        Assert.Contains("Lost contact", broken.Message);
+    }
+
+    [Fact]
+    public async Task Cancel_returns_to_the_user_list_and_a_machine_with_no_session_cannot_log_in()
+    {
+        var connection = new FakeConnection(r => r is CreateSession ? new AuthMessage(AuthMessageType.Secret, "Password: ") : new Success());
+        var model = new GreeterModel(connection, [Alice], [Vde]);
+        await model.BeginAsync("alice");
+        await model.CancelAsync();
+        Assert.Equal(GreeterStage.ChooseUser, model.Stage);
+        Assert.Null(model.UserName);
+        Assert.IsType<CancelSession>(connection.Sent.Last());
+
+        var none = new GreeterModel(new FakeConnection(r => r is CreateSession ? new AuthMessage(AuthMessageType.Secret, "Password: ") : new Success()), [Alice], []);
+        await none.BeginAsync("alice");
+        await none.AnswerAsync("pw");
+        Assert.Contains("no desktop session", none.Message);
+    }
+
+    private sealed class BrokenConnection : IGreeterConnection
+    {
+        public Task<GreeterResponse> SendAsync(GreeterRequest request, CancellationToken cancel = default) => throw new IOException("closed");
+        public void Dispose() { }
+    }
+}

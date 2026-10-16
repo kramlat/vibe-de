@@ -1,0 +1,8 @@
+#%PAM-1.0
+# The service vdedm authenticates greeter logins with. Like a text login (login(1)): whatever your distribution
+# configures for logging in is what happens here (passwords, fingerprints, lockout after failures, account expiry).
+# This file includes the distribution's system-login stack; on Debian-style systems use common-* instead.
+auth       include      system-local-login
+account    include      system-local-login
+password   include      system-local-login
+session    include      system-local-login
