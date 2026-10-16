@@ -2035,3 +2035,85 @@ public class LauncherPluginTests
         File.Delete(dll);
     }
 }
+
+public class FileSearchTests
+{
+    private static Fixture Tree()
+    {
+        var fx = new Fixture();
+        fx.Write("home/Documents/Invoice 2026.txt", "Customer: Acme\nTotal due: 120\nInvoice 2026 paid\n");
+        fx.Write("home/Documents/notes.md", "# Notes\nremember the invoice\n");
+        fx.Write("home/Documents/deep/er/invoice-old.txt", "old\n");
+        fx.Write("home/Music/song.flac", "binary\0data invoice");
+        fx.Write("home/.cache/invoice.tmp", "invoice");
+        Directory.CreateDirectory(Path.Combine(fx.Root, "home", "Documents", "invoices"));
+        return fx;
+    }
+
+    [Fact]
+    public void By_name_matches_substrings_and_globs_and_ranks_prefix_matches_first()
+    {
+        using var fx = Tree();
+        var roots = new[] { Path.Combine(fx.Root, "home") };
+
+        var hits = FileSearch.ByName(roots, "invoice");
+        Assert.Equal(new[] { "invoices", "invoice-old.txt", "Invoice 2026.txt" }, hits.Select(h => h.Name));   // all start with it; shorter names first; folders included
+        Assert.True(hits[0].IsDirectory);
+        Assert.DoesNotContain(hits, h => h.Path.Contains(".cache"));                                            // hidden skipped
+        Assert.Contains(FileSearch.ByName(roots, "invoice", new FileSearchOptions { IncludeHidden = true }), h => h.Name == "invoice.tmp");
+        Assert.Equal(2, FileSearch.ByName(roots, "*.txt").Count);                                               // the two .txt files; the hidden one is skipped
+        Assert.Equal(new[] { "notes.md" }, FileSearch.ByName(roots, "n?tes.*").Select(h => h.Name));
+        Assert.Empty(FileSearch.ByName(roots, "   "));
+    }
+
+    [Fact]
+    public void By_content_reports_lines_and_snippets_skips_binary_and_hidden_and_respects_limits()
+    {
+        using var fx = Tree();
+        var roots = new[] { Path.Combine(fx.Root, "home") };
+
+        var hits = FileSearch.ByContent(roots, "invoice");
+        Assert.Contains(hits, h => h.Name == "Invoice 2026.txt" && h.Line == 3 && h.Snippet == "Invoice 2026 paid");
+        Assert.Contains(hits, h => h.Name == "notes.md" && h.Line == 2);
+        Assert.DoesNotContain(hits, h => h.Name == "song.flac");     // binary
+        Assert.DoesNotContain(hits, h => h.Path.Contains(".cache"));
+        Assert.Single(FileSearch.ByContent(roots, "invoice", new FileSearchOptions { MaxResults = 1 }));
+        Assert.Empty(FileSearch.ByContent(roots, "invoice", new FileSearchOptions { MaxContentBytes = 5 }));   // files over the size cap are not read
+    }
+
+    [Fact]
+    public void Symlinks_are_not_followed_and_cancellation_and_the_time_budget_stop_the_walk()
+    {
+        using var fx = Tree();
+        var home = Path.Combine(fx.Root, "home");
+        File.CreateSymbolicLink(Path.Combine(home, "Documents", "loop"), home);                    // a loop back to the root
+        fx.Write("outside/secret-invoice.txt", "invoice");
+        File.CreateSymbolicLink(Path.Combine(home, "escape"), Path.Combine(fx.Root, "outside"));  // a link leaving the roots
+
+        var hits = FileSearch.ByName([home], "invoice");
+        Assert.DoesNotContain(hits, h => h.Path.Contains("secret"));
+        Assert.Equal(3, hits.Count);                                                                // and it terminated
+
+        using var cancelled = new CancellationTokenSource(); cancelled.Cancel();
+        Assert.Throws<OperationCanceledException>(() => FileSearch.ByName([home], "invoice", cancel: cancelled.Token));
+        Assert.Empty(FileSearch.ByName([home], "invoice", new FileSearchOptions { Budget = TimeSpan.Zero }));
+        Assert.Empty(FileSearch.ByName([Path.Combine(fx.Root, "no-such-folder")], "x"));
+    }
+
+    [Fact]
+    public async Task The_launcher_finds_files_by_name_and_by_in_prefixed_content()
+    {
+        using var fx = Tree();
+        var model = new LauncherModel(new Hive("HKCU"), DesktopEntryDatabase.Load(fx.Xdg, []), ["VDE"]) { FileRoots = [Path.Combine(fx.Root, "home")] };
+
+        var byName = await model.SearchFilesAsync("notes");
+        Assert.Equal("notes.md", Assert.Single(byName).Title);
+        Assert.Equal("File", byName[0].Kind);
+
+        var byContent = await model.SearchFilesAsync("in:total due");
+        var hit = Assert.Single(byContent);
+        Assert.Equal("Invoice 2026.txt", hit.Title);
+        Assert.Contains(":2  Total due: 120", hit.Subtitle);
+        Assert.EndsWith("Invoice 2026.txt", hit.FilePath);
+    }
+}

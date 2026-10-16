@@ -11,6 +11,7 @@ public sealed record LauncherResult(string Kind, string Title, string Subtitle, 
     public Vde.Components.ILauncherSearchProvider? Provider { get; init; }
     public Vde.Components.SearchHit? Hit { get; init; }
     public string? ProviderClsid { get; init; }
+    public string? FilePath { get; init; }
 }
 
 // The start menu's data: pinned apps, recently used apps and the alphabetical list of everything, plus search.
@@ -125,6 +126,23 @@ public sealed class LauncherModel
             return [];   // a plugin's bug is the plugin's problem
         }
     }
+
+    // Files and folders under these roots (the user's own folders) whose name matches, or, with "in:" first,
+    // whose text contains what follows: "in:invoice 2026" is like grep for "invoice 2026". Local only.
+    public IReadOnlyList<string> FileRoots { get; set; } = [];
+
+    public Task<IReadOnlyList<LauncherResult>> SearchFilesAsync(string text, CancellationToken cancel = default)
+        => Task.Run<IReadOnlyList<LauncherResult>>(() =>
+        {
+            text = text.Trim();
+            bool content = text.StartsWith("in:", StringComparison.OrdinalIgnoreCase);
+            var hits = content
+                ? FileSearch.ByContent(FileRoots, text[3..].Trim(), cancel: cancel)
+                : FileSearch.ByName(FileRoots, text, cancel: cancel);
+            return hits.Select(h => new LauncherResult(h.IsDirectory ? "Folder" : "File", h.Name,
+                h.Line is { } line ? $"{h.Path}:{line}  {h.Snippet}" : h.Path, h.IsDirectory ? "folder" : "text-x-generic")
+            { FilePath = h.Path }).ToList();
+        }, cancel);
 
     // Runs a plugin hit, if the plugin is still authorized.
     public async Task<bool> ActivateAsync(LauncherResult result, CancellationToken cancel = default)
