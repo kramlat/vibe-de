@@ -47,7 +47,7 @@ install:
 	cp -a $(PUBLISH)/. $(DESTDIR)$(LIBDIR)/
 	install -m755 native/build/vwm/vwm native/build/vterm/vterm-launch $(DESTDIR)$(LIBDIR)/
 	install -d $(DESTDIR)$(PREFIX)/bin
-	install -m755 data/bin/start-vde $(DESTDIR)$(PREFIX)/bin/start-vde
+	install -m755 data/session/start-vde $(DESTDIR)$(PREFIX)/bin/start-vde
 	for b in $(BIN_LINKS); do ln -sf $(LIBDIR)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; done
 	ln -sf $(LIBDIR)/RegSvrVDE $(DESTDIR)$(PREFIX)/bin/regsvrvde
 	# data

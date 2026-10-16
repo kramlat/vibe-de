@@ -1,0 +1,50 @@
+#!/bin/sh
+# start-vde: starts the VDE session. A login manager runs it from vde.desktop; from a text console, run it by hand.
+#
+# It makes sure the session has what it needs (a runtime directory, a session bus), then becomes vde-session, which
+# starts vwm, the shell programs and your autostart programs and ends when you log out (vde-session --logout).
+# Anything that should be in every VDE session's environment can go in ~/.config/vde/environment.sh.
+
+if [ "$(id -u)" = 0 ]; then
+    echo "start-vde: not as root: the desktop is for a user" >&2
+    exit 1
+fi
+
+if [ -z "$XDG_RUNTIME_DIR" ] && [ -d "/run/user/$(id -u)" ]; then
+    XDG_RUNTIME_DIR=/run/user/$(id -u)
+    export XDG_RUNTIME_DIR
+fi
+if [ -z "$XDG_RUNTIME_DIR" ]; then
+    echo "start-vde: no XDG_RUNTIME_DIR: log in through a login manager or logind (pam_systemd), or set it yourself" >&2
+    exit 1
+fi
+
+[ -r "${XDG_CONFIG_HOME:-$HOME/.config}/vde/environment.sh" ] && . "${XDG_CONFIG_HOME:-$HOME/.config}/vde/environment.sh"
+
+# Where the session's own programs are installed (the installer puts them in /usr/lib/vde).
+for dir in "$VDE_LIBEXEC" /usr/lib/vde "$(dirname "$0")"; do
+    [ -n "$dir" ] && [ -x "$dir/vde-session" ] && session="$dir/vde-session" && break
+done
+if [ -z "$session" ]; then
+    session=$(command -v vde-session) || { echo "start-vde: vde-session is not installed" >&2; exit 1; }
+fi
+
+# The session bus: use the one systemd or the login manager made; else make one for this session.
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+    DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    export DBUS_SESSION_BUS_ADDRESS
+fi
+
+# A login manager does not show our output: keep it (the last session's too) where the user can read it.
+if [ ! -t 1 ]; then
+    state="${XDG_STATE_HOME:-$HOME/.local/state}/vde"
+    mkdir -p "$state" 2>/dev/null && {
+        [ -f "$state/session.log" ] && mv -f "$state/session.log" "$state/session.log.old"
+        exec >"$state/session.log" 2>&1
+    }
+fi
+
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- "$session" "$@"
+fi
+exec "$session" "$@"

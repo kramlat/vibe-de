@@ -7,7 +7,7 @@ login manager ──reads── /usr/share/wayland-sessions/vde.desktop ──Ex
 ```
 
 - **`data/wayland-sessions/vde.desktop`** is the session file (`DesktopNames=VDE`, so `XDG_CURRENT_DESKTOP=VDE`).
-- **`data/bin/start-vde`** is the script it runs, and the one to run by hand from a TTY. It refuses root, makes sure
+- **`data/session/start-vde`** is the script it runs, and the one to run by hand from a TTY. It refuses root, makes sure
   there is an `XDG_RUNTIME_DIR` and a session bus (`dbus-run-session` if there is none), sources
   `~/.config/vde/environment.sh` if present, writes the session's output to `~/.local/state/vde/session.log`
   (the previous one is kept as `.old`), then replaces itself with `vde-session`.
