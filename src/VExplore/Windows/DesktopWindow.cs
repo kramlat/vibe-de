@@ -28,6 +28,7 @@ public sealed class DesktopWindow : Window
     private readonly FileActions _actions;
     private readonly IFileClipboard _clipboard;
     private readonly FileTypes? _types;
+    private readonly ShortcutStyleService _shortcuts;
     private readonly Canvas _canvas = new();
     private readonly Dictionary<string, Border> _icons = new(StringComparer.Ordinal);
     private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
@@ -38,8 +39,10 @@ public sealed class DesktopWindow : Window
     private bool _moved;
 
     public DesktopWindow(string desktopFolder, IHive hive, Action<string> openFile, FileTypes? types = null,
-        FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null)
+        FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null, ShortcutStyleService? shortcuts = null)
     {
+        _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
+        _shortcuts.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() => _canvas.ContextMenu = BuildMenu());
         _folder = desktopFolder;
         _hive = hive;
         _open = openFile;
@@ -85,7 +88,9 @@ public sealed class DesktopWindow : Window
     public IReadOnlyCollection<string> SelectedNames => _selected;
     public int Columns => Math.Max(1, (int)((Bounds.Width > 0 ? Bounds.Width : Width) / CellWidth));
     public int Rows => Math.Max(1, (int)((Bounds.Height > 0 ? Bounds.Height : Height) / CellHeight));
-    public IReadOnlyList<string> MenuLabels => _canvas.ContextMenu!.Items.OfType<MenuItem>().Select(m => m.Header?.ToString() ?? "").ToList();
+    public IReadOnlyList<string> MenuLabels => _canvas.ContextMenu!.Items.OfType<MenuItem>().Select(m => ((Grid)m.Header!).Children.OfType<TextBlock>().First().Text ?? "").ToList();
+    public IReadOnlyList<string> MenuShortcuts => _canvas.ContextMenu!.Items.OfType<MenuItem>().Select(m => ((Grid)m.Header!).Children.OfType<TextBlock>().Last().Text ?? "").ToList();
+    public ShortcutStyle ShortcutStyle => _shortcuts.Style;
     public Cell CellOf(string name) => _layout[name];
     public bool IconsVisible => _canvas.Children.Any(c => c is Border);
 
@@ -332,27 +337,49 @@ public sealed class DesktopWindow : Window
 
     private ContextMenu BuildMenu()
     {
-        var newFolder = new MenuItem { Header = "New folder" };
-        newFolder.Click += (_, _) => NewFolder();
-        var paste = new MenuItem { Header = "Paste" };
-        paste.Click += async (_, _) => await PasteAsync();
-        var refresh = new MenuItem { Header = "Refresh" };
-        refresh.Click += (_, _) => Reload();
-        var settings = new MenuItem { Header = "Desktop settings" };
-        settings.Click += (_, _) => _openSettings?.Invoke();
-        return new ContextMenu { Items = { newFolder, paste, refresh, new Separator(), settings } };
+        var s = _shortcuts.Style;
+        MenuItem Item(string text, ShortcutAction? action, Action click)
+        {
+            var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), MinWidth = 200 };
+            header.Children.Add(new TextBlock { Text = text });
+            var hint = new TextBlock { Text = action is { } a ? ShortcutMap.Label(a, s) : "", Opacity = 0.6, Margin = new Thickness(24, 0, 0, 0) };
+            Grid.SetColumn(hint, 1);
+            header.Children.Add(hint);
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => click();
+            return item;
+        }
+        return new ContextMenu
+        {
+            Items =
+            {
+                Item("New folder", ShortcutAction.NewFolder, () => NewFolder()),
+                Item("Paste", ShortcutAction.Paste, () => _ = PasteAsync()),
+                Item("Refresh", ShortcutAction.Refresh, Reload),
+                new Separator(),
+                Item("Desktop settings", null, () => _openSettings?.Invoke()),
+            },
+        };
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter) { OpenSelected(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.C) { _ = CopyAsync(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.X) { _ = CutAsync(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.V) { _ = PasteAsync(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.A) { foreach (var n in _entries) _selected.Add(n.Name); Refresh(); e.Handled = true; }
-        else if (e.Key == Key.Delete) { DeleteSelected(); e.Handled = true; }
-        else if (e.Key == Key.F2) { _ = RenameWithDialogAsync(); e.Handled = true; }
-        else if (e.Key == Key.F5) { Reload(); e.Handled = true; }
+        if (_shortcuts.ActionFor(ShortcutInput.From(e)) is not { } action) return;
+        e.Handled = true;
+        switch (action)
+        {
+            case ShortcutAction.Open: OpenSelected(); break;
+            case ShortcutAction.Copy: _ = CopyAsync(); break;
+            case ShortcutAction.Cut: _ = CutAsync(); break;
+            case ShortcutAction.Paste: _ = PasteAsync(); break;
+            case ShortcutAction.SelectAll: foreach (var n in _entries) _selected.Add(n.Name); Refresh(); break;
+            case ShortcutAction.NewFolder: NewFolder(); break;
+            case ShortcutAction.Delete: DeleteSelected(); break;
+            case ShortcutAction.DeletePermanently: DeleteSelected(permanent: true); break;
+            case ShortcutAction.Rename: _ = RenameWithDialogAsync(); break;
+            case ShortcutAction.Refresh: Reload(); break;
+            default: e.Handled = false; break;   // back, forward, up and the address bar mean nothing on the desktop
+        }
     }
 
     protected override void OnClosed(EventArgs e)

@@ -35,7 +35,7 @@ public sealed class FileListView : UserControl
         _list.SelectionChanged += (_, _) => SelectionChanged?.Invoke(this, EventArgs.Empty);
         _list.KeyDown += (_, e) =>
         {
-            if (e.Key == Key.Enter) { InvokeSelected(); e.Handled = true; }
+            if (e.Key == Key.Enter && EnterOpens) { InvokeSelected(); e.Handled = true; }
         };
 
         var layout = new DockPanel();
@@ -47,6 +47,9 @@ public sealed class FileListView : UserControl
 
     // Used to find each file's icon and description; without it files get generic icons.
     public FileTypes? Types { get; set; }
+
+    // True: Enter opens the selection. False: the host gets Enter (Mac style uses Return to rename).
+    public bool EnterOpens { get; set; } = true;
 
     public SortKey SortKey { get; private set; } = SortKey.Name;
     public bool SortDescending { get; private set; }

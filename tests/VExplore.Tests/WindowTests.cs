@@ -422,3 +422,117 @@ public class DesktopWindowTests
         Assert.False(bare.IconsVisible);
     }
 }
+
+public class ShortcutWindowTests
+{
+    private static ShortcutStyleService Style(bool apple)
+        => new(new Hive("HKCU") { Identity = RegistryIdentity.Root }, () => apple ? [new KeyboardDevice("Apple Keyboard", 3, 0x05ac, 1, true)] : [new KeyboardDevice("PC", 3, 1, 1, false)]);
+
+    private static void Press(Window window, Avalonia.Input.Key key, Avalonia.Input.KeyModifiers mods)
+        => window.KeyPressQwerty(KeyFor(key), Raw(mods));
+
+    private static Avalonia.Input.RawInputModifiers Raw(Avalonia.Input.KeyModifiers m)
+        => (m.HasFlag(Avalonia.Input.KeyModifiers.Control) ? Avalonia.Input.RawInputModifiers.Control : 0)
+         | (m.HasFlag(Avalonia.Input.KeyModifiers.Shift) ? Avalonia.Input.RawInputModifiers.Shift : 0)
+         | (m.HasFlag(Avalonia.Input.KeyModifiers.Alt) ? Avalonia.Input.RawInputModifiers.Alt : 0)
+         | (m.HasFlag(Avalonia.Input.KeyModifiers.Meta) ? Avalonia.Input.RawInputModifiers.Meta : 0);
+
+    private static Avalonia.Input.PhysicalKey KeyFor(Avalonia.Input.Key key) => key switch
+    {
+        Avalonia.Input.Key.C => Avalonia.Input.PhysicalKey.C,
+        Avalonia.Input.Key.V => Avalonia.Input.PhysicalKey.V,
+        Avalonia.Input.Key.N => Avalonia.Input.PhysicalKey.N,
+        _ => throw new ArgumentOutOfRangeException(nameof(key)),
+    };
+
+    private sealed class Env : IDisposable
+    {
+        public string Root { get; } = Path.Combine(Path.GetTempPath(), "vexplore-keys-" + Guid.NewGuid().ToString("N"));
+        public KnownFolders Folders { get; }
+        public Trash Trash { get; }
+        public Vde.Shell.Controls.InMemoryFileClipboard Clip { get; } = new();
+        public Env()
+        {
+            Directory.CreateDirectory(Path.Combine(Root, "home", "a")); Directory.CreateDirectory(Path.Combine(Root, "home", "b"));
+            File.WriteAllText(Path.Combine(Root, "home", "a", "one.txt"), "1");
+            var env = new Dictionary<string, string> { ["HOME"] = Path.Combine(Root, "home"), ["XDG_DATA_HOME"] = Path.Combine(Root, "data") };
+            Folders = new KnownFolders(new XdgDirectories(k => env.GetValueOrDefault(k)));
+            Trash = new Trash(new XdgDirectories(k => env.GetValueOrDefault(k)));
+        }
+        public string A => Path.Combine(Root, "home", "a");
+        public string B => Path.Combine(Root, "home", "b");
+        public void Dispose() => Directory.Delete(Root, recursive: true);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(true)]    // Command+C / Command+V on an Apple keyboard
+    [InlineData(false)]   // Ctrl+C / Ctrl+V on a PC
+    public async Task Copy_and_paste_by_keyboard_use_the_modifier_of_the_keyboard_in_use(bool apple)
+    {
+        using var e = new Env();
+        var from = new FileManagerWindow(e.A, e.Folders, _ => { }, null, new FileActions(e.Trash), e.Clip, Style(apple)); from.Show();
+        var to = new FileManagerWindow(e.B, e.Folders, _ => { }, null, new FileActions(e.Trash), e.Clip, Style(apple)); to.Show();
+        var primary = apple ? Avalonia.Input.KeyModifiers.Meta : Avalonia.Input.KeyModifiers.Control;
+        var wrong = apple ? Avalonia.Input.KeyModifiers.Control : Avalonia.Input.KeyModifiers.Meta;
+
+        from.SelectEntries("one.txt");
+        Press(from, Avalonia.Input.Key.C, wrong);                          // the other style's modifier does nothing
+        await Task.Delay(50);
+        Assert.Null(e.Clip.Current);
+
+        Press(from, Avalonia.Input.Key.C, primary);
+        await Task.Delay(50);
+        Assert.Equal(TransferKind.Copy, e.Clip.Current!.Kind);
+        Press(to, Avalonia.Input.Key.V, primary);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!File.Exists(Path.Combine(e.B, "one.txt")) && DateTime.UtcNow < deadline) { await Task.Delay(20); Avalonia.Threading.Dispatcher.UIThread.RunJobs(); }
+        Assert.True(File.Exists(Path.Combine(e.B, "one.txt")));
+    }
+
+    [AvaloniaFact]
+    public void The_file_managers_tooltips_show_apple_symbols_only_with_an_apple_keyboard()
+    {
+        using var e = new Env();
+        var pc = new FileManagerWindow(e.A, e.Folders, _ => { }, null, new FileActions(e.Trash), e.Clip, Style(false)); pc.Show();
+        var mac = new FileManagerWindow(e.A, e.Folders, _ => { }, null, new FileActions(e.Trash), e.Clip, Style(true)); mac.Show();
+
+        Assert.Equal(ShortcutStyle.Pc, pc.ShortcutStyle);
+        Assert.Equal("Back (Alt+←)", pc.BackHint);
+        Assert.Equal(ShortcutStyle.Mac, mac.ShortcutStyle);
+        Assert.Equal("Back (⌘[)", mac.BackHint);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(true, "⇧⌘N", "⌘V", "⌘R")]
+    [InlineData(false, "Ctrl+Shift+N", "Ctrl+V", "F5")]
+    public void The_desktop_menu_shows_each_shortcut_in_the_style_of_the_keyboard(bool apple, string newFolder, string paste, string refresh)
+    {
+        using var d = new DesktopTestEnv();
+        var w = new DesktopWindow(d.Desktop, new Hive("HKCU") { Identity = RegistryIdentity.Root }, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), null, Style(apple));
+        w.Show();
+
+        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Desktop settings" }, w.MenuLabels);
+        Assert.Equal(new[] { newFolder, paste, refresh, "" }, w.MenuShortcuts);
+    }
+
+    [AvaloniaFact]
+    public async Task On_the_desktop_command_n_makes_a_folder_with_an_apple_keyboard_and_ctrl_n_does_not()
+    {
+        using var d = new DesktopTestEnv();
+        var w = new DesktopWindow(d.Desktop, new Hive("HKCU") { Identity = RegistryIdentity.Root }, _ => { }, null, new FileActions(new Trash()), new Vde.Shell.Controls.InMemoryFileClipboard(), null, Style(true));
+        w.Show();
+
+        Press(w, Avalonia.Input.Key.N, Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Shift);
+        await Task.Delay(50);
+        Assert.Empty(Directory.GetDirectories(d.Desktop));
+        Press(w, Avalonia.Input.Key.N, Avalonia.Input.KeyModifiers.Meta | Avalonia.Input.KeyModifiers.Shift);
+        Assert.Single(Directory.GetDirectories(d.Desktop));
+    }
+
+    private sealed class DesktopTestEnv : IDisposable
+    {
+        public string Desktop { get; } = Path.Combine(Path.GetTempPath(), "vexplore-dk-" + Guid.NewGuid().ToString("N"));
+        public DesktopTestEnv() => Directory.CreateDirectory(Desktop);
+        public void Dispose() => Directory.Delete(Desktop, recursive: true);
+    }
+}

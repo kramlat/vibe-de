@@ -2365,3 +2365,181 @@ public class DesktopTests
         Assert.EndsWith("3840x2160.png", WallpaperCatalog.BestImage(Path.Combine(fx.Root, "usr-share/wallpapers/Dunes/contents/images"), 3000, 2000));
     }
 }
+
+public class KeyboardStyleTests
+{
+    private const string Devices = """
+        I: Bus=0019 Vendor=0000 Product=0001 Version=0000
+        N: Name="Power Button"
+        H: Handlers=kbd event0
+        B: PROP=0
+
+        I: Bus=0003 Vendor=046d Product=c52b Version=0111
+        N: Name="Logitech USB Receiver"
+        H: Handlers=sysrq kbd event3
+
+        I: Bus=0003 Vendor=05ac Product=0265 Version=0110
+        N: Name="Apple Inc. Magic Trackpad 2"
+        H: Handlers=mouse1 event7
+
+        I: Bus=0003 Vendor=05ac Product=0250 Version=0111
+        N: Name="Apple Inc. Magic Keyboard with Numeric Keypad"
+        H: Handlers=sysrq kbd leds event5
+        """;
+
+    [Fact]
+    public void Apple_keyboards_are_found_by_vendor_or_name_but_trackpads_and_other_makers_are_not()
+    {
+        var keyboards = KeyboardDetector.Parse(Devices);
+
+        Assert.Equal(new[] { "Power Button", "Logitech USB Receiver", "Apple Inc. Magic Keyboard with Numeric Keypad" }, keyboards.Select(k => k.Name));   // the trackpad has no keyboard handler
+        Assert.Equal(new[] { false, false, true }, keyboards.Select(k => k.IsApple));
+
+        var bluetooth = "I: Bus=0005 Vendor=004c Product=0267\nN: Name=\"Magic Keyboard\"\nH: Handlers=sysrq kbd event9\n";
+        Assert.True(Assert.Single(KeyboardDetector.Parse(bluetooth)).IsApple);                                       // Apple's Bluetooth vendor id
+        var named = "I: Bus=0003 Vendor=1234 Product=0001\nN: Name=\"Apple Internal Keyboard / Trackpad\"\nH: Handlers=sysrq kbd event2\n";
+        Assert.True(Assert.Single(KeyboardDetector.Parse(named)).IsApple);                                           // by name
+        var pineapple = "I: Bus=0003 Vendor=1234 Product=0001\nN: Name=\"Pineapple Keys\"\nH: Handlers=sysrq kbd event2\n";
+        Assert.False(Assert.Single(KeyboardDetector.Parse(pineapple)).IsApple);                                      // a whole word, not a substring
+        Assert.Empty(KeyboardDetector.Detect("/nonexistent/devices"));
+        Assert.Empty(KeyboardDetector.Parse(""));
+    }
+
+    private static ShortcutStyleService Service(Hive hive, bool apple, out Func<bool> present, string? preference = null)
+    {
+        bool flag = apple;
+        present = () => flag;
+        if (preference is not null) hive.SetValue(ShortcutStyleService.KeyPath, "ShortcutStyle", RegistryValueKind.String, preference);
+        var service = new ShortcutStyleService(hive, () => flag ? [new KeyboardDevice("Apple Keyboard", 3, 0x05ac, 1, true)] : [new KeyboardDevice("PC", 3, 1, 1, false)]);
+        _ = present;
+        return service;
+    }
+
+    [Fact]
+    public void Auto_uses_mac_style_only_while_an_apple_keyboard_is_attached()
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        bool apple = false;
+        var service = new ShortcutStyleService(hive, () => apple ? [new KeyboardDevice("Apple Keyboard", 3, 0x05ac, 1, true)] : [new KeyboardDevice("PC", 3, 1, 1, false)]);
+        int changes = 0;
+        service.Changed += (_, _) => changes++;
+
+        Assert.Equal(ShortcutStyle.Pc, service.Style);
+        apple = true; service.Refresh();                                  // plugged in
+        Assert.Equal(ShortcutStyle.Mac, service.Style);
+        service.Refresh();                                                // nothing changed: no event
+        apple = false; service.Refresh();                                 // unplugged
+        Assert.Equal(ShortcutStyle.Pc, service.Style);
+        Assert.Equal(2, changes);
+    }
+
+    [Fact]
+    public void The_users_choice_overrides_detection_and_follows_the_registry_live()
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var service = new ShortcutStyleService(hive, () => []);           // no Apple keyboard at all
+        Assert.Equal(ShortcutStyle.Pc, service.Style);
+
+        hive.SetValue(ShortcutStyleService.KeyPath, "ShortcutStyle", RegistryValueKind.String, "Mac");
+        Assert.Equal(ShortcutStyle.Mac, service.Style);                   // forced
+        hive.SetValue(ShortcutStyleService.KeyPath, "ShortcutStyle", RegistryValueKind.String, "Pc");
+        Assert.Equal(ShortcutStyle.Pc, service.Style);
+        hive.SetValue(ShortcutStyleService.KeyPath, "ShortcutStyle", RegistryValueKind.String, "nonsense");
+        Assert.Equal(ShortcutPreference.Auto, service.Preference);        // junk means Auto
+
+        var withApple = new ShortcutStyleService(hive, () => [new KeyboardDevice("Apple", 3, 0x05ac, 1, true)]);
+        hive.SetValue(ShortcutStyleService.KeyPath, "ShortcutStyle", RegistryValueKind.String, "Pc");
+        Assert.Equal(ShortcutStyle.Pc, withApple.Style);                  // a PC choice wins even with an Apple keyboard
+    }
+
+    [Theory]
+    [InlineData("C", true, false, false, false, ShortcutStyle.Pc, ShortcutAction.Copy)]
+    [InlineData("C", false, false, false, true, ShortcutStyle.Mac, ShortcutAction.Copy)]       // Command+C on an Apple keyboard
+    [InlineData("C", true, false, false, false, ShortcutStyle.Mac, null)]                       // Ctrl+C is not a Mac shortcut
+    [InlineData("C", false, false, false, true, ShortcutStyle.Pc, null)]                        // the Windows key is not Ctrl
+    [InlineData("N", true, true, false, false, ShortcutStyle.Pc, ShortcutAction.NewFolder)]
+    [InlineData("N", false, true, false, true, ShortcutStyle.Mac, ShortcutAction.NewFolder)]
+    [InlineData("N", true, false, false, false, ShortcutStyle.Pc, null)]                        // modifiers must match exactly
+    [InlineData("Delete", false, false, false, false, ShortcutStyle.Pc, ShortcutAction.Delete)]
+    [InlineData("Back", false, false, false, true, ShortcutStyle.Mac, ShortcutAction.Delete)]   // ⌘⌫
+    [InlineData("Back", false, false, true, true, ShortcutStyle.Mac, ShortcutAction.DeletePermanently)]
+    [InlineData("OemOpenBrackets", false, false, false, true, ShortcutStyle.Mac, ShortcutAction.Back)]
+    [InlineData("Left", false, false, true, false, ShortcutStyle.Pc, ShortcutAction.Back)]
+    [InlineData("R", false, false, false, true, ShortcutStyle.Mac, ShortcutAction.Refresh)]
+    [InlineData("F5", false, false, false, false, ShortcutStyle.Pc, ShortcutAction.Refresh)]
+    [InlineData("Enter", false, false, false, false, ShortcutStyle.Mac, ShortcutAction.Rename)]
+    [InlineData("Enter", false, false, false, false, ShortcutStyle.Pc, ShortcutAction.Open)]
+    public void Key_presses_mean_the_right_action_in_each_style(string key, bool ctrl, bool shift, bool alt, bool meta, ShortcutStyle style, ShortcutAction? expected)
+        => Assert.Equal(expected, ShortcutMap.Match(new KeyPress(key, ctrl, shift, alt, meta), style));
+
+    [Theory]
+    [InlineData(ShortcutAction.Copy, ShortcutStyle.Pc, "Ctrl+C")]
+    [InlineData(ShortcutAction.Copy, ShortcutStyle.Mac, "⌘C")]
+    [InlineData(ShortcutAction.NewFolder, ShortcutStyle.Pc, "Ctrl+Shift+N")]
+    [InlineData(ShortcutAction.NewFolder, ShortcutStyle.Mac, "⇧⌘N")]
+    [InlineData(ShortcutAction.DeletePermanently, ShortcutStyle.Pc, "Shift+Delete")]
+    [InlineData(ShortcutAction.DeletePermanently, ShortcutStyle.Mac, "⌥⌘⌫")]
+    [InlineData(ShortcutAction.Back, ShortcutStyle.Pc, "Alt+←")]
+    [InlineData(ShortcutAction.Back, ShortcutStyle.Mac, "⌘[")]
+    [InlineData(ShortcutAction.Delete, ShortcutStyle.Mac, "⌘⌫")]
+    [InlineData(ShortcutAction.Rename, ShortcutStyle.Pc, "F2")]
+    [InlineData(ShortcutAction.Open, ShortcutStyle.Mac, "⌘O")]
+    public void Shortcuts_are_written_for_the_style(ShortcutAction action, ShortcutStyle style, string expected)
+        => Assert.Equal(expected, ShortcutMap.Label(action, style));
+
+    [Fact]
+    public void Every_action_has_a_shortcut_in_both_styles_and_none_is_ambiguous()
+    {
+        foreach (var style in new[] { ShortcutStyle.Pc, ShortcutStyle.Mac })
+        {
+            var seen = new Dictionary<string, ShortcutAction>();
+            foreach (var action in Enum.GetValues<ShortcutAction>())
+            {
+                var shortcuts = ShortcutMap.For(action, style);
+                Assert.NotEmpty(shortcuts);
+                foreach (var s in shortcuts)
+                    Assert.True(seen.TryAdd(s.Key + "/" + s.Mods, action), $"{style}: {s} used by both {seen[s.Key + "/" + s.Mods]} and {action}");
+            }
+        }
+    }
+}
+
+public class AppleKeyboardInUseTests
+{
+    private static ShortcutStyleService Make(bool apple, string? preference = null)
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        if (preference is not null) hive.SetValue(ShortcutStyleService.KeyPath, "ShortcutStyle", RegistryValueKind.String, preference);
+        return new ShortcutStyleService(hive, () => apple ? [new KeyboardDevice("Apple Keyboard", 3, 0x05ac, 1, true)] : [new KeyboardDevice("PC", 3, 1, 1, false)]);
+    }
+
+    [Fact]
+    public void Command_shortcuts_work_when_an_apple_keyboard_is_attached_even_with_PC_labels_forced_but_never_without_one()
+    {
+        var press = new KeyPress("C", Ctrl: false, Shift: false, Alt: false, Meta: true);   // Command+C
+
+        Assert.Equal(ShortcutAction.Copy, Make(apple: true).ActionFor(press));                 // Auto + Apple keyboard: Mac
+        Assert.Equal(ShortcutAction.Copy, Make(apple: true, "Pc").ActionFor(press));            // PC labels forced, but Command still works
+        Assert.Equal(ShortcutAction.Copy, Make(apple: false, "Mac").ActionFor(press));          // Mac forced by the user
+        Assert.Null(Make(apple: false).ActionFor(press));                                        // no Apple keyboard, Auto: the Windows key is not Ctrl
+        Assert.Null(Make(apple: false, "Pc").ActionFor(press));
+    }
+
+    [Fact]
+    public void Ctrl_shortcuts_keep_working_for_PC_style_and_ctrl_is_never_mistaken_for_command()
+    {
+        var ctrlC = new KeyPress("C", Ctrl: true, Shift: false, Alt: false, Meta: false);
+        Assert.Equal(ShortcutAction.Copy, Make(apple: false).ActionFor(ctrlC));
+        Assert.Equal(ShortcutAction.Copy, Make(apple: true, "Pc").ActionFor(ctrlC));            // a PC-style choice still honours Ctrl
+        Assert.Null(Make(apple: true).ActionFor(ctrlC));                                         // Mac style: Ctrl+C is not Copy
+        Assert.Null(Make(apple: true, "Pc").ActionFor(new KeyPress("C", true, false, false, true)));   // Ctrl and Command together: neither
+    }
+
+    [Fact]
+    public void Labels_use_the_apple_symbols_only_when_an_apple_keyboard_is_found()
+    {
+        Assert.Equal("⌘C", ShortcutMap.Label(ShortcutAction.Copy, Make(apple: true).Style));
+        Assert.Equal("Ctrl+C", ShortcutMap.Label(ShortcutAction.Copy, Make(apple: false).Style));
+        Assert.Equal(ShortcutStyle.Pc, Make(apple: true, "Pc").Style);                          // forcing PC labels wins over detection
+    }
+}

@@ -14,6 +14,10 @@ public sealed class ShellApp : Application
 {
     public static ExplorerHost? Host { get; set; }
     public static Func<Window>? FirstWindow { get; set; }
+
+    // One per process: follows HKCU\Software\Vde\Input and notices Apple keyboards being plugged in or removed.
+    public static ShortcutStyleService? Shortcuts { get; private set; }
+    private IDisposable? _poll;
     private IDisposable? _binding;
 
     public override void OnFrameworkInitializationCompleted()
@@ -22,6 +26,8 @@ public sealed class ShellApp : Application
         {
             var engine = new ThemeEngine(ThemeCatalog.Discover());
             _binding = engine.BindTo(host.CurrentUser);
+            Shortcuts = new ShortcutStyleService(host.CurrentUser);
+            _poll = Shortcuts.Poll(TimeSpan.FromSeconds(3));
         }
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop && FirstWindow is { } make)
             desktop.MainWindow = make();
@@ -48,7 +54,7 @@ public sealed class ShellApp : Application
             {
                 Console.Error.WriteLine("vexplore: " + e.Message);
             }
-        }, types);
+        }, types, shortcuts: Shortcuts);
     }
 
     public static IReadOnlyList<string> Desktops()

@@ -478,3 +478,22 @@ public class FileManagerControlTests
         finally { Directory.Delete(dir, recursive: true); }
     }
 }
+
+public class ShortcutInputTests
+{
+    [Fact]
+    public void Avalonias_key_names_match_the_shortcut_tables_names()
+    {
+        Assert.Equal("Enter", ShortcutInput.KeyName(Avalonia.Input.Key.Return));
+        Assert.Equal("Enter", ShortcutInput.KeyName(Avalonia.Input.Key.Enter));
+        Assert.Equal("Back", ShortcutInput.KeyName(Avalonia.Input.Key.Back));
+        Assert.Equal("OemOpenBrackets", ShortcutInput.KeyName(Avalonia.Input.Key.OemOpenBrackets));
+        Assert.Equal("C", ShortcutInput.KeyName(Avalonia.Input.Key.C));
+        Assert.Equal("F2", ShortcutInput.KeyName(Avalonia.Input.Key.F2));
+        // every key the tables use must be a real Avalonia key (or Enter), or the shortcut could never fire
+        foreach (var style in new[] { ShortcutStyle.Pc, ShortcutStyle.Mac })
+            foreach (var action in Enum.GetValues<ShortcutAction>())
+                foreach (var shortcut in ShortcutMap.For(action, style))
+                    Assert.True(shortcut.Key == "Enter" || Enum.TryParse<Avalonia.Input.Key>(shortcut.Key, out _), $"{shortcut.Key} is not an Avalonia Key");
+    }
+}

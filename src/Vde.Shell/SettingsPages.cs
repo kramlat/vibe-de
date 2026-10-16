@@ -39,12 +39,23 @@ public static class BuiltInPages
         new("history", "Notifications kept in history", SettingKind.Number, @"Software\Vde\Notifications", "HistoryLimit") { Min = 0, Max = 10_000, Default = 200L },
     ]);
 
-    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, Notifications];
+    public static readonly SettingsPage Keyboard = new("keyboard", "Keyboard",
+    [
+        new("shortcuts", "Keyboard shortcuts", SettingKind.Choice, ShortcutStyleService.KeyPath, "ShortcutStyle", "Automatic uses Command (⌘) shortcuts only while an Apple keyboard is attached.")
+        {
+            Default = "Auto",
+            Choices = [new("Auto", "Automatic (Apple shortcuts only with an Apple keyboard)"), new("Pc", "PC shortcuts (Ctrl)"), new("Mac", "Apple shortcuts (⌘)")],
+        },
+    ]);
+
+    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, Notifications, Keyboard];
 
     public static readonly IReadOnlyList<ControlPanelItem> Items =
     [
         new("appearance", "Appearance", "Theme, light or dark mode and accent colour", "preferences-desktop-theme", ControlPanelCategories.Appearance,
             ["theme", "dark", "light", "colour", "color", "accent", "look"], ItemSource.BuiltIn) { PageId = "appearance" },
+        new("keyboard", "Keyboard", "Shortcut style: PC or Apple", "input-keyboard", ControlPanelCategories.Devices,
+            ["shortcuts", "apple", "mac", "command", "ctrl", "hotkeys"], ItemSource.BuiltIn) { PageId = "keyboard" },
         new("notifications", "Notifications", "Do not disturb and how long notifications stay", "preferences-desktop-notification", ControlPanelCategories.System,
             ["dnd", "focus", "quiet", "toast", "alerts"], ItemSource.BuiltIn) { PageId = "notifications" },
     ];

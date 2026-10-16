@@ -6,6 +6,7 @@ using Avalonia.Layout;
 using Vde.Shell;
 using Vde.Shell.Controls;
 using Vde.Shell.ComDlg;
+using Vibe.Registry;
 
 namespace VExplore.Windows;
 
@@ -25,12 +26,15 @@ public sealed class FileManagerWindow : Window
     private FolderWatcher? _watcher;
 
     private readonly FileActions _actions;
+    private readonly ShortcutStyleService _shortcuts;
     private readonly IFileClipboard _clipboard;
 
     public FileManagerWindow(string startFolder, KnownFolders folders, Action<string> openFile, FileTypes? types = null,
-        FileActions? actions = null, IFileClipboard? clipboard = null)
+        FileActions? actions = null, IFileClipboard? clipboard = null, ShortcutStyleService? shortcuts = null)
     {
         _openFile = openFile;
+        _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
+        _shortcuts.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(ApplyShortcutStyle);
         _actions = actions ?? new FileActions(new Trash());
         _clipboard = clipboard ?? new AvaloniaFileClipboard(() => GetTopLevel(this));
         Home = folders.Get(KnownFolder.Home);
@@ -80,10 +84,27 @@ public sealed class FileManagerWindow : Window
         root.Children.Add(_list);
         Content = root;
 
+        ApplyShortcutStyle();
         Reload();
     }
 
     public string Home { get; }
+    public ShortcutStyle ShortcutStyle => _shortcuts.Style;
+    public string BackHint => Hint(_back);
+
+    private static string Hint(Button b) => ToolTip.GetTip(b) as string ?? "";
+
+    // Button tooltips and Enter's meaning follow the shortcut style (Mac symbols only with an Apple keyboard).
+    private void ApplyShortcutStyle()
+    {
+        var s = _shortcuts.Style;
+        ToolTip.SetTip(_back, "Back (" + ShortcutMap.Label(ShortcutAction.Back, s) + ")");
+        ToolTip.SetTip(_forward, "Forward (" + ShortcutMap.Label(ShortcutAction.Forward, s) + ")");
+        ToolTip.SetTip(_up, "Up (" + ShortcutMap.Label(ShortcutAction.Up, s) + ")");
+        ToolTip.SetTip(_refresh, "Refresh (" + ShortcutMap.Label(ShortcutAction.Refresh, s) + ")");
+        _list.EnterOpens = s == ShortcutStyle.Pc;
+    }
+
     public string CurrentFolder => _history.Current;
     public bool CanGoBack => _history.CanGoBack;
     public bool CanGoForward => _history.CanGoForward;
@@ -277,18 +298,29 @@ public sealed class FileManagerWindow : Window
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.KeyModifiers == KeyModifiers.Alt && e.Key == Key.Left) { GoBack(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Alt && e.Key == Key.Right) { GoForward(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Alt && e.Key == Key.Up) { GoUp(); e.Handled = true; }
-        else if (e.Key == Key.F5) { Reload(); e.Handled = true; }
-        else if (_address.IsEditing) return;   // typing a path: the keys below belong to the text box
-        else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.C) { _ = CopyAsync(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.X) { _ = CutAsync(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Control && e.Key == Key.V) { _ = PasteAsync(); e.Handled = true; }
-        else if (e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key == Key.N) { NewFolder(); e.Handled = true; }
-        else if (e.KeyModifiers == KeyModifiers.Shift && e.Key == Key.Delete) { _ = DeletePermanentlyAsync(); e.Handled = true; }
-        else if (e.Key == Key.Delete) { DeleteSelected(); e.Handled = true; }
-        else if (e.Key == Key.F2) { _ = BeginRenameAsync(); e.Handled = true; }
-        else if (e.Key == Key.Back && !_address.IsEditing) { GoUp(); e.Handled = true; }
+        if (_address.IsEditing) return;   // typing a path: the keys belong to the text box
+        var press = ShortcutInput.From(e);
+        if (_shortcuts.ActionFor(press) is not { } action) return;
+        e.Handled = true;
+        switch (action)
+        {
+            case ShortcutAction.Back: GoBack(); break;
+            case ShortcutAction.Forward: GoForward(); break;
+            case ShortcutAction.Up: GoUp(); break;
+            case ShortcutAction.Refresh: Reload(); break;
+            case ShortcutAction.Copy: _ = CopyAsync(); break;
+            case ShortcutAction.Cut: _ = CutAsync(); break;
+            case ShortcutAction.Paste: _ = PasteAsync(); break;
+            case ShortcutAction.SelectAll: _list.SelectAll(); break;
+            case ShortcutAction.NewFolder: NewFolder(); break;
+            case ShortcutAction.DeletePermanently: _ = DeletePermanentlyAsync(); break;
+            case ShortcutAction.Delete: DeleteSelected(); break;
+            case ShortcutAction.Rename: _ = BeginRenameAsync(); break;
+            case ShortcutAction.FocusAddress: _address.BeginEdit(); break;
+            case ShortcutAction.Open:
+                if (press.Key != "Enter") Open(_list.SelectedEntries);   // plain Enter is the list's own
+                else e.Handled = false;
+                break;
+        }
     }
 }
