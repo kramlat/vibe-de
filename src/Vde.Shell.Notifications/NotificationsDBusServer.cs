@@ -28,6 +28,9 @@ public sealed class NotificationsDBusServer : IPathMethodHandler, IDisposable
         _center.ActionInvoked += OnActionInvoked;
     }
 
+    // Completes when the bus connection is lost.
+    public Task<Exception?> DisconnectedAsync() => _connection.DisconnectedAsync();
+
     public string Path => ObjectPath;
     public bool HandlesChildPaths => false;
 
