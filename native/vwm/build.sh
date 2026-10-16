@@ -22,7 +22,7 @@ if [ ! -f "$prefix/share/pkgconfig/wayland-protocols.pc" ]; then
   quiet ninja -C "$native/build/wp" install
 fi
 if [ ! -f "$prefix/lib/pkgconfig/wlroots-0.19.pc" ]; then
-  quiet meson setup "$native/build/wlr" "$native/third_party/wlroots" --prefix="$prefix" -Ddefault_library=static -Dexamples=false \
+  quiet meson setup "$native/build/wlr" "$native/third_party/wlroots" --prefix="$prefix" --libdir=lib -Ddefault_library=static -Dexamples=false \
     -Dxwayland=enabled -Drenderers=gles2 -Dbackends=drm,libinput,x11 -Dallocators=gbm -Dcolor-management=disabled -Dsession=enabled
   quiet ninja -C "$native/build/wlr" install
 fi
