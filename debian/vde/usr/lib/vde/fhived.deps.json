@@ -1,0 +1,56 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v9.0/linux-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v9.0": {},
+    ".NETCoreApp,Version=v9.0/linux-x64": {
+      "fhived/1.0.0": {
+        "dependencies": {
+          "Vibe.Registry.Remote": "1.0.0"
+        },
+        "runtime": {
+          "fhived.dll": {}
+        }
+      },
+      "Vibe.Registry/1.0.0": {
+        "runtime": {
+          "Vibe.Registry.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Vibe.Registry.Remote/1.0.0": {
+        "dependencies": {
+          "Vibe.Registry": "1.0.0"
+        },
+        "runtime": {
+          "Vibe.Registry.Remote.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "fhived/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vibe.Registry/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vibe.Registry.Remote/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

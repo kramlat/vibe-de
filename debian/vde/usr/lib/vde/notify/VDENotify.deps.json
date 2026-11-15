@@ -1,0 +1,105 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v9.0/linux-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v9.0": {},
+    ".NETCoreApp,Version=v9.0/linux-x64": {
+      "VDENotify/1.0.0": {
+        "dependencies": {
+          "Vde.Shell.Notifications.DBus": "1.0.0",
+          "Vibe.Registry.Remote": "1.0.0"
+        },
+        "runtime": {
+          "VDENotify.dll": {}
+        }
+      },
+      "Tmds.DBus.Protocol/0.95.1": {
+        "runtime": {
+          "lib/net9.0/Tmds.DBus.Protocol.dll": {
+            "assemblyVersion": "0.95.1.0",
+            "fileVersion": "0.95.1.0"
+          }
+        }
+      },
+      "Vde.Shell.Notifications/1.0.0": {
+        "dependencies": {
+          "Vibe.Registry": "1.0.0"
+        },
+        "runtime": {
+          "Vde.Shell.Notifications.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Vde.Shell.Notifications.DBus/1.0.0": {
+        "dependencies": {
+          "Tmds.DBus.Protocol": "0.95.1",
+          "Vde.Shell.Notifications": "1.0.0"
+        },
+        "runtime": {
+          "Vde.Shell.Notifications.DBus.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Vibe.Registry/1.0.0": {
+        "runtime": {
+          "Vibe.Registry.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Vibe.Registry.Remote/1.0.0": {
+        "dependencies": {
+          "Vibe.Registry": "1.0.0"
+        },
+        "runtime": {
+          "Vibe.Registry.Remote.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "VDENotify/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Tmds.DBus.Protocol/0.95.1": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-IbGhqZAqqgB/DkT70+lAk4MNv95tZtsTMFQ+S3uGy0aTfOkGVeFjeNJsX8dBI/3+CPnO5XW6lRQKGeFEgHElKw==",
+      "path": "tmds.dbus.protocol/0.95.1",
+      "hashPath": "tmds.dbus.protocol.0.95.1.nupkg.sha512"
+    },
+    "Vde.Shell.Notifications/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vde.Shell.Notifications.DBus/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vibe.Registry/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vibe.Registry.Remote/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

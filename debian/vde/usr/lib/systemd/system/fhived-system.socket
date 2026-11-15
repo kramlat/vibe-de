@@ -1,0 +1,11 @@
+[Unit]
+Description=VDE registry daemon socket (system hive)
+
+[Socket]
+ListenStream=/run/fhive/system.sock
+# Anyone may connect: what each client may do is decided per call from its real uid and groups.
+SocketMode=0666
+DirectoryMode=0755
+
+[Install]
+WantedBy=sockets.target

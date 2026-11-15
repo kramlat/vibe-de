@@ -1,0 +1,16 @@
+Package: vde
+Version: 0.1.0-1
+Architecture: amd64
+Maintainer: Mark Toman <kram2048@gmail.com>
+Installed-Size: 28853
+Depends: libc6 (>= 2.38), libdisplay-info2 (>= 0.2.0), libdrm2 (>= 2.4.119), libegl1, libfontconfig1 (>= 2.12.6), libgbm1 (>= 21.1.0), libgcc-s1 (>= 3.0), libgles2, libinput10 (>= 1.26.0), libpixman-1-0 (>= 0.44.0), libseat1 (>= 0.5.0), libstdc++6 (>= 5.2), libudev1 (>= 183), libwayland-client0 (>= 1.23.0), libwayland-server0 (>= 1.20.92), libxcb-composite0, libxcb-dri3-0 (>= 1.13), libxcb-ewmh2 (>= 0.4.2), libxcb-icccm4 (>= 0.4.2), libxcb-present0, libxcb-render-util0, libxcb-render0, libxcb-res0 (>= 1.10), libxcb-shm0 (>= 1.10), libxcb-xfixes0 (>= 1.15), libxcb-xinput0 (>= 1.17.0), libxcb1, libxkbcommon0 (>= 0.5.0), init-system-helpers (>= 1.52), dotnet-runtime-9.0, libpam0g, xwayland, breeze-icon-theme, polkitd | policykit-1, dbus
+Section: x11
+Priority: optional
+Homepage: https://github.com/kramlat/vibe-de
+Description: Vibe Desktop Environment: a C# / Avalonia desktop for Wayland
+ VDE is a desktop environment for Wayland written in C# on the Avalonia toolkit, with a Windows 11 style workflow
+ (original artwork and names). It includes the vwm compositor, a shell (taskbar, desktop, launcher, settings, file
+ manager), a terminal with PowerShell and bash integration, a session manager, a display manager (vdedm), a
+ notification daemon and a registry-based configuration store. It has no telemetry.
+ .
+ The package does not change how you log in. See /usr/share/doc/vde/install.md.

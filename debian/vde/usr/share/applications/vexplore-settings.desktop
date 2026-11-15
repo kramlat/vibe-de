@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Settings
+Comment=Appearance, taskbar, windows, terminal and more
+Exec=vexplore --settings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=control panel;wallpaper;theme;taskbar;
+StartupWMClass=vexplore

@@ -1,0 +1,72 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v9.0/linux-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v9.0": {},
+    ".NETCoreApp,Version=v9.0/linux-x64": {
+      "RegSvrVDE/1.0.0": {
+        "dependencies": {
+          "System.Reflection.MetadataLoadContext": "9.0.0",
+          "Vde.Components": "1.0.0"
+        },
+        "runtime": {
+          "RegSvrVDE.dll": {}
+        }
+      },
+      "System.Reflection.MetadataLoadContext/9.0.0": {
+        "runtime": {
+          "lib/net9.0/System.Reflection.MetadataLoadContext.dll": {
+            "assemblyVersion": "9.0.0.0",
+            "fileVersion": "9.0.24.52809"
+          }
+        }
+      },
+      "Vde.Components/1.0.0": {
+        "dependencies": {
+          "Vibe.Registry": "1.0.0"
+        },
+        "runtime": {
+          "Vde.Components.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      },
+      "Vibe.Registry/1.0.0": {
+        "runtime": {
+          "Vibe.Registry.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "RegSvrVDE/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "System.Reflection.MetadataLoadContext/9.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-nGdCUVhEQ9/CWYqgaibYEDwIJjokgIinQhCnpmtZfSXdMS6ysLZ8p9xvcJ8VPx6Xpv5OsLIUrho4B9FN+VV/tw==",
+      "path": "system.reflection.metadataloadcontext/9.0.0",
+      "hashPath": "system.reflection.metadataloadcontext.9.0.0.nupkg.sha512"
+    },
+    "Vde.Components/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Vibe.Registry/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

@@ -1,0 +1,7 @@
+#%PAM-1.0
+# Automatic login (HKLM\Software\Vde\DisplayManager\AutoLoginUser): no password, but the account must be valid.
+# Only used when AutoLoginUser is set.
+auth       required     pam_permit.so
+account    include      system-local-login
+password   required     pam_deny.so
+session    include      system-local-login
