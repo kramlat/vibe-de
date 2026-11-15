@@ -55,21 +55,25 @@ public static class DesktopSettingsStore
     public const string KeyPath = @"Software\Vde\Desktop";
     public const string IconsKey = KeyPath + @"\Icons";
 
-    public static DesktopSettings Load(IHive hive)
+    // `fallback` is the machine-wide default (HKLM, where the installer puts the default wallpaper): it answers for every
+    // value the user's hive has not set. A user who chose "None" has an empty Wallpaper value, which is not "not set".
+    public static DesktopSettings Load(IHive hive, IHive? fallback = null)
     {
-        string? Text(string name) => hive.GetValue(KeyPath, name) is { Kind: RegistryValueKind.String, Data: string { Length: > 0 } s } ? s : null;
+        static bool Has(IHive h, string name) => h.GetValue(KeyPath, name) is not null;
+        IHive Source(string name) => fallback is not null && !Has(hive, name) ? fallback : hive;
+        string? Text(string name) => Source(name).GetValue(KeyPath, name) is { Kind: RegistryValueKind.String, Data: string { Length: > 0 } s } ? s : null;
         var defaults = new DesktopSettings();
         return new DesktopSettings(
             Text("Wallpaper"),
             Enum.TryParse<WallpaperMode>(Text("WallpaperMode"), true, out var mode) && Enum.IsDefined(mode) ? mode : defaults.Mode,
             Text("BackgroundColor") is { } c && System.Text.RegularExpressions.Regex.IsMatch(c, "^#[0-9a-fA-F]{6}$") ? c : defaults.BackgroundColor,
-            hive.GetValue(KeyPath, "ShowIcons") is { Kind: RegistryValueKind.DWord, Data: uint d } ? d != 0 : defaults.ShowIcons);
+            Source("ShowIcons").GetValue(KeyPath, "ShowIcons") is { Kind: RegistryValueKind.DWord, Data: uint d } ? d != 0 : defaults.ShowIcons);
     }
 
     public static void Save(IHive hive, DesktopSettings settings)
     {
-        if (settings.Wallpaper is { } wallpaper) hive.SetValue(KeyPath, "Wallpaper", RegistryValueKind.String, wallpaper);
-        else hive.DeleteValue(KeyPath, "Wallpaper");
+        // no picture is saved as an empty value, so it is not mistaken for "use the default"
+        hive.SetValue(KeyPath, "Wallpaper", RegistryValueKind.String, settings.Wallpaper ?? "");
         hive.SetValue(KeyPath, "WallpaperMode", RegistryValueKind.String, settings.Mode.ToString());
         hive.SetValue(KeyPath, "BackgroundColor", RegistryValueKind.String, settings.BackgroundColor);
         hive.SetValue(KeyPath, "ShowIcons", RegistryValueKind.DWord, settings.ShowIcons ? 1u : 0u);

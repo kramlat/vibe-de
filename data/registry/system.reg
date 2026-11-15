@@ -7,6 +7,11 @@ Windows Registry Editor Version 5.00
 [HKEY_LOCAL_MACHINE\Software\Vde]
 "Version"="0.1"
 
+[HKEY_LOCAL_MACHINE\Software\Vde\Desktop]
+; the default wallpaper (also the login screen's): a user's own choice under HKCU overrides it
+"Wallpaper"="/usr/share/backgrounds/vde/Vibe.png"
+"WallpaperMode"="Fill"
+
 [HKEY_LOCAL_MACHINE\Software\Vde\Appearance]
 "Theme"="fluent"
 "Variant"="System"

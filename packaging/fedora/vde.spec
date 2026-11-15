@@ -97,6 +97,7 @@ fi
 %{_bindir}/RegSvrVDE
 %{_bindir}/regsvrvde
 %{_datadir}/vde
+%{_datadir}/backgrounds/vde
 %{_datadir}/icons/hicolor/scalable/places/start-here-vde.svg
 %{_datadir}/icons/hicolor/symbolic/places/start-here-vde-symbolic.svg
 %{_datadir}/wayland-sessions/vde.desktop

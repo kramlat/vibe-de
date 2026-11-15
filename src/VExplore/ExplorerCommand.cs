@@ -102,10 +102,25 @@ public static class ExplorerCommand
                 Launch(host, entry);
             else if (item.Command is { } command)
                 Launch(host, command);
-        });
+        }, customPages: id => id == DesktopPageView.PageId
+            ? new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine)
+            : null);
     }
 
     // The window list comes from vwm when it is running; elsewhere the taskbar only shows its pinned apps.
+    // The Browse… button of the Desktop page: the system file picker, images only.
+    private static async Task<string?> BrowseForWallpaperAsync(Avalonia.Controls.Window? owner)
+    {
+        if (owner?.StorageProvider is not { CanOpen: true } storage) return null;
+        var picked = await storage.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        {
+            Title = "Choose a picture",
+            AllowMultiple = false,
+            FileTypeFilter = [Avalonia.Platform.Storage.FilePickerFileTypes.ImageAll],
+        });
+        return picked.Count == 1 && picked[0].Path is { IsFile: true } uri ? uri.LocalPath : null;
+    }
+
     private static IWindowSource Windows()
     {
         var client = new VwmClient();
@@ -168,7 +183,7 @@ public static class ExplorerCommand
             {
                 Console.Error.WriteLine("vexplore: " + e.Message);
             }
-        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths));
+        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths), systemDefaults: host.LocalMachine);
     }
 
     private static string ExecLineQuote(string path) => "\"" + path.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";

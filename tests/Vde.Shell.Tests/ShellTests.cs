@@ -2318,6 +2318,25 @@ public class DesktopTests
     }
 
     [Fact]
+    public void The_machine_default_wallpaper_applies_until_the_user_chooses_something_else()
+    {
+        var user = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var machine = new Hive("HKLM") { Identity = RegistryIdentity.Root };
+        machine.SetValue(DesktopSettingsStore.KeyPath, "Wallpaper", RegistryValueKind.String, "/usr/share/backgrounds/vde/Vibe.png");
+        machine.SetValue(DesktopSettingsStore.KeyPath, "WallpaperMode", RegistryValueKind.String, "Fit");
+
+        var settings = DesktopSettingsStore.Load(user, machine);
+        Assert.Equal("/usr/share/backgrounds/vde/Vibe.png", settings.Wallpaper);
+        Assert.Equal(WallpaperMode.Fit, settings.Mode);
+
+        DesktopSettingsStore.Save(user, settings with { Wallpaper = "/w/mine.png" });
+        Assert.Equal("/w/mine.png", DesktopSettingsStore.Load(user, machine).Wallpaper);
+
+        DesktopSettingsStore.Save(user, settings with { Wallpaper = null });   // "None" is a choice too
+        Assert.Null(DesktopSettingsStore.Load(user, machine).Wallpaper);
+    }
+
+    [Fact]
     public void Settings_and_icon_positions_round_trip_and_junk_falls_back()
     {
         var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };

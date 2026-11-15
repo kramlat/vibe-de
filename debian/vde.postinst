@@ -10,6 +10,10 @@ configure)
         /usr/lib/vde/mkhive create --type system --rules /usr/share/vde/registry/permissions.rules \
             /etc/hive/System.fhive /usr/share/vde/registry/system.reg >/dev/null || \
             echo "vde: could not create /etc/hive/System.fhive; see /usr/share/doc/vde/install.md" >&2
+    elif ! /usr/lib/vde/mkhive dump /etc/hive/System.fhive 2>/dev/null | grep -q 'Software.Vde.Desktop'; then
+        # an upgrade from a release without the default wallpaper
+        /usr/lib/vde/mkhive create --type system --merge --rules /usr/share/vde/registry/permissions.rules \
+            /etc/hive/System.fhive /usr/share/vde/registry/desktop.reg >/dev/null 2>&1 || true
     fi
     /usr/lib/vde/RegSvrVDE --system /s /i /usr/lib/vde/vexplore.dll >/dev/null 2>&1 || \
         echo "vde: could not register the shell components; run: RegSvrVDE --system /i /usr/lib/vde/vexplore.dll" >&2

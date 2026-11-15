@@ -17,6 +17,7 @@ public sealed class DesktopPageView : UserControl
     public const string PageId = "desktop";
 
     private readonly IHive _hive;
+    private readonly IHive? _defaults;
     private readonly IReadOnlyList<WallpaperInfo> _wallpapers;
     private readonly Func<Window?, Task<string?>>? _browse;
     private readonly Border _preview = new() { Width = 320, Height = 180, CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = true };
@@ -28,9 +29,10 @@ public sealed class DesktopPageView : UserControl
     private bool _updating;
 
     // browse shows a file picker for the owner window and returns the chosen image, or null.
-    public DesktopPageView(IHive hive, IReadOnlyList<WallpaperInfo> wallpapers, Func<Window?, Task<string?>>? browse = null)
+    public DesktopPageView(IHive hive, IReadOnlyList<WallpaperInfo> wallpapers, Func<Window?, Task<string?>>? browse = null, IHive? systemDefaults = null)
     {
         _hive = hive;
+        _defaults = systemDefaults;
         _wallpapers = wallpapers;
         _browse = browse;
 
@@ -52,7 +54,7 @@ public sealed class DesktopPageView : UserControl
         Reload();
     }
 
-    public DesktopSettings Settings => DesktopSettingsStore.Load(_hive);
+    public DesktopSettings Settings => DesktopSettingsStore.Load(_hive, _defaults);
     public Border Preview => _preview;
     // The wallpaper tiles (and the "None" tile first): for tests and screen readers.
     public IReadOnlyList<Button> Tiles => _gallery.Children.OfType<Button>().ToList();
@@ -81,13 +83,13 @@ public sealed class DesktopPageView : UserControl
 
     private void Change(Func<DesktopSettings, DesktopSettings> edit)
     {
-        DesktopSettingsStore.Save(_hive, edit(DesktopSettingsStore.Load(_hive)));
+        DesktopSettingsStore.Save(_hive, edit(DesktopSettingsStore.Load(_hive, _defaults)));
         Reload();
     }
 
     private void Reload()
     {
-        var settings = DesktopSettingsStore.Load(_hive);
+        var settings = DesktopSettingsStore.Load(_hive, _defaults);
         _updating = true;
         _preview.Background = WallpaperBrush.Create(settings);
         _preview.BorderBrush = ThemeTokens.Find(this, ThemeToken.Border, Brushes.Gray);

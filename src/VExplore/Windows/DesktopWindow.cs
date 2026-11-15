@@ -24,6 +24,7 @@ public sealed class DesktopWindow : Window
 
     private readonly string _folder;
     private readonly IHive _hive;
+    private readonly IHive? _defaults;   // the machine-wide desktop settings (the default wallpaper)
     private readonly Action<string> _open;
     private readonly Action? _openSettings;
     private readonly FileActions _actions;
@@ -42,9 +43,10 @@ public sealed class DesktopWindow : Window
 
     public DesktopWindow(string desktopFolder, IHive hive, Action<string> openFile, FileTypes? types = null,
         FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null, ShortcutStyleService? shortcuts = null,
-        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null)
+        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, IHive? systemDefaults = null)
     {
         _properties = properties;
+        _defaults = systemDefaults;
         _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
         _shortcuts.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(() => _canvas.ContextMenu = BuildMenu());
         _folder = desktopFolder;
@@ -60,6 +62,7 @@ public sealed class DesktopWindow : Window
         Title = "Desktop";
         SystemDecorations = SystemDecorations.None;
         ShowInTaskbar = false;
+        X11WindowHints.SetType(this, X11WindowHints.Kind.Desktop);
         WindowState = WindowState.Maximized;
         Width = 1280; Height = 720;
         Content = _canvas;
@@ -122,7 +125,7 @@ public sealed class DesktopWindow : Window
 
     private void Rebuild()
     {
-        var settings = DesktopSettingsStore.Load(_hive);
+        var settings = DesktopSettingsStore.Load(_hive, _defaults);
         Background = WallpaperBrush.Create(settings);
         _canvas.Children.Clear();
         _icons.Clear();

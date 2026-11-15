@@ -57,6 +57,10 @@
 
 enum cursor_mode { CURSOR_PASSTHROUGH, CURSOR_MOVE, CURSOR_RESIZE };
 
+/* X11 windows that are part of the shell, found by _NET_WM_WINDOW_TYPE: the desktop sits below every window, a dock
+ * (the taskbar) above them and reserves its edge (_NET_WM_STRUT_PARTIAL). Neither has a titlebar or is listed. */
+enum view_role { ROLE_NORMAL, ROLE_DESKTOP, ROLE_DOCK };
+
 enum chrome_kind { HIT_TITLE = 1, HIT_GRIP, HIT_MENU };
 enum chrome_button { BTN_NONE, BTN_MIN, BTN_MAX, BTN_CLOSE };
 
@@ -106,6 +110,8 @@ struct vwm_view {
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;
 	struct wl_listener decoration_destroy, decoration_mode;
 	struct wl_listener x11_commit;
+	enum view_role role;
+	struct wl_listener x11_set_strut;
 	bool unmanaged;   /* X11 menus and tooltips: shown, but not windows the shell lists */
 	struct wl_listener handle_activate, handle_close, handle_minimize, handle_maximize;
 };
@@ -425,13 +431,13 @@ void vwm_each_view(struct vwm_server *s, void (*fn)(struct vwm_view *, void *), 
 {
 	struct vwm_view *v;
 	wl_list_for_each(v, &s->views, link)
-		if (v->mapped)
+		if (v->mapped && !v->unmanaged)
 			fn(v, data);
 }
 
 static void view_announce(struct vwm_view *v)
 {
-	if (v->mapped)
+	if (v->mapped && !v->unmanaged)
 		vwm_ipc_window(v->server->ipc, v);
 }
 
@@ -498,7 +504,7 @@ static void focus_view(struct vwm_view *v)
 
 void vwm_view_activate(struct vwm_view *v)
 {
-	if (!v->mapped)
+	if (!v->mapped || v->role == ROLE_DOCK)
 		return;
 	if (v->minimized)
 		vwm_view_set_minimized(v, false);
@@ -513,7 +519,7 @@ static void focus_next_after_loss(struct vwm_server *s)
 {
 	struct vwm_view *v;
 	wl_list_for_each(v, &s->views, link)
-		if (v->mapped && !v->minimized) {
+		if (v->mapped && !v->unmanaged && !v->minimized) {
 			focus_view(v);
 			return;
 		}
@@ -545,7 +551,7 @@ void vwm_view_set_minimized(struct vwm_view *v, bool minimized)
 
 void vwm_view_set_maximized(struct vwm_view *v, bool maximized)
 {
-	if (v->maximized == maximized || !v->mapped)
+	if (v->maximized == maximized || !v->mapped || v->unmanaged)
 		return;
 	if (maximized) {
 		struct wlr_box g;
@@ -643,6 +649,62 @@ static void on_handle_maximize(struct wl_listener *l, void *data)
 	vwm_view_set_maximized(FROM(struct vwm_view, l, handle_maximize), e->maximized);
 }
 
+static void arrange_layers(struct vwm_server *s, struct vwm_output *o);
+
+static void output_box(struct vwm_server *s, struct wlr_box *box)
+{
+	struct vwm_output *o = primary_output(s);
+	if (o)
+		wlr_output_layout_get_box(s->output_layout, o->wlr_output, box);
+	else
+		*box = (struct wlr_box){ 0, 0, 1280, 720 };
+}
+
+static enum view_role x11_role(struct wlr_xwayland_surface *xs)
+{
+	if (wlr_xwayland_surface_has_window_type(xs, WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DESKTOP))
+		return ROLE_DESKTOP;
+	if (wlr_xwayland_surface_has_window_type(xs, WLR_XWAYLAND_NET_WM_WINDOW_TYPE_DOCK))
+		return ROLE_DOCK;
+	return ROLE_NORMAL;
+}
+
+/* Where a dock goes: against the edge its strut reserves (whatever position the toolkit asked for), else as asked. */
+static void dock_position(struct vwm_view *v, int w, int h, int ask_x, int ask_y, int *x, int *y)
+{
+	struct wlr_box full;
+	output_box(v->server, &full);
+	*x = ask_x;
+	*y = ask_y;
+	xcb_ewmh_wm_strut_partial_t *st = v->x11->strut_partial;
+	if (!st)
+		return;
+	if (st->bottom > 0)      { *y = full.y + full.height - h; *x = full.x; }
+	else if (st->top > 0)    { *y = full.y;                   *x = full.x; }
+	else if (st->left > 0)   { *x = full.x;                   *y = full.y; }
+	else if (st->right > 0)  { *x = full.x + full.width - w;  *y = full.y; }
+}
+
+static void x11_role_apply(struct vwm_view *v)
+{
+	struct vwm_server *s = v->server;
+	struct wlr_box full;
+	output_box(s, &full);
+	wlr_scene_node_reparent(&v->tree->node, s->layers[v->role == ROLE_DESKTOP ? LAYER_BACKGROUND : LAYER_TOP]);
+	if (v->role == ROLE_DESKTOP) {
+		view_move(v, full.x, full.y);
+		wlr_xwayland_surface_configure(v->x11, full.x, full.y, full.width, full.height);
+	} else {
+		int x, y;
+		dock_position(v, v->x11->width, v->x11->height, v->x11->x, v->x11->y, &x, &y);
+		view_move(v, x, y);
+		wlr_xwayland_surface_configure(v->x11, x, y, v->x11->width, v->x11->height);
+	}
+	struct vwm_output *o = primary_output(s);
+	if (o)
+		arrange_layers(s, o);
+}
+
 static void view_mapped(struct vwm_view *v)
 {
 	struct vwm_server *s = v->server;
@@ -654,6 +716,14 @@ static void view_mapped(struct vwm_view *v)
 		if (v->unmanaged) {
 			wlr_scene_node_set_enabled(&v->tree->node, true);
 			view_move(v, v->x11->x, v->x11->y);
+			return;
+		}
+		v->role = x11_role(v->x11);
+		if (v->role != ROLE_NORMAL) {
+			v->unmanaged = true;
+			v->decorated = false;
+			wlr_scene_node_set_enabled(&v->tree->node, true);
+			x11_role_apply(v);
 			return;
 		}
 	}
@@ -686,6 +756,11 @@ static void view_unmapped(struct vwm_view *v)
 	v->mapped = false;
 	if (v->unmanaged) {
 		wlr_scene_node_set_enabled(&v->tree->node, false);
+		if (v->role == ROLE_DOCK) {
+			struct vwm_output *o = primary_output(s);
+			if (o)
+				arrange_layers(s, o);
+		}
 		return;
 	}
 	vwm_ipc_closed(s->ipc, v->id);
@@ -942,7 +1017,25 @@ static void x11_request_configure(struct wl_listener *l, void *data)
 			wlr_scene_node_set_position(&v->tree->node, e->x, e->y);
 		return;
 	}
+	if (v->role == ROLE_DESKTOP)
+		return;   /* always the whole screen: x11_role_apply set it */
+	if (v->role == ROLE_DOCK) {   /* the shell places its own dock */
+		int x, y;
+		dock_position(v, e->width, e->height, e->x, e->y, &x, &y);
+		view_move(v, x, y);
+		wlr_xwayland_surface_configure(v->x11, x, y, e->width, e->height);
+		return;
+	}
 	wlr_xwayland_surface_configure(v->x11, v->x, v->y, e->width, e->height);   /* we decide where windows go */
+}
+static void x11_strut(struct wl_listener *l, void *data)
+{
+	struct vwm_view *v = FROM(struct vwm_view, l, x11_set_strut);
+	struct vwm_output *o = primary_output(v->server);
+	if (v->mapped && v->role == ROLE_DOCK && o) {
+		x11_role_apply(v);
+		arrange_layers(v->server, o);
+	}
 }
 static void x11_request_activate(struct wl_listener *l, void *data) { vwm_view_activate(FROM(struct vwm_view, l, request_activate)); }
 static void x11_request_close(struct wl_listener *l, void *data) { vwm_view_close(FROM(struct vwm_view, l, request_close)); }
@@ -987,6 +1080,7 @@ static void x11_destroy(struct wl_listener *l, void *data)
 	wl_list_remove(&v->request_minimize.link);
 	wl_list_remove(&v->x11_set_title.link);
 	wl_list_remove(&v->x11_set_class.link);
+	wl_list_remove(&v->x11_set_strut.link);
 	wl_list_remove(&v->link);
 	wlr_scene_node_destroy(&v->tree->node);
 	free(v);
@@ -1018,6 +1112,7 @@ static void on_new_x11(struct wl_listener *l, void *data)
 	v->request_minimize.notify = x11_request_minimize;   wl_signal_add(&xs->events.request_minimize, &v->request_minimize);
 	v->x11_set_title.notify = x11_title;                 wl_signal_add(&xs->events.set_title, &v->x11_set_title);
 	v->x11_set_class.notify = x11_class;                 wl_signal_add(&xs->events.set_class, &v->x11_set_class);
+	v->x11_set_strut.notify = x11_strut;                 wl_signal_add(&xs->events.set_strut_partial, &v->x11_set_strut);
 }
 
 /* Tells whoever starts the session's programs where to connect: written (atomically) once the Wayland socket exists
@@ -1068,6 +1163,38 @@ static void arrange_layers(struct vwm_server *s, struct vwm_output *o)
 				continue;
 			wlr_scene_layer_surface_v1_configure(ls->scene, &full, &usable);
 		}
+	/* the desktop is as big as the screen and a dock as long as its edge, whatever size the screen now is */
+	struct vwm_view *sv;
+	wl_list_for_each(sv, &s->views, link) {
+		if (!sv->mapped || !sv->x11 || sv->role == ROLE_NORMAL)
+			continue;
+		int w = sv->x11->width, h = sv->x11->height, x = sv->x, y = sv->y;
+		if (sv->role == ROLE_DESKTOP) {
+			x = full.x; y = full.y; w = full.width; h = full.height;
+		} else {
+			xcb_ewmh_wm_strut_partial_t *st = sv->x11->strut_partial;
+			if (st && (st->top > 0 || st->bottom > 0)) w = full.width;
+			else if (st && (st->left > 0 || st->right > 0)) h = full.height;
+			dock_position(sv, w, h, x, y, &x, &y);
+		}
+		if (x != sv->x || y != sv->y || w != sv->x11->width || h != sv->x11->height) {
+			view_move(sv, x, y);
+			wlr_xwayland_surface_configure(sv->x11, x, y, w, h);
+		}
+	}
+	/* docks (the taskbar) reserve their edges too */
+	struct vwm_view *d;
+	wl_list_for_each(d, &s->views, link) {
+		if (!d->mapped || d->role != ROLE_DOCK || !d->x11 || !d->x11->strut_partial)
+			continue;
+		xcb_ewmh_wm_strut_partial_t *st = d->x11->strut_partial;
+		int l = usable.x, t = usable.y, r = usable.x + usable.width, b = usable.y + usable.height;
+		if (full.x + (int)st->left > l) l = full.x + st->left;
+		if (full.y + (int)st->top > t) t = full.y + st->top;
+		if (full.x + full.width - (int)st->right < r) r = full.x + full.width - st->right;
+		if (full.y + full.height - (int)st->bottom < b) b = full.y + full.height - st->bottom;
+		usable = (struct wlr_box){ l, t, r > l ? r - l : 1, b > t ? b - t : 1 };
+	}
 	o->usable = usable;
 	/* windows that were maximized follow the panels */
 	struct vwm_view *v;
@@ -1172,6 +1299,7 @@ static void output_request_state(struct wl_listener *l, void *data)
 	struct vwm_output *o = FROM(struct vwm_output, l, request_state);
 	const struct wlr_output_event_request_state *e = data;
 	wlr_output_commit_state(o->wlr_output, e->state);
+	arrange_layers(o->server, o);   /* a nested window was resized: the desktop and the taskbar follow */
 }
 
 static void output_destroy(struct wl_listener *l, void *data)
@@ -1705,7 +1833,7 @@ static bool handle_shortcut(struct vwm_server *s, xkb_keysym_t sym, uint32_t mod
 	if (alt && sym == XKB_KEY_Tab) {   /* next window: the one used least recently comes forward */
 		struct vwm_view *last = NULL, *v;
 		wl_list_for_each(v, &s->views, link)
-			if (v->mapped && !v->minimized)
+			if (v->mapped && !v->unmanaged && !v->minimized)
 				last = v;
 		if (last && last != s->focused)
 			focus_view(last);

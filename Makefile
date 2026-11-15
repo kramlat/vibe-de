@@ -19,7 +19,9 @@ BUILD       := build
 PUBLISH     := $(BUILD)/publish
 
 # project directory under src/ -> published executable name (see each .csproj AssemblyName)
-DOTNET_PROJECTS := fhived mkhive RegSvrVDE VDENotify VExplore VTerminal VDESession VDEDM VDEDMGreeter
+# VDENotify is published apart (build/publish/notify): it needs Tmds.DBus.Protocol 0.95, Avalonia's X11 backend 0.21,
+# and in one directory the newer file wins and every Avalonia program fails to start.
+DOTNET_PROJECTS := fhived mkhive RegSvrVDE VExplore VTerminal VDESession VDEDM VDEDMGreeter
 
 # commands people type, linked into PREFIX/bin
 BIN_LINKS := vexplore vterminal vde-session vdedm vdedm-greeter mkhive RegSvrVDE
@@ -41,10 +43,14 @@ dotnet:
 	    $(DOTNET) publish src/$$p -c $(CONFIG) -o $(PUBLISH) --nologo -v q \
 	        -r $(RID) --self-contained false -p:DebugType=None -p:DebugSymbols=false -p:UseAppHost=true || exit 1; \
 	done
+	@echo "publish VDENotify"
+	@$(DOTNET) publish src/VDENotify -c $(CONFIG) -o $(PUBLISH)/notify --nologo -v q \
+	    -r $(RID) --self-contained false -p:DebugType=None -p:DebugSymbols=false -p:UseAppHost=true
 
 install:
 	install -d $(DESTDIR)$(LIBDIR)
 	cp -a $(PUBLISH)/. $(DESTDIR)$(LIBDIR)/
+	ln -sfr $(DESTDIR)$(LIBDIR)/notify/VDENotify $(DESTDIR)$(LIBDIR)/VDENotify
 	install -m755 native/build/vwm/vwm native/build/vterm/vterm-launch $(DESTDIR)$(LIBDIR)/
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m755 data/session/start-vde $(DESTDIR)$(PREFIX)/bin/start-vde
@@ -53,7 +59,9 @@ install:
 	# data
 	install -d $(DESTDIR)$(DATADIR)/vde/terminal $(DESTDIR)$(DATADIR)/vde/registry
 	install -m644 data/terminal/* $(DESTDIR)$(DATADIR)/vde/terminal/
-	install -m644 data/registry/system.reg data/registry/permissions.rules $(DESTDIR)$(DATADIR)/vde/registry/
+	install -m644 data/registry/system.reg data/registry/desktop.reg data/registry/permissions.rules $(DESTDIR)$(DATADIR)/vde/registry/
+	install -d $(DESTDIR)$(DATADIR)/backgrounds/vde
+	install -m644 data/backgrounds/vde/* $(DESTDIR)$(DATADIR)/backgrounds/vde/
 	install -d $(DESTDIR)$(DATADIR)/icons
 	cp -a data/icons/hicolor $(DESTDIR)$(DATADIR)/icons/
 	install -Dm644 data/wayland-sessions/vde.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/vde.desktop
@@ -75,7 +83,7 @@ install:
 	install -m644 COPYING COPYING.LESSER $(DESTDIR)$(DATADIR)/licenses/vde/
 
 uninstall:
-	rm -rf $(DESTDIR)$(LIBDIR) $(DESTDIR)$(DATADIR)/vde $(DESTDIR)$(DATADIR)/doc/vde $(DESTDIR)$(DATADIR)/licenses/vde
+	rm -rf $(DESTDIR)$(LIBDIR) $(DESTDIR)$(DATADIR)/vde $(DESTDIR)$(DATADIR)/backgrounds/vde $(DESTDIR)$(DATADIR)/doc/vde $(DESTDIR)$(DATADIR)/licenses/vde
 	rm -f $(DESTDIR)$(PREFIX)/bin/start-vde $(DESTDIR)$(PREFIX)/bin/regsvrvde $(addprefix $(DESTDIR)$(PREFIX)/bin/,$(BIN_LINKS))
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/vde.desktop $(DESTDIR)$(DATADIR)/applications/vexplore.desktop \
 	      $(DESTDIR)$(DATADIR)/applications/vexplore-settings.desktop $(DESTDIR)$(DATADIR)/applications/vterminal.desktop \
