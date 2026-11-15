@@ -59,7 +59,7 @@ public static class ExplorerCommand
             return 1;
         }
         var folder = args.FirstOrDefault(a => !a.StartsWith('-'));
-        if (window == "files" && folder is not null && !Directory.Exists(folder))
+        if (window == "files" && folder is not null && !AddressPath.IsShellPath(folder) && !Directory.Exists(folder))
         {
             error.WriteLine($"vexplore: {folder}: not a folder");
             return 2;
@@ -183,7 +183,8 @@ public static class ExplorerCommand
             {
                 Console.Error.WriteLine("vexplore: " + e.Message);
             }
-        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths), systemDefaults: host.LocalMachine);
+        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths), systemDefaults: host.LocalMachine, shellFolders: ShellApp.ShellFolders(host),
+            openShellFolder: path => { try { shell.Run("vexplore --files " + ExecLineQuote(path)); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } });
     }
 
     private static string ExecLineQuote(string path) => "\"" + path.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
@@ -200,7 +201,24 @@ public static class ExplorerCommand
         return new LauncherWindow(model, entry => Launch(host, entry), item =>
         {
             if (item.Entry is { } entry) Launch(host, entry);
-        });
+        }, action => Footer(host, action, new KnownFolders(xdg).Get(KnownFolder.Home)));
+    }
+
+    // The start menu footer's buttons. Power actions go through logind (systemctl), which asks polkit as usual;
+    // signing out ends the VDE session.
+    private static void Footer(ExplorerHost host, LauncherFooterAction action, string home)
+    {
+        var command = action switch
+        {
+            LauncherFooterAction.Files => "vexplore --files " + ExecLineQuote(home),
+            LauncherFooterAction.Settings => "vexplore --settings",
+            LauncherFooterAction.SignOut => "vde-session --logout",
+            LauncherFooterAction.Sleep => "systemctl suspend",
+            LauncherFooterAction.Restart => "systemctl reboot",
+            LauncherFooterAction.ShutDown => "systemctl poweroff",
+            _ => null,
+        };
+        if (command is not null) Launch(host, command);
     }
 
     internal static void Launch(ExplorerHost host, DesktopEntry entry)

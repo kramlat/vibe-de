@@ -56,7 +56,7 @@ public sealed class ShellApp : Application
         var associations = new FileAssociations(xdg, mime, apps, Desktops(), host.Classes);
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
         var shell = new ShellExecute(associations, mime, types: types, elevation: Elevation);
-        var start = folder is null ? new KnownFolders(xdg).Get(KnownFolder.Home) : Path.GetFullPath(folder);
+        var start = folder is null ? new KnownFolders(xdg).Get(KnownFolder.Home) : AddressPath.IsShellPath(folder) ? folder : Path.GetFullPath(folder);
         return new FileManagerWindow(start, new KnownFolders(xdg), path =>
         {
             _ = OpenAsync(shell, path, associations, apps);   // no application: the chooser; an untrusted command: the password prompt

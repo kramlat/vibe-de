@@ -24,6 +24,9 @@ public sealed class DesktopWindow : Window
 
     private readonly string _folder;
     private readonly IHive _hive;
+    private readonly ShellFolderCatalog? _shellFolders;   // the shell folders that want an icon on the desktop (This Computer)
+    private readonly Action<string>? _openShellFolder;
+    private IReadOnlyList<(string Key, string Name, IReadOnlyList<string> Icons, string Path)> _virtual = [];
     private readonly IHive? _defaults;   // the machine-wide desktop settings (the default wallpaper)
     private readonly Action<string> _open;
     private readonly Action? _openSettings;
@@ -43,8 +46,11 @@ public sealed class DesktopWindow : Window
 
     public DesktopWindow(string desktopFolder, IHive hive, Action<string> openFile, FileTypes? types = null,
         FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null, ShortcutStyleService? shortcuts = null,
-        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, IHive? systemDefaults = null)
+        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, IHive? systemDefaults = null,
+        ShellFolderCatalog? shellFolders = null, Action<string>? openShellFolder = null)
     {
+        _shellFolders = shellFolders;
+        _openShellFolder = openShellFolder;
         _properties = properties;
         _defaults = systemDefaults;
         _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
@@ -118,8 +124,10 @@ public sealed class DesktopWindow : Window
         {
             _entries = [];
         }
-        DesktopSettingsStore.ForgetMissing(_hive, _entries.Select(e => e.Name));
-        _selected.IntersectWith(_entries.Select(e => e.Name));
+        _virtual = LoadVirtualIcons();
+        var names = _virtual.Select(v => v.Key).Concat(_entries.Select(e => e.Name)).ToList();
+        DesktopSettingsStore.ForgetMissing(_hive, names);
+        _selected.IntersectWith(names);
         Rebuild();
     }
 
@@ -129,10 +137,18 @@ public sealed class DesktopWindow : Window
         Background = WallpaperBrush.Create(settings);
         _canvas.Children.Clear();
         _icons.Clear();
-        _layout = DesktopLayout.Arrange(_entries.Select(e => e.Name), DesktopSettingsStore.LoadPositions(_hive), Columns, Rows);
+        // the shell folders first (This Computer, as the first icon), then the files of the desktop folder
+        _layout = DesktopLayout.Arrange(_virtual.Select(v => v.Key).Concat(_entries.Select(e => e.Name)), DesktopSettingsStore.LoadPositions(_hive), Columns, Rows);
         if (!settings.ShowIcons)
             return;
 
+        foreach (var v in _virtual)
+        {
+            var icon = BuildIcon(v.Key, v.Name, v.Icons);
+            _icons[v.Key] = icon;
+            Place(icon, _layout[v.Key]);
+            _canvas.Children.Add(icon);
+        }
         foreach (var entry in _entries)
         {
             var icon = MakeIcon(entry);
@@ -148,26 +164,47 @@ public sealed class DesktopWindow : Window
         Canvas.SetTop(icon, Margin_ + cell.Row * CellHeight);
     }
 
+    // The shell folders registered for the Desktop place. Their icons are keyed "::{clsid}" (the parsing form of the CLSID),
+    // which is what their cell and selection are remembered under; no file on the desktop has that name.
+    private IReadOnlyList<(string Key, string Name, IReadOnlyList<string> Icons, string Path)> LoadVirtualIcons()
+    {
+        if (_shellFolders is null) return [];
+        var list = new List<(string, string, IReadOnlyList<string>, string)>();
+        foreach (var info in _shellFolders.Namespace("Desktop"))
+        {
+            IReadOnlyList<string> icons = ["folder"];
+            try { icons = _shellFolders.Open(info).IconNames; }
+            catch (Exception e) when (e is ComponentLoadException or InvalidOperationException) { }   // an untrusted component: still shown, with a plain icon
+            list.Add(("::" + info.Clsid, info.Name, icons, info.Path));
+        }
+        return list;
+    }
+
     private Border MakeIcon(FileEntry entry)
     {
         var info = entry.IsDirectory ? null : _types?.Describe(entry.FullPath);
+        return BuildIcon(entry.Name, entry.Name, entry.IsDirectory ? (FolderIcon.Read(entry.FullPath) is { } custom ? [custom, "folder"] : ["folder"]) : info?.IconNames ?? ["text-x-generic"]);
+    }
+
+    private Border BuildIcon(string key, string text, IReadOnlyList<string> iconNames)
+    {
         var label = new TextBlock
         {
-            Text = entry.Name, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxHeight = 34, FontSize = 12,
+            Text = text, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxHeight = 34, FontSize = 12,
             Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center,
         };
         var border = new Border
         {
             Width = CellWidth - 6, Height = CellHeight - 6, CornerRadius = new CornerRadius(4), Padding = new Thickness(2, 6),
-            Tag = entry.Name,
-            Background = _selected.Contains(entry.Name) ? ThemeTokens.Find(this, ThemeToken.SelectedFill, Brushes.Gray) : Brushes.Transparent,
+            Tag = key,
+            Background = _selected.Contains(key) ? ThemeTokens.Find(this, ThemeToken.SelectedFill, Brushes.Gray) : Brushes.Transparent,
             Child = new StackPanel
             {
                 Spacing = 4,
-                Children = { new ShellIcon { IconNames = entry.IsDirectory ? (FolderIcon.Read(entry.FullPath) is { } custom ? [custom, "folder"] : ["folder"]) : info?.IconNames ?? ["text-x-generic"], IconSize = 48, HorizontalAlignment = HorizontalAlignment.Center }, label },
+                Children = { new ShellIcon { IconNames = iconNames, IconSize = 48, HorizontalAlignment = HorizontalAlignment.Center }, label },
             },
         };
-        border.PointerPressed += (_, e) => OnIconPressed(entry.Name, border, e);
+        border.PointerPressed += (_, e) => OnIconPressed(key, border, e);
         border.PointerMoved += (_, e) => OnIconMoved(border, e);
         border.PointerReleased += (_, e) => OnIconReleased(border, e);
         border.DoubleTapped += (_, _) => OpenSelected();
@@ -200,6 +237,8 @@ public sealed class DesktopWindow : Window
 
     public void OpenSelected()
     {
+        foreach (var v in _virtual.Where(v => _selected.Contains(v.Key)))
+            _openShellFolder?.Invoke(v.Path);
         foreach (var path in SelectedPaths)
             _open(path);   // folders too: the shell opens them in a file manager window
     }

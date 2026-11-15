@@ -15,6 +15,15 @@ public static class ShellFolderIds
     public const string Documents = "{7B2F6C1E-5D0A-4F3B-9E48-1C0D2A6B7013}";
     public const string ControlPanel = "{7B2F6C1E-5D0A-4F3B-9E48-1C0D2A6B7014}";
 
+    // Where each folder appears: the sidebar of the file manager, and for This Computer the desktop as well (an icon,
+    // as on the desktops people are used to). A user hides one with Software\Vde\Explorer\Namespaces\<place>\<clsid> Hidden=1.
+    public static string[] Places(string clsid) => clsid switch
+    {
+        Computer => ["Sidebar", "Desktop"],
+        ControlPanel => [],
+        _ => ["Sidebar"],
+    };
+
     // clsid, parsing name ("shell:Computer"), display name, sidebar order
     public static readonly (string Clsid, string Parsing, string Name, int Order)[] All =
     [
@@ -60,7 +69,7 @@ public static class ShellFolderSetup
     // The shell's folders added to a catalog as built-ins: found by name, listed in the sidebar, no registration needed.
     public static void AddBuiltIns(ShellFolderCatalog catalog, KnownFolders? folders = null)
     {
-        catalog.AddBuiltIn(ShellFolderIds.Computer, "Computer", "This Computer", Attributes, new ComputerShellFolder(folders), ["Sidebar"], 10);
+        catalog.AddBuiltIn(ShellFolderIds.Computer, "Computer", "This Computer", Attributes, new ComputerShellFolder(folders), ShellFolderIds.Places(ShellFolderIds.Computer), 10);
         catalog.AddBuiltIn(ShellFolderIds.Network, "Network", "Network", Attributes, new NetworkShellFolder(), ["Sidebar"], 20);
         catalog.AddBuiltIn(ShellFolderIds.Trash, "Trash", "Trash", Attributes, new TrashShellFolder(), ["Sidebar"], 30);
         catalog.AddBuiltIn(ShellFolderIds.Documents, "Documents", "Documents", Attributes, new DocumentsShellFolder(folders), ["Sidebar"], 5);
@@ -77,7 +86,7 @@ public static class ShellFolderSetup
             classes.SetValue(key, "ParsingName", RegistryValueKind.String, parsing);
             classes.SetValue(key, "Name", RegistryValueKind.String, name);
             classes.SetValue(key, "Attributes", RegistryValueKind.DWord, (uint)Attributes);
-            classes.SetValue(key, "Namespaces", RegistryValueKind.MultiString, clsid == ShellFolderIds.ControlPanel ? Array.Empty<string>() : new[] { "Sidebar" });
+            classes.SetValue(key, "Namespaces", RegistryValueKind.MultiString, ShellFolderIds.Places(clsid));
             classes.SetValue(key, "Order", RegistryValueKind.DWord, (uint)order);
         }
     }

@@ -427,6 +427,39 @@ public class DesktopWindowTests
     }
 }
 
+public class DesktopShellFolderTests
+{
+    [AvaloniaFact]
+    public void This_Computer_is_an_icon_on_the_desktop_that_opens_the_shell_folder_and_can_be_hidden()
+    {
+        var desktop = Path.Combine(Path.GetTempPath(), "vexplore-dsk-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(desktop);
+        File.WriteAllText(Path.Combine(desktop, "notes.txt"), "x");
+        try
+        {
+            var user = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+            var system = new Hive("HKLM") { Identity = RegistryIdentity.Root };
+            var catalog = new ShellFolderCatalog(new ClassesRoot(user, system), system, user, new ComponentLoader());
+            ShellFolderSetup.AddBuiltIns(catalog);
+            var opened = new List<string>();
+            var w = new DesktopWindow(desktop, user, _ => { }, shellFolders: catalog, openShellFolder: opened.Add);
+            w.Show();
+
+            var key = "::" + Vde.Components.ComponentInfo.NormalizeGuid(ShellFolderIds.Computer);
+            Assert.Equal(new Cell(0, 0), w.CellOf(key));        // first icon
+            Assert.Equal(new Cell(0, 1), w.CellOf("notes.txt")); // the files follow
+            w.SelectIcon(key);
+            w.OpenSelected();
+            Assert.Equal(["shell:Computer"], opened);
+
+            user.SetValue($@"{ShellFolderCatalog.NamespacesKey}\Desktop\{ShellFolderIds.Computer}", "Hidden", RegistryValueKind.DWord, 1u);
+            w.Reload();
+            Assert.Throws<KeyNotFoundException>(() => w.CellOf(key));
+        }
+        finally { Directory.Delete(desktop, recursive: true); }
+    }
+}
+
 public class ShortcutWindowTests
 {
     private static ShortcutStyleService Style(bool apple)

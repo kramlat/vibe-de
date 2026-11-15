@@ -123,6 +123,7 @@ public class ShellFolderTests
         Assert.Contains("Sidebar", trash.Namespaces);
         Assert.Equal(new[] { "Documents", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));
         Assert.Equal("Trash", catalog.Open(trash).DisplayName);   // loaded through the apartment-aware loader
+        Assert.Equal(["This Computer"], catalog.Namespace("Desktop").Select(i => i.Name));   // registered for the desktop: its icon
     }
 
     [AvaloniaFact]

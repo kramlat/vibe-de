@@ -439,6 +439,87 @@ public class FileManagerControlTests
     }
 
     [AvaloniaFact]
+    public void The_launcher_footer_shows_the_user_and_has_files_settings_and_power_buttons()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "vde-foot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var passwd = Path.Combine(dir, "passwd");
+        File.WriteAllText(passwd, "root:x:0:0:root:/root:/bin/sh\nmark:x:1000:1000:Mark Toman,,,:/home/mark:/bin/bash\n");
+        try
+        {
+            var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+            var model = new LauncherModel(hive, Vde.Freedesktop.DesktopEntryDatabase.Load(TestTheme.EmptyXdg(dir), []), ["VDE"]);
+            var user = new UserProfile(k => k == "USER" ? "mark" : k == "HOME" ? dir : null, passwd, Path.Combine(dir, "icons"));
+            var view = new LauncherView(model, user);
+            new Window { Width = 400, Height = 600, Content = view }.Show();
+            var actions = new List<LauncherFooterAction>();
+            view.FooterInvoked += (_, a) => actions.Add(a);
+
+            Assert.Equal("Mark Toman", view.UserDisplayName);
+            Button Find(string tag) => view.GetVisualDescendants().OfType<Button>().Single(b => (string?)b.Tag == tag);
+            void Click(Button b) => b.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+
+            Click(Find("footer:Files"));
+            Click(Find("footer:Settings"));
+            Assert.Equal([LauncherFooterAction.Files, LauncherFooterAction.Settings], actions);
+
+            Assert.False(view.PowerChoicesVisible);
+            Click(Find("footer:Power"));
+            Assert.True(view.PowerChoicesVisible);
+            actions.Clear();
+            Click(Find("power:Shut down"));
+            Assert.Equal([LauncherFooterAction.ShutDown], actions);
+            Assert.False(view.PowerChoicesVisible);   // choosing closes the list
+            Assert.DoesNotContain("footer:Files", view.VisibleTitles);   // the footer is not a result row
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [AvaloniaFact]
+    public void Launcher_footer_picture()
+    {
+        if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is not { Length: > 0 } shots) return;
+        var dir = Path.Combine(Path.GetTempPath(), "vde-footpic-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+            var model = new LauncherModel(hive, Vde.Freedesktop.DesktopEntryDatabase.Load(TestTheme.EmptyXdg(dir), []), ["VDE"]);
+            var view = new LauncherView(model, new UserProfile(k => k == "USER" ? "mark" : null, Path.Combine(dir, "none"), dir));
+            var window = new Window { Width = 460, Height = 320, Content = view };
+            window.Show();
+            view.GetVisualDescendants().OfType<Button>().Single(b => (string?)b.Tag == "footer:Power").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            window.CaptureRenderedFrame()!.Save(Path.Combine(shots, "launcher-footer.png"));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void The_user_profile_reads_the_full_name_and_finds_the_account_picture()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "vde-prof-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var passwd = Path.Combine(dir, "passwd");
+        File.WriteAllText(passwd, "ann:x:1001:1001:,,,:/home/ann:/bin/sh\nmark:x:1000:1000:Mark Toman,Room 1:/home/mark:/bin/bash\n");
+        try
+        {
+            Func<string, string?> Env(string name) => k => k == "USER" ? name : k == "HOME" ? dir : null;
+            var mark = new UserProfile(Env("mark"), passwd, Path.Combine(dir, "icons"));
+            Assert.Equal("Mark Toman", mark.DisplayName);
+            Assert.Equal("M", mark.Initial);
+            Assert.Null(mark.PicturePath);
+            File.WriteAllText(Path.Combine(dir, ".face"), "x");
+            Assert.Equal(Path.Combine(dir, ".face"), mark.PicturePath);
+
+            var ann = new UserProfile(Env("ann"), passwd, Path.Combine(dir, "icons"));
+            Assert.Equal("ann", ann.DisplayName);   // no full name: the account name
+            Assert.Equal("A", ann.Initial);
+            Assert.Equal("nobody", new UserProfile(Env("nobody"), Path.Combine(dir, "missing")).DisplayName);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [AvaloniaFact]
     public void The_launcher_shows_pinned_and_recent_all_apps_and_local_search_and_runs_what_is_picked()
     {
         var dir = Path.Combine(Path.GetTempPath(), "vde-launch-" + Guid.NewGuid().ToString("N"));
