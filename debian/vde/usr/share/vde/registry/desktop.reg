@@ -1,8 +1,0 @@
-Windows Registry Editor Version 5.00
-
-; The default wallpaper, merged into an existing system hive when a package is upgraded from a release that had none
-; (a fresh hive gets it from system.reg). A user's own choice under HKCU overrides it.
-
-[HKEY_LOCAL_MACHINE\Software\Vde\Desktop]
-"Wallpaper"="/usr/share/backgrounds/vde/Vibe.png"
-"WallpaperMode"="Fill"

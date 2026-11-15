@@ -4,3 +4,13 @@ obj/
 *.user
 native/build/
 build/
+
+# dpkg-buildpackage leftovers (the packaging itself is debian/{changelog,control,copyright,rules,source,vde.postinst,vde.prerm})
+debian/.home/
+debian/.debhelper/
+debian/vde/
+debian/files
+debian/debhelper-build-stamp
+debian/*.debhelper
+debian/*.debhelper.log
+debian/*.substvars

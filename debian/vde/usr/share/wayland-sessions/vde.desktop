@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=Vibe Desktop Environment
-Comment=The VDE session: vwm, the taskbar, the desktop and your autostart programs
-Exec=start-vde
-TryExec=start-vde
-Type=Application
-DesktopNames=VDE

@@ -1,8 +1,0 @@
-#%PAM-1.0
-# The greeter's own session: no password (nobody types one), but a real session of class "greeter" so that logind
-# gives the login screen the screen and the keyboard.
-auth       required     pam_permit.so
-account    required     pam_permit.so
-password   required     pam_deny.so
-session    required     pam_unix.so
--session   optional     pam_systemd.so class=greeter

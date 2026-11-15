@@ -1,3 +1,0 @@
-misc:Depends=init-system-helpers (>= 1.52)
-shlibs:Depends=libc6 (>= 2.38), libdisplay-info2 (>= 0.2.0), libdrm2 (>= 2.4.119), libegl1, libfontconfig1 (>= 2.12.6), libgbm1 (>= 21.1.0), libgcc-s1 (>= 3.0), libgles2, libinput10 (>= 1.26.0), libpixman-1-0 (>= 0.44.0), libseat1 (>= 0.5.0), libstdc++6 (>= 5.2), libudev1 (>= 183), libwayland-client0 (>= 1.23.0), libwayland-server0 (>= 1.20.92), libxcb-composite0, libxcb-dri3-0 (>= 1.13), libxcb-ewmh2 (>= 0.4.2), libxcb-icccm4 (>= 0.4.2), libxcb-present0, libxcb-render-util0, libxcb-render0, libxcb-res0 (>= 1.10), libxcb-shm0 (>= 1.10), libxcb-xfixes0 (>= 1.15), libxcb-xinput0 (>= 1.17.0), libxcb1, libxkbcommon0 (>= 0.5.0)
-misc:Pre-Depends=

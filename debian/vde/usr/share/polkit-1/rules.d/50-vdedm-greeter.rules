@@ -1,9 +1,0 @@
-// The login screen's Shut down and Restart buttons: let the greeter's account (and only it) ask logind.
-polkit.addRule(function(action, subject) {
-    if (subject.user == "vdedm" && (
-            action.id == "org.freedesktop.login1.power-off" || action.id == "org.freedesktop.login1.power-off-multiple-sessions" ||
-            action.id == "org.freedesktop.login1.reboot" || action.id == "org.freedesktop.login1.reboot-multiple-sessions" ||
-            action.id == "org.freedesktop.login1.suspend" || action.id == "org.freedesktop.login1.suspend-multiple-sessions")) {
-        return polkit.Result.YES;
-    }
-});
