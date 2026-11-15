@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -717,6 +718,14 @@ static void view_mapped(struct vwm_view *v)
 			wlr_scene_node_set_enabled(&v->tree->node, true);
 			view_move(v, v->x11->x, v->x11->y);
 			return;
+		}
+		/* helpers that exist to be invisible: KDE's xwaylandvideobridge (screen sharing for X11 apps) draws a blank
+		 * 100x100 window that KWin hides by a rule of its own; here it is simply never shown or listed */
+		const char *cls = v->x11->class;
+		if (cls && !strcasecmp(cls, "xwaylandvideobridge")) {
+			v->unmanaged = true;
+			v->decorated = false;
+			return;   /* the scene node stays disabled */
 		}
 		v->role = x11_role(v->x11);
 		if (v->role != ROLE_NORMAL) {
