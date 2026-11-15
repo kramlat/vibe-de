@@ -112,6 +112,7 @@ struct vwm_view {
 	struct wl_listener decoration_destroy, decoration_mode;
 	struct wl_listener x11_commit;
 	enum view_role role;
+	bool unlisted;   /* _NET_WM_STATE_SKIP_TASKBAR (the start menu, tool windows): a window, but no taskbar button */
 	struct wl_listener x11_set_strut;
 	bool unmanaged;   /* X11 menus and tooltips: shown, but not windows the shell lists */
 	struct wl_listener handle_activate, handle_close, handle_minimize, handle_maximize;
@@ -432,13 +433,13 @@ void vwm_each_view(struct vwm_server *s, void (*fn)(struct vwm_view *, void *), 
 {
 	struct vwm_view *v;
 	wl_list_for_each(v, &s->views, link)
-		if (v->mapped && !v->unmanaged)
+		if (v->mapped && !v->unmanaged && !v->unlisted)
 			fn(v, data);
 }
 
 static void view_announce(struct vwm_view *v)
 {
-	if (v->mapped && !v->unmanaged)
+	if (v->mapped && !v->unmanaged && !v->unlisted)
 		vwm_ipc_window(v->server->ipc, v);
 }
 
@@ -741,17 +742,20 @@ static void view_mapped(struct vwm_view *v)
 		view_enable_chrome(v);
 	place_new_view(v);
 
-	v->handle = wlr_foreign_toplevel_handle_v1_create(s->toplevels);
-	wlr_foreign_toplevel_handle_v1_set_title(v->handle, view_title(v));
-	wlr_foreign_toplevel_handle_v1_set_app_id(v->handle, view_app_id(v));
-	v->handle_activate.notify = on_handle_activate;
-	wl_signal_add(&v->handle->events.request_activate, &v->handle_activate);
-	v->handle_close.notify = on_handle_close;
-	wl_signal_add(&v->handle->events.request_close, &v->handle_close);
-	v->handle_minimize.notify = on_handle_minimize;
-	wl_signal_add(&v->handle->events.request_minimize, &v->handle_minimize);
-	v->handle_maximize.notify = on_handle_maximize;
-	wl_signal_add(&v->handle->events.request_maximize, &v->handle_maximize);
+	v->unlisted = v->x11 && v->x11->skip_taskbar;
+	if (!v->unlisted) {
+		v->handle = wlr_foreign_toplevel_handle_v1_create(s->toplevels);
+		wlr_foreign_toplevel_handle_v1_set_title(v->handle, view_title(v));
+		wlr_foreign_toplevel_handle_v1_set_app_id(v->handle, view_app_id(v));
+		v->handle_activate.notify = on_handle_activate;
+		wl_signal_add(&v->handle->events.request_activate, &v->handle_activate);
+		v->handle_close.notify = on_handle_close;
+		wl_signal_add(&v->handle->events.request_close, &v->handle_close);
+		v->handle_minimize.notify = on_handle_minimize;
+		wl_signal_add(&v->handle->events.request_minimize, &v->handle_minimize);
+		v->handle_maximize.notify = on_handle_maximize;
+		wl_signal_add(&v->handle->events.request_maximize, &v->handle_maximize);
+	}
 
 	focus_view(v);
 	view_announce(v);
@@ -772,7 +776,8 @@ static void view_unmapped(struct vwm_view *v)
 		}
 		return;
 	}
-	vwm_ipc_closed(s->ipc, v->id);
+	if (!v->unlisted)
+		vwm_ipc_closed(s->ipc, v->id);
 	if (v->handle) {
 		wl_list_remove(&v->handle_activate.link);
 		wl_list_remove(&v->handle_close.link);
