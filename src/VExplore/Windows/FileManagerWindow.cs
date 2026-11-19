@@ -4,9 +4,11 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Vde.Shell;
 using Vde.Shell.Controls;
 using Vde.Shell.ComDlg;
+using Vde.Shell.Theme;
 using Vibe.Registry;
 
 namespace VExplore.Windows;
@@ -21,9 +23,11 @@ public sealed class FileManagerWindow : Window
     private readonly AddressBar _address = new();
     private readonly FileListView _list = new();
     private readonly PlacesSidebar _places = new();
+    private readonly TextBox _search = new() { MinWidth = 210 };
     private readonly TextBlock _status = new() { Margin = new Thickness(8, 4) };
-    private readonly Button _back = new() { Content = "◀" }, _forward = new() { Content = "▶" }, _up = new() { Content = "▲" }, _refresh = new() { Content = "⟳" };
-    private readonly ToggleButton _hidden = new() { Content = "Hidden" };
+    private readonly Button _back, _forward, _up, _refresh;
+    private IReadOnlyList<FileEntry> _unfiltered = [];
+    private bool _hidden;
     private FolderWatcher? _watcher;
 
     private readonly FileActions _actions;
@@ -52,11 +56,16 @@ public sealed class FileManagerWindow : Window
         _address.Home = Home;
         _places.Places = Places.Default(folders, shellFolders);
 
+        _back = NavButton(["go-previous"]);
+        _forward = NavButton(["go-next"]);
+        _up = NavButton(["go-up"]);
+        _refresh = NavButton(["view-refresh"]);
         _back.Click += (_, _) => Go(_history.Back(), record: false);
         _forward.Click += (_, _) => Go(_history.Forward(), record: false);
         _up.Click += (_, _) => Go(_history.Up(), record: false);
         _refresh.Click += (_, _) => Reload();
-        _hidden.IsCheckedChanged += (_, _) => Reload();
+        _search.Watermark = "Search";
+        _search.TextChanged += (_, _) => ApplyFilter();
         _address.PathRequested += (_, path) => Navigate(path);
         _places.PlaceInvoked += (_, place) =>
         {
@@ -67,6 +76,7 @@ public sealed class FileManagerWindow : Window
         };
         _list.ItemsInvoked += (_, items) => Open(items);
         _list.SortChanged += (_, _) => Reload();
+        _list.SelectionChanged += (_, _) => UpdateStatus();
         var menu = new ContextMenu();
         menu.Opening += (_, _) => FillContextMenu(menu);
         _list.InnerList.ContextMenu = menu;
@@ -81,11 +91,28 @@ public sealed class FileManagerWindow : Window
         };
         _list.InnerList.PointerMoved += OnPointerMoved;
 
-        var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(6), Children = { _back, _forward, _up, _refresh, _hidden } };
-        var top = new DockPanel { LastChildFill = true };
-        DockPanel.SetDock(toolbar, Dock.Left);
-        top.Children.Add(toolbar);
-        top.Children.Add(_address);
+        // The Windows 11 Explorer top area: navigation and a rounded address field with a search box on the
+        // right, and below it a command bar of the common file actions.
+        var navRow = new DockPanel { LastChildFill = true, VerticalAlignment = VerticalAlignment.Center };
+        DockPanel.SetDock(_search, Dock.Right);
+        navRow.Children.Add(_search);
+        var navButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        foreach (var button in new[] { _back, _forward, _up, _refresh })
+            navButtons.Children.Add(button);
+        DockPanel.SetDock(navButtons, Dock.Left);
+        navRow.Children.Add(navButtons);
+        navRow.Children.Add(new Border
+        {
+            CornerRadius = new CornerRadius(4),
+            BorderBrush = ThemeTokens.Find(this, ThemeToken.Border, Brushes.LightGray),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(4, 3),
+            Margin = new Thickness(8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Child = _address,
+        });
+
+        var top = new StackPanel { Margin = new Thickness(8, 6, 8, 0), Children = { navRow, CommandBar() } };
 
         var root = new DockPanel();
         DockPanel.SetDock(top, Dock.Top);
@@ -124,7 +151,117 @@ public sealed class FileManagerWindow : Window
     public bool CanGoForward => _history.CanGoForward;
     public IReadOnlyList<FileEntry> Entries => _list.Entries;
     public string StatusText => _status.Text ?? "";
-    public bool ShowHidden { get => _hidden.IsChecked == true; set => _hidden.IsChecked = value; }
+    public bool ShowHidden { get => _hidden; set { _hidden = value; Reload(); } }
+    public string SearchText
+    {
+        get => _search.Text ?? "";
+        set { _search.Text = value; ApplyFilter(); }   // now: TextChanged may come later than the caller expects
+    }
+
+    // A flat Windows 11 style button showing a themed icon.
+    private static Button NavButton(IReadOnlyList<string> icons, Action? invoke = null)
+    {
+        var button = new Button
+        {
+            Padding = new Thickness(10, 7),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Content = new ShellIcon { IconNames = icons, IconSize = 16 },
+        };
+        if (invoke is not null) button.Click += (_, _) => invoke();
+        return button;
+    }
+
+    // The command bar row: New, the clipboard and naming actions, then Sort and View folded into menus.
+    private Control CommandBar()
+    {
+        var bar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 1, Margin = new Thickness(0, 6, 0, 2) };
+        var newButton = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        newButton.Children.Add(new ShellIcon { IconNames = ["folder-new"], IconSize = 16 });
+        newButton.Children.Add(new TextBlock { Text = "New", VerticalAlignment = VerticalAlignment.Center });
+        bar.Children.Add(FlatButton(newButton, "New folder", () => NewFolder()));
+        bar.Children.Add(Gap(bar));
+        bar.Children.Add(FlatIconButton(["edit-cut"], "Cut", () => _ = CutAsync()));
+        bar.Children.Add(FlatIconButton(["edit-copy"], "Copy", () => _ = CopyAsync()));
+        bar.Children.Add(FlatIconButton(["edit-paste"], "Paste", () => _ = PasteAsync()));
+        bar.Children.Add(FlatIconButton(["edit-rename", "document-edit"], "Rename", () => _ = BeginRenameAsync()));
+        bar.Children.Add(FlatIconButton(["edit-delete"], "Delete", () => DeleteSelected()));
+        bar.Children.Add(Gap(bar));
+
+        MenuItem SortItem(string label, SortKey key)
+        {
+            var item = new MenuItem { Header = label };
+            item.Click += (_, _) => _list.Sort(key, _list.SortKey == key && !_list.SortDescending);   // the same choice again flips the direction
+            return item;
+        }
+        var sort = new ContextMenu
+        {
+            Items = { SortItem("Name", SortKey.Name), SortItem("Date modified", SortKey.Modified), SortItem("Type", SortKey.Type), SortItem("Size", SortKey.Size) },
+        };
+        bar.Children.Add(FoldButton("Sort", sort));
+
+        var view = new ContextMenu();
+        var hidden = new MenuItem { Header = "Hidden items" };
+        hidden.Click += (_, _) => ShowHidden = !ShowHidden;
+        var refresh = new MenuItem { Header = "Refresh" };
+        refresh.Click += (_, _) => Reload();
+        view.Items.Add(hidden);
+        view.Items.Add(refresh);
+        bar.Children.Add(FoldButton("View", view));
+        return bar;
+    }
+
+    private static Button FlatButton(object content, string tip, Action invoke)
+    {
+        var button = new Button
+        {
+            Content = content,
+            Padding = new Thickness(10, 7), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
+        };
+        ToolTip.SetTip(button, tip);
+        button.Click += (_, _) => invoke();
+        return button;
+    }
+
+    private static Button FlatIconButton(IReadOnlyList<string> icons, string tip, Action invoke)
+        => FlatButton(new ShellIcon { IconNames = icons, IconSize = 16 }, tip, invoke);
+
+    // A labelled button with a chevron that opens the menu it folds (Sort, View).
+    private Button FoldButton(string label, ContextMenu menu)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        panel.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        panel.Children.Add(new TextBlock { Text = "⌄", VerticalAlignment = VerticalAlignment.Center, Opacity = 0.7 });
+        var button = FlatButton(panel, label, () => { });
+        button.Click += (_, e) => { menu.Placement = PlacementMode.Bottom; menu.Open(button); e.Handled = true; };
+        return button;
+    }
+
+    private static Control Gap(Control relative) => new Border
+    {
+        Width = 1, Margin = new Thickness(7, 8),
+        Background = ThemeTokens.Find(relative, ThemeToken.Border, Brushes.LightGray),
+    };
+
+    // The list narrowed to entries whose name contains the search text (case-insensitive).
+    private bool FilterActive => SearchText.Trim().Length > 0;
+
+    private void ApplyFilter()
+    {
+        var query = SearchText.Trim();
+        _list.Entries = query.Length == 0
+            ? _unfiltered
+            : _unfiltered.Where(e => e.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+        UpdateStatus();
+    }
+
+    // The status line: how many entries, and how many are selected (only while it is showing counts).
+    private void UpdateStatus()
+    {
+        var count = _list.Entries.Count;
+        var selected = _list.SelectedEntries.Count;
+        _status.Text = (count == 1 ? "1 item" : count + " items") + (selected > 0 ? " | " + (selected == 1 ? "1 selected" : selected + " selected") : "");
+    }
 
     // ---- file actions: the same ones the desktop has ----
 
@@ -295,6 +432,7 @@ public sealed class FileManagerWindow : Window
         if (info is null)
         {
             Title = "Not available";
+            _unfiltered = [];
             _list.Entries = [];
             _status.Text = "This place is not available.";
             return;
@@ -307,12 +445,14 @@ public sealed class FileManagerWindow : Window
             Title = folder.DisplayName;
             var items = folder.GetItems();
             var path = _history.Current;
-            _list.Entries = items.Select(i => new FileEntry(i.Name, path + "/" + i.Id, i.IsFolder, false, false, i.Size ?? 0, i.ModifiedUtc ?? default, "")
+            _unfiltered = items.Select(i => new FileEntry(i.Name, path + "/" + i.Id, i.IsFolder, false, false, i.Size ?? 0, i.ModifiedUtc ?? default, "")
                 { IconNames = i.IconNames, TypeText = i.TypeText, Detail = i.Detail, Tag = i }).ToList();
-            _status.Text = items.Count == 1 ? "1 item" : $"{items.Count} items";
+            ApplyFilter();
+            _search.Watermark = "Search " + Title;
         }
         catch (Exception e) when (e is ComponentLoadException or InvalidOperationException or IOException)
         {
+            _unfiltered = [];
             _list.Entries = [];
             _status.Text = e.Message;
         }
@@ -413,12 +553,14 @@ public sealed class FileManagerWindow : Window
 
         try
         {
-            _list.Entries = FolderLister.List(_history.Current, ShowHidden);
-            _status.Text = _list.Entries.Count == 1 ? "1 item" : $"{_list.Entries.Count} items";
+            _unfiltered = FolderLister.List(_history.Current, ShowHidden);
+            ApplyFilter();
+            _search.Watermark = "Search " + Title;
             _watcher = new FolderWatcher(_history.Current, () => Avalonia.Threading.Dispatcher.UIThread.Post(Reload));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
+            _unfiltered = [];
             _list.Entries = [];
             _status.Text = e is UnauthorizedAccessException ? "You do not have permission to open this folder." : "This folder cannot be opened: " + e.Message;
         }

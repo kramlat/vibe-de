@@ -22,6 +22,11 @@ public sealed class FileTypes
 {
     public const string RegistryRoot = "CLSID";
 
+    private const string ExecutableMime = "application/x-executable";
+    private const string SharedLibMime = "application/x-sharedlib";
+    private const string ScriptIcon = "text-x-script";
+    private const string UnknownIcon = "unknown";
+
     private readonly MimeDatabase _mime;
     private readonly ClassesRoot? _classes;
     private readonly IReadOnlyList<string> _locales;
@@ -47,15 +52,84 @@ public sealed class FileTypes
         var ext = Extension(path);
         var mime = GetMimeType(path);
 
+        // The glob tables go by file name only; head bytes tell what an octet-stream or an unnamed
+        // script is. Only truly binary files can be ELF, and only they move to a better MIME type.
+        var (sniffedMime, sniffedIcon) = mime is MimeDatabase.Binary or MimeDatabase.Text && File.Exists(path)
+            ? SniffBinary(path, mime)
+            : (null, null);
+        if (sniffedMime is not null)
+            mime = sniffedMime;
+
         var description = Lookup(ext, "") ?? ProgId(ext, "") ?? Lookup(mime, "") ?? _mime.Describe(mime, _locales);
 
         var icons = new List<string>();
+        if (sniffedIcon is not null)
+            icons.Add(sniffedIcon);
         foreach (var candidate in new[] { Lookup(ext, "DefaultIcon"), ProgId(ext, "DefaultIcon"), Lookup(mime, "DefaultIcon") })
             if (candidate is not null && IsDrawableHere(candidate) && !icons.Contains(candidate))
                 icons.Add(candidate);
         icons.AddRange(_mime.IconNames(mime).Where(n => !icons.Contains(n)));
 
         return new FileTypeInfo(mime, description, icons);
+    }
+
+    // Content decides what a name globbing could not: any '#!' line is a script, ELF magic a program
+    // (ET_EXEC) or a shared object (ET_DYN, which PIE programs carry too); a binary with an execute
+    // bit set also counts as a program, and only the rest is unknown. Mime stays octet-stream when
+    // no better type fits, and Icon (when set) leads the icon list.
+    private (string? Mime, string? Icon) SniffBinary(string path, string mime)
+    {
+        var head = Head(path, 20);
+        if (head is null)
+            return mime == MimeDatabase.Binary
+                ? IsExecutable(path) ? (ExecutableMime, null) : (null, UnknownIcon)
+                : (null, null);
+        if (head.Length >= 4 && head[0] == 0x7f && head[1] == (byte)'E' && head[2] == (byte)'L' && head[3] == (byte)'F')
+        {
+            var little = head.Length < 6 || head[5] != 2;   // EI_DATA: 2 = big endian
+            var type = head.Length < 18 ? 0 : little ? head[16] | (head[17] << 8) : (head[16] << 8) | head[17];
+            if (type == 3)
+                return (SharedLibMime, null);
+            if (type == 2)
+                return (ExecutableMime, null);
+        }
+        else if (head.Length >= 2 && head[0] == (byte)'#' && head[1] == (byte)'!')
+            return (null, ScriptIcon);   // scripts keep their (text) type, only the icon gets sharper
+
+        if (mime != MimeDatabase.Binary)
+            return (null, null);
+        return IsExecutable(path) ? (ExecutableMime, null) : (null, UnknownIcon);
+    }
+
+    // The first count bytes of a file, or null when it cannot be read.
+    private static byte[]? Head(string path, int count)
+    {
+        try
+        {
+            var head = new byte[count];
+            using var stream = File.OpenRead(path);
+            int read = 0, n;
+            while (read < count && (n = stream.Read(head, read, count - read)) > 0)
+                read += n;
+            return head[..read];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsExecutable(string path)
+    {
+        try
+        {
+            var mode = File.GetUnixFileMode(path);
+            return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return false;
+        }
     }
 
     // The actions the registry defines for a file: shell\<verb> with a name and command, e.g. open, edit, print.

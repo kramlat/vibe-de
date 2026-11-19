@@ -41,6 +41,15 @@ public sealed class FileListView : UserControl
         var layout = new DockPanel();
         DockPanel.SetDock(_header, Dock.Top);
         layout.Children.Add(_header);
+        // the line under the column headings, as in Windows 11's Explorer
+        var divider = new Border
+        {
+            Height = 1,
+            Background = ThemeTokens.Find(this, ThemeToken.Border, Brushes.LightGray),
+            Margin = new Thickness(6, 0, 6, 2),
+        };
+        DockPanel.SetDock(divider, Dock.Top);
+        layout.Children.Add(divider);
         layout.Children.Add(_list);
         Content = layout;
     }

@@ -781,7 +781,7 @@ public class FileTypesTests
     private static (FileTypes types, ClassesRoot hkcr, Fixture fx) Build()
     {
         var fx = new Fixture();
-        fx.Write("usr-share/mime/globs2", "50:image/png:*.png\n50:text/plain:*.txt\n50:text/x-log:*.log\n");
+        fx.Write("usr-share/mime/globs2", "50:image/png:*.png\n50:text/plain:*.txt\n50:text/x-log:*.log\n50:application/x-sharedlib:*.so\n50:application/x-sharedlib:*.so.*\n");
         fx.Write("usr-share/mime/generic-icons", "image/png:image-x-generic\n");
         fx.Write("usr-share/mime/image/png.xml",
             "<mime-type xmlns=\"http://www.freedesktop.org/standards/shared-mime-info\" type=\"image/png\"><comment>PNG image</comment></mime-type>");
@@ -848,6 +848,52 @@ public class FileTypesTests
             Assert.Equal("image-png", types.Describe("/x/a.png").IconNames[0]);
             Assert.Equal("application/octet-stream", types.Describe("/x/unknown.zzz").MimeType);
         }
+    }
+
+    [Fact]
+    public void Octet_stream_files_are_sorted_out_by_content()
+    {
+        var (types, _, fx) = Build();
+        using (fx)
+        {
+            var script = fx.Write("runme", "#!/bin/sh\necho hi\n");
+            File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            Assert.Equal(MimeDatabase.Text, types.Describe(script).MimeType);
+            Assert.Equal("text-x-script", types.Describe(script).IconNames[0]);
+
+            var program = Elf(fx, 2);
+            Assert.Equal("application/x-executable", types.Describe(program).MimeType);
+            Assert.Equal("application-x-executable", types.Describe(program).IconNames[0]);
+
+            var lib = Elf(fx, 3);
+            File.SetUnixFileMode(lib, UnixFileMode.UserRead);   // shared even without an execute bit
+            Assert.Equal("application/x-sharedlib", types.Describe(lib).MimeType);
+            var shared = fx.Write("libthing.so", "\0binary");
+            Assert.Equal("application/x-sharedlib", types.Describe(shared).MimeType);
+            Assert.Equal("application-x-sharedlib", types.Describe(shared).IconNames[0]);
+
+            var rel = Elf(fx, 1);
+            File.SetUnixFileMode(rel, UnixFileMode.UserRead);
+            Assert.Equal(MimeDatabase.Binary, types.Describe(rel).MimeType);
+            Assert.Equal("unknown", types.Describe(rel).IconNames[0]);
+
+            var data = fx.Write("blob", "\0\u0001\u0002\u0003blob data");
+            Assert.Equal(MimeDatabase.Binary, types.Describe(data).MimeType);
+            Assert.Equal("unknown", types.Describe(data).IconNames[0]);
+
+            File.SetUnixFileMode(data, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+            Assert.Equal("application/x-executable", types.Describe(data).MimeType);   // exec, no shebang, no ELF
+        }
+    }
+
+    // Enough of an ELF header for the e_type at offset 16.
+    private static string Elf(Fixture fx, int eType)
+    {
+        var path = Path.Combine(fx.Root, "bin/elf" + eType);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, [0x7f, (byte)'E', (byte)'L', (byte)'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, (byte)eType, 0, 0, 0]);
+        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        return path;
     }
 
     [Fact]

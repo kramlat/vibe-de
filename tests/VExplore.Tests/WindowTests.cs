@@ -34,6 +34,27 @@ public class WindowTests
     }
 
     [AvaloniaFact]
+    public void The_file_managers_search_box_filters_what_is_listed_and_the_status_shows_the_selection()
+    {
+        using var t = new Tree();
+        var window = new FileManagerWindow(t.Home, t.Folders, _ => { });
+        window.Show();
+
+        window.SearchText = "read";
+        Assert.Equal(new[] { "readme.md" }, window.Entries.Select(e => e.Name));
+        Assert.Equal("1 item", window.StatusText);
+
+        window.SelectEntries("readme.md");
+        Assert.Equal("1 item | 1 selected", window.StatusText);
+
+        window.SearchText = "";
+        Assert.Equal(2, window.Entries.Count);
+        Assert.Equal("2 items | 1 selected", window.StatusText);
+        foreach (var label in new[] { "New", "Sort", "View" })
+            Assert.True(window.GetVisualDescendants().OfType<TextBlock>().Any(b => b.Text == label), label + " button is on the command bar");
+    }
+
+    [AvaloniaFact]
     public void The_file_manager_navigates_with_history_up_and_the_address_bar_and_opens_files_through_the_shell()
     {
         using var t = new Tree();

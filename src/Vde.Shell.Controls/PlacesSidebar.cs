@@ -1,13 +1,15 @@
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Styling;
 using Vde.Shell;
 
 namespace Vde.Shell.Controls;
 
-// The list of places down the left of a file manager window.
+// The list of places down the left of a file manager window. Windows 11 style: tall rows whose
+// selection is a rounded pill on the Mica background.
 public sealed class PlacesSidebar : UserControl
 {
-    private readonly ListBox _list = new() { SelectionMode = SelectionMode.Single };
+    private readonly ListBox _list = new() { SelectionMode = SelectionMode.Single, Background = Avalonia.Media.Brushes.Transparent, Margin = new Avalonia.Thickness(8) };
     private IReadOnlyList<Place> _places = [];
     private bool _quiet;
 
@@ -25,6 +27,11 @@ public sealed class PlacesSidebar : UserControl
             if (!_quiet && _list.SelectedItem is Place place)
                 PlaceInvoked?.Invoke(this, place);
         };
+        var rows = new Style(x => x.OfType<ListBoxItem>());
+        rows.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Avalonia.Thickness(10, 7)));
+        rows.Setters.Add(new Setter(ListBoxItem.MarginProperty, new Avalonia.Thickness(2, 1)));
+        rows.Setters.Add(new Setter(ListBoxItem.CornerRadiusProperty, new Avalonia.CornerRadius(4)));
+        Styles.Add(rows);
         Content = _list;
     }
 
