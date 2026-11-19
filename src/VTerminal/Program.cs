@@ -24,7 +24,7 @@ if (Pty.FindLauncher() is null)
     return 1;
 }
 
-return AppBuilder.Configure<App>().UsePlatformDetect().StartWithClassicDesktopLifetime([]);
+return AppBuilder.Configure<App>().UsePlatformDetect().UseWaylandWithFallback().StartWithClassicDesktopLifetime([]);
 
 public sealed class App : Application
 {

@@ -46,6 +46,14 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_viewporter.h>
+#include <wlr/types/wlr_cursor_shape_v1.h>
+#include <wlr/types/wlr_content_type_v1.h>
+#include <wlr/types/wlr_data_control_v1.h>
+#include <wlr/types/wlr_idle_inhibit_v1.h>
+#include <wlr/types/wlr_idle_notify_v1.h>
+#include <wlr/types/wlr_presentation_time.h>
+#include <wlr/types/wlr_single_pixel_buffer_v1.h>
+#include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_output_v1.h>
@@ -61,6 +69,9 @@ enum cursor_mode { CURSOR_PASSTHROUGH, CURSOR_MOVE, CURSOR_RESIZE };
 /* X11 windows that are part of the shell, found by _NET_WM_WINDOW_TYPE: the desktop sits below every window, a dock
  * (the taskbar) above them and reserves its edge (_NET_WM_STRUT_PARTIAL). Neither has a titlebar or is listed. */
 enum view_role { ROLE_NORMAL, ROLE_DESKTOP, ROLE_DOCK };
+
+/* which edge an announced dock reserves (X11 docks say it with struts; Wayland docks announce it here) */
+enum dock_edge { DOCK_NO_EDGE = 0, DOCK_LEFT, DOCK_RIGHT, DOCK_TOP, DOCK_BOTTOM };
 
 enum chrome_kind { HIT_TITLE = 1, HIT_GRIP, HIT_MENU };
 enum chrome_button { BTN_NONE, BTN_MIN, BTN_MAX, BTN_CLOSE };
@@ -108,14 +119,24 @@ struct vwm_view {
 	struct wlr_scene_rect *title_fallback;
 	struct chrome_hit title_hit, grip_hit[5];
 	int last_w, last_h;
+	/* Windows 11 style drop shadow: a blurred black rect under the window, rebuilt only when the
+	 * size changes; the two cached pixbufs are the focused and the unfocused strength */
+	struct wlr_scene_tree *shadow;
+	struct wlr_scene_buffer *shadow_image;
+	struct pixbuf *shadow_cache[2];
+	int shadow_w, shadow_h;
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;
 	struct wl_listener decoration_destroy, decoration_mode;
 	struct wl_listener x11_commit;
+	/* wlroots destroys the subsurface tree itself when the wlr_surface dies; this clears surface_tree
+	 * so x11_dissociate does not destroy an already-freed node */
+	struct wl_listener surface_tree_destroy;
 	enum view_role role;
 	bool unlisted;   /* _NET_WM_STATE_SKIP_TASKBAR (the start menu, tool windows): a window, but no taskbar button */
 	struct wl_listener x11_set_strut;
 	bool unmanaged;   /* X11 menus and tooltips: shown, but not windows the shell lists */
 	struct wl_listener handle_activate, handle_close, handle_minimize, handle_maximize;
+	enum dock_edge dock_edge;   /* the edge a shell-announced dock reserves (see vwm_view_set_role) */
 };
 
 struct vwm_layer {
@@ -149,6 +170,8 @@ struct vwm_server {
 	struct wlr_xdg_shell *xdg_shell;
 	struct wlr_layer_shell_v1 *layer_shell;
 	struct wlr_foreign_toplevel_manager_v1 *toplevels;
+	struct wlr_xdg_activation_v1 *activation;   /* xdg-activation: Wayland apps ask to be focused (Chromium, Electron) */
+	struct wlr_idle_notifier_v1 *idle_notifier;
 	struct wlr_xwayland *xwayland;
 	struct wlr_cursor *cursor;
 	struct wlr_xcursor_manager *xcursor;
@@ -185,7 +208,8 @@ struct vwm_server {
 
 	struct wl_listener new_output, new_xdg_toplevel, new_layer, new_x11, x11_ready, new_input,
 		cursor_motion, cursor_motion_absolute, cursor_button, cursor_axis, cursor_frame,
-		request_cursor, request_set_selection, request_set_primary, new_decoration;
+		request_cursor, request_set_selection, request_set_primary, new_decoration,
+		activation_request, cursor_set_shape;
 };
 
 static struct vwm_server *the_server;
@@ -406,6 +430,147 @@ void vwm_view_set_chrome(struct vwm_view *v, int w, int h, void *bgra)
 	}
 }
 
+/* ---------- window shadows (Windows 11 style) ---------- */
+
+#define SHADOW_MARGIN 48   /* how far the soft edge reaches past the window */
+#define SHADOW_BLUR   12   /* box-blur radius per pass */
+#define SHADOW_PASSES 3    /* three box blurs come close to a Gaussian */
+#define SHADOW_DROP   8    /* the shadow falls slightly downward, as Windows 11's does */
+#define SHADOW_ALPHA_ACTIVE   108 /* focused: strongest point of the shadow, 0..255 */
+#define SHADOW_ALPHA_INACTIVE 56  /* unfocused */
+
+static bool shadow_accepts_nothing(struct wlr_scene_buffer *b, double *sx, double *sy)
+{
+	return false;   /* the shadow is purely visual; pointer hits pass through it */
+}
+
+/* A box blur in one direction. Each of `outer` lines is `inner` pixels long,
+ * consecutive pixels of a line sit `step` bytes apart. Edges fade as if
+ * outside the picture were transparent. */
+static void shadow_blur(uint8_t *src, uint8_t *dst, int outer, int inner, int step, int radius)
+{
+	int window = 2 * radius + 1;
+	for (int o = 0; o < outer; o++) {
+		uint8_t *in = src + (size_t)o * step;
+		uint8_t *out = dst + (size_t)o * step;
+		int sum = 0;
+		for (int i = 0; i <= radius && i < inner; i++)
+			sum += in[i];
+		for (int i = 0; i < inner; i++) {
+			out[i] = (uint8_t)(sum / window);
+			if (i + radius + 1 < inner)
+				sum += in[i + radius + 1];
+			if (i - radius >= 0)
+				sum -= in[i - radius];
+		}
+	}
+}
+
+/* The soft black rectangle around the window, incl. its titlebar, pulled down
+ * a little. Canvas is (w + 2*margin) x (h + titlebar + 2*margin). */
+static struct pixbuf *shadow_pixbuf(struct vwm_view *v, bool focused)
+{
+	struct wlr_box g;
+	view_geometry(v, &g);
+	int m = SHADOW_MARGIN, th = title_h(v);
+	int w = g.width + 2 * m, h = g.height + th + 2 * m;
+	if (w <= 2 * m || h <= 2 * m)
+		return NULL;
+	struct pixbuf *pb = pixbuf_create(w, h, NULL);
+	uint8_t *mask = calloc((size_t)w * h, 1), *tmp = malloc((size_t)w * h);
+	if (!pb || !mask || !tmp) {
+		if (pb)
+			wlr_buffer_drop(&pb->base);
+		free(mask);
+		free(tmp);
+		return NULL;
+	}
+	/* the window's own rectangle, titlebar included, dropped by SHADOW_DROP */
+	int rx = m, ry = m - SHADOW_DROP, rw = g.width, rh = g.height + th;
+	for (int y = ry; y < ry + rh && y < h; y++)
+		memset(&mask[(size_t)y * w + rx], 255, rw);
+
+	for (int p = 0; p < SHADOW_PASSES; p++) {
+		shadow_blur(mask, tmp, h, w, w, SHADOW_BLUR);   /* horizontal */
+		shadow_blur(tmp, mask, w, h, h, SHADOW_BLUR);   /* vertical */
+	}
+
+	/* black, premultiplied: pixel = alpha << 24 */
+	uint32_t *px = pb->data;
+	unsigned strength = focused ? SHADOW_ALPHA_ACTIVE : SHADOW_ALPHA_INACTIVE;
+	for (int i = 0, n = w * h; i < n; i++) {
+		unsigned a = mask[i] * strength / 255;
+		px[i] = (uint32_t)a << 24;
+	}
+	free(mask);
+	free(tmp);
+	wlr_log(WLR_DEBUG, "shadow for window %u: %dx%d, %s", v->id, w, h, focused ? "active" : "inactive");
+	return pb;
+}
+
+/* Scene buffers without a wlr_surface would swallow wlr_scene_node_at results,
+ * so the shadow must never intercept: point_accepts_input says no (above). */
+static void shadow_update(struct vwm_view *v)
+{
+	bool want = v->mapped && !v->unmanaged && !v->unlisted && !v->fullscreen && !v->maximized;
+	if (!want) {
+		if (v->shadow)
+			wlr_scene_node_set_enabled(&v->shadow->node, false);
+		return;
+	}
+	struct wlr_box g;
+	view_geometry(v, &g);
+	if (g.width <= 0 || g.height <= 0)
+		return;
+	if (!v->shadow) {
+		v->shadow = wlr_scene_tree_create(v->tree);
+		v->shadow_image = wlr_scene_buffer_create(v->shadow, NULL);
+		v->shadow_image->point_accepts_input = shadow_accepts_nothing;
+		wlr_scene_node_lower_to_bottom(&v->shadow->node);
+	}
+	/* one pair of cached images serves until the window is resized */
+	if (v->shadow_w != g.width || v->shadow_h != g.height) {
+		for (int i = 0; i < 2; i++) {
+			if (v->shadow_cache[i]) {
+				wlr_buffer_drop(&v->shadow_cache[i]->base);
+				v->shadow_cache[i] = NULL;
+			}
+		}
+		v->shadow_w = g.width;
+		v->shadow_h = g.height;
+	}
+	int idx = v->server->focused == v ? 0 : 1;
+	if (!v->shadow_cache[idx]) {
+		v->shadow_cache[idx] = shadow_pixbuf(v, idx == 0);
+		if (!v->shadow_cache[idx])
+			return;
+	}
+	wlr_scene_buffer_set_buffer(v->shadow_image, &v->shadow_cache[idx]->base);
+	int th = title_h(v);
+	wlr_scene_buffer_set_dest_size(v->shadow_image, g.width + 2 * SHADOW_MARGIN,
+		g.height + th + 2 * SHADOW_MARGIN);
+	wlr_scene_node_set_position(&v->shadow_image->node, -SHADOW_MARGIN,
+		-th - SHADOW_MARGIN + SHADOW_DROP);
+	wlr_scene_node_set_enabled(&v->shadow->node, true);
+}
+
+static void shadow_destroy(struct vwm_view *v)
+{
+	for (int i = 0; i < 2; i++) {
+		if (v->shadow_cache[i]) {
+			wlr_buffer_drop(&v->shadow_cache[i]->base);
+			v->shadow_cache[i] = NULL;
+		}
+	}
+	if (v->shadow) {
+		wlr_scene_node_destroy(&v->shadow->node);
+		v->shadow = NULL;
+		v->shadow_image = NULL;
+	}
+	v->shadow_w = v->shadow_h = 0;
+}
+pid_t pid_of_client(struct wl_client *client);
+
 void vwm_view_get_info(struct vwm_view *v, struct vwm_view_info *out)
 {
 	struct wlr_box g;
@@ -417,6 +582,8 @@ void vwm_view_get_info(struct vwm_view *v, struct vwm_view_info *out)
 		.x = v->x, .y = v->y, .width = g.width, .height = g.height,
 		.decorated = v->decorated, .pressed = v->pressed,
 		.hover = v->hover == BTN_MIN ? "min" : v->hover == BTN_MAX ? "max" : v->hover == BTN_CLOSE ? "close" : "none",
+		.pid = v->x11 ? (unsigned)v->x11->pid
+			: v->xdg ? (unsigned)pid_of_client(v->xdg->base->client->client) : 0,
 	};
 }
 
@@ -427,6 +594,97 @@ struct vwm_view *vwm_find_view(struct vwm_server *s, uint32_t id)
 		if (v->id == id)
 			return v;
 	return NULL;
+}
+
+pid_t pid_of_client(struct wl_client *client)
+{
+	pid_t pid = 0;
+	uid_t uid = 0;
+	gid_t gid = 0;
+	wl_client_get_credentials(client, &pid, &uid, &gid);
+	return pid;
+}
+static void arrange_layers(struct vwm_server *s, struct vwm_output *o);
+static void focus_next_after_loss(struct vwm_server *s);
+static void output_box(struct vwm_server *s, struct wlr_box *box);
+
+static void view_move(struct vwm_view *v, int x, int y);
+static void view_resize(struct vwm_view *v, int w, int h);
+/* Puts a role-claimed view (the desktop picture, a dock) where its role says, the way x11_role_apply does
+ * for the X11 window types; usable-size bookkeeping happens in arrange_layers for both kinds alike. */
+static void role_apply(struct vwm_view *v)
+{
+	struct vwm_server *s = v->server;
+	struct wlr_box full, g;
+	output_box(s, &full);
+	view_geometry(v, &g);
+	wlr_scene_node_reparent(&v->tree->node, s->layers[v->role == ROLE_DESKTOP ? LAYER_BACKGROUND : LAYER_TOP]);
+	if (v->role == ROLE_DESKTOP) {
+		view_move(v, full.x, full.y);
+		if (v->x11)
+			wlr_xwayland_surface_configure(v->x11, full.x, full.y, full.width, full.height);
+		else
+			view_resize(v, full.width, full.height);
+	} else if (v->role == ROLE_DOCK) {
+		int x = v->x, y = v->y;
+		switch (v->dock_edge) {
+		case DOCK_BOTTOM: x = full.x; y = full.y + full.height - g.height; break;
+		case DOCK_TOP:    x = full.x; y = full.y; break;
+		case DOCK_LEFT:   x = full.x; y = full.y; break;
+		case DOCK_RIGHT:  x = full.x + full.width - g.width; y = full.y; break;
+		default: break;
+		}
+		view_move(v, x, y);
+		if (v->x11)
+			wlr_xwayland_surface_configure(v->x11, x, y, g.width, g.height);
+	}
+	v->last_w = g.width; v->last_h = g.height;
+	struct vwm_output *o = primary_output(s);
+	if (o)
+		arrange_layers(s, o);
+}
+
+void vwm_view_set_role(struct vwm_server *s, uint32_t id, const char *spec)
+{
+	struct vwm_view *v = vwm_find_view(s, id);
+	if (!v) {
+		wlr_log(WLR_INFO, "role %u %s: no such view", id, spec);
+		return;
+	}
+		wlr_log(WLR_INFO, "role %u %s: kind %s", id, spec, v->xdg ? "xdg" : "x11");
+	if (!strcmp(spec, "desktop"))
+		v->role = ROLE_DESKTOP;
+	else if (!strcmp(spec, "top"))    { v->role = ROLE_DOCK; v->dock_edge = DOCK_TOP; }
+	else if (!strcmp(spec, "bottom")) { v->role = ROLE_DOCK; v->dock_edge = DOCK_BOTTOM; }
+	else if (!strcmp(spec, "left"))   { v->role = ROLE_DOCK; v->dock_edge = DOCK_LEFT; }
+	else if (!strcmp(spec, "right"))  { v->role = ROLE_DOCK; v->dock_edge = DOCK_RIGHT; }
+	else if (!strcmp(spec, "none"))   { v->role = ROLE_NORMAL; v->dock_edge = DOCK_NO_EDGE; }
+	else
+		return;
+
+	if (v->role != ROLE_NORMAL) {
+		/* a role puts the window outside the window management: not listed, not focused, no titlebar,
+		 * no shadow — the desktop and the taskbar draw their whole selves */
+		v->unmanaged = true;
+		v->decorated = false;
+		shadow_destroy(v);
+		if (v->chrome)
+			wlr_scene_node_set_enabled(&v->chrome->node, false);
+		if (v->handle) {
+			wl_list_remove(&v->handle_activate.link);
+			wl_list_remove(&v->handle_close.link);
+			wl_list_remove(&v->handle_minimize.link);
+			wl_list_remove(&v->handle_maximize.link);
+			wlr_foreign_toplevel_handle_v1_destroy(v->handle);
+			v->handle = NULL;
+		}
+		if (s->focused == v) {
+			s->focused = NULL;
+			focus_next_after_loss(s);
+		}
+	} else
+		v->unmanaged = false;
+	role_apply(v);
 }
 
 void vwm_each_view(struct vwm_server *s, void (*fn)(struct vwm_view *, void *), void *data)
@@ -498,10 +756,12 @@ static void focus_view(struct vwm_view *v)
 		update_handle_state(prev);
 		view_announce(prev);
 		chrome_request(prev);
+		shadow_update(prev);
 	}
 	update_handle_state(v);
 	view_announce(v);
 	chrome_request(v);
+	shadow_update(v);
 }
 
 void vwm_view_activate(struct vwm_view *v)
@@ -575,6 +835,7 @@ void vwm_view_set_maximized(struct vwm_view *v, bool maximized)
 	view_announce(v);
 	chrome_layout(v);
 	chrome_request(v);
+	shadow_update(v);
 }
 
 void vwm_view_close(struct vwm_view *v)
@@ -606,6 +867,7 @@ static void view_set_fullscreen(struct vwm_view *v, bool on)
 	}
 	v->fullscreen = on;
 	chrome_layout(v);
+	shadow_update(v);
 	if (v->xdg)
 		wlr_xdg_toplevel_set_fullscreen(v->xdg, on);
 	else
@@ -741,6 +1003,7 @@ static void view_mapped(struct vwm_view *v)
 	if (v->decorated)
 		view_enable_chrome(v);
 	place_new_view(v);
+	shadow_update(v);
 
 	v->unlisted = v->x11 && v->x11->skip_taskbar;
 	if (!v->unlisted) {
@@ -767,6 +1030,7 @@ static void view_unmapped(struct vwm_view *v)
 	if (!v->mapped)
 		return;
 	v->mapped = false;
+	shadow_destroy(v);
 	if (v->unmanaged) {
 		wlr_scene_node_set_enabled(&v->tree->node, false);
 		if (v->role == ROLE_DOCK) {
@@ -778,6 +1042,14 @@ static void view_unmapped(struct vwm_view *v)
 	}
 	if (!v->unlisted)
 		vwm_ipc_closed(s->ipc, v->id);
+	/* nothing of this window may be hit-tested or remembered now that its surfaces are gone: the destroy
+	 * that follows can be later than the next pointer motion, and its chrome nodes would still answer */
+	if (v->tree)
+		wlr_scene_node_set_enabled(&v->tree->node, false);
+	if (s->hover_view == v)
+		s->hover_view = NULL;
+	if (s->pressed_view == v)
+		s->pressed_view = NULL;
 	if (v->handle) {
 		wl_list_remove(&v->handle_activate.link);
 		wl_list_remove(&v->handle_close.link);
@@ -822,8 +1094,16 @@ static void view_committed(struct vwm_view *v)
 		return;
 	v->last_w = g.width;
 	v->last_h = g.height;
+	if (v->role != ROLE_NORMAL) {
+		/* a shell window changed its size (the taskbar laid itself out): place it and re-reserve */
+		role_apply(v);
+		struct vwm_output *o = primary_output(v->server);
+		if (o)
+			arrange_layers(v->server, o);
+	}
 	chrome_layout(v);
 	chrome_request(v);
+	shadow_update(v);
 }
 
 /* ---------- xdg-shell toplevels ---------- */
@@ -996,11 +1276,20 @@ static void x11_unmap(struct wl_listener *l, void *data) { view_unmapped(FROM(st
 
 static void x11_commit(struct wl_listener *l, void *data) { view_committed(FROM(struct vwm_view, l, x11_commit)); }
 
+static void surface_tree_destroyed(struct wl_listener *l, void *data)
+{
+	struct vwm_view *v = FROM(struct vwm_view, l, surface_tree_destroy);
+	wl_list_remove(&v->surface_tree_destroy.link);
+	v->surface_tree = NULL;
+}
+
 static void x11_associate(struct wl_listener *l, void *data)
 {
 	struct vwm_view *v = FROM(struct vwm_view, l, associate);
 	struct wlr_surface *surface = v->x11->surface;
 	v->surface_tree = wlr_scene_subsurface_tree_create(v->tree, surface);
+	v->surface_tree_destroy.notify = surface_tree_destroyed;
+	wl_signal_add(&v->surface_tree->node.events.destroy, &v->surface_tree_destroy);
 	v->map.notify = x11_map;     wl_signal_add(&surface->events.map, &v->map);
 	v->unmap.notify = x11_unmap; wl_signal_add(&surface->events.unmap, &v->unmap);
 	v->x11_commit.notify = x11_commit;
@@ -1180,33 +1469,55 @@ static void arrange_layers(struct vwm_server *s, struct vwm_output *o)
 	/* the desktop is as big as the screen and a dock as long as its edge, whatever size the screen now is */
 	struct vwm_view *sv;
 	wl_list_for_each(sv, &s->views, link) {
-		if (!sv->mapped || !sv->x11 || sv->role == ROLE_NORMAL)
+		if (!sv->mapped || sv->role == ROLE_NORMAL)
 			continue;
-		int w = sv->x11->width, h = sv->x11->height, x = sv->x, y = sv->y;
+		struct wlr_box g;
+		view_geometry(sv, &g);
+		int w = g.width, h = g.height, x = sv->x, y = sv->y;
 		if (sv->role == ROLE_DESKTOP) {
 			x = full.x; y = full.y; w = full.width; h = full.height;
-		} else {
+		} else if (sv->x11) {
 			xcb_ewmh_wm_strut_partial_t *st = sv->x11->strut_partial;
 			if (st && (st->top > 0 || st->bottom > 0)) w = full.width;
 			else if (st && (st->left > 0 || st->right > 0)) h = full.height;
 			dock_position(sv, w, h, x, y, &x, &y);
+		} else {
+			/* an announced dock: it speaks its edge instead of a strut */
+			w = (sv->dock_edge == DOCK_BOTTOM || sv->dock_edge == DOCK_TOP) ? full.width : w;
+			h = (sv->dock_edge == DOCK_LEFT || sv->dock_edge == DOCK_RIGHT) ? full.height : h;
+			x = (sv->dock_edge == DOCK_RIGHT) ? full.x + full.width - w : full.x;
+			y = (sv->dock_edge == DOCK_BOTTOM) ? full.y + full.height - h : full.y;
 		}
-		if (x != sv->x || y != sv->y || w != sv->x11->width || h != sv->x11->height) {
+		if (x != sv->x || y != sv->y || w != g.width || h != g.height) {
 			view_move(sv, x, y);
-			wlr_xwayland_surface_configure(sv->x11, x, y, w, h);
+			view_resize(sv, w, h);
+			if (sv->x11)
+				wlr_xwayland_surface_configure(sv->x11, x, y, w, h);
 		}
 	}
 	/* docks (the taskbar) reserve their edges too */
 	struct vwm_view *d;
 	wl_list_for_each(d, &s->views, link) {
-		if (!d->mapped || d->role != ROLE_DOCK || !d->x11 || !d->x11->strut_partial)
+		if (!d->mapped || d->role != ROLE_DOCK)
 			continue;
-		xcb_ewmh_wm_strut_partial_t *st = d->x11->strut_partial;
 		int l = usable.x, t = usable.y, r = usable.x + usable.width, b = usable.y + usable.height;
-		if (full.x + (int)st->left > l) l = full.x + st->left;
-		if (full.y + (int)st->top > t) t = full.y + st->top;
-		if (full.x + full.width - (int)st->right < r) r = full.x + full.width - st->right;
-		if (full.y + full.height - (int)st->bottom < b) b = full.y + full.height - st->bottom;
+		if (d->x11 && d->x11->strut_partial) {
+			xcb_ewmh_wm_strut_partial_t *st = d->x11->strut_partial;
+			if (full.x + (int)st->left > l) l = full.x + st->left;
+			if (full.y + (int)st->top > t) t = full.y + st->top;
+			if (full.x + full.width - (int)st->right < r) r = full.x + full.width - st->right;
+			if (full.y + full.height - (int)st->bottom < b) b = full.y + full.height - st->bottom;
+		} else {
+			struct wlr_box g;
+			view_geometry(d, &g);
+			switch (d->dock_edge) {
+			case DOCK_BOTTOM: if (full.y + full.height - g.height < b) b = full.y + full.height - g.height; break;
+			case DOCK_TOP:    if (full.y + g.height > t) t = full.y + g.height; break;
+			case DOCK_LEFT:   if (full.x + g.width > l) l = full.x + g.width; break;
+			case DOCK_RIGHT:  if (full.x + full.width - g.width < r) r = full.x + full.width - g.width; break;
+			default: break;
+			}
+		}
 		usable = (struct wlr_box){ l, t, r > l ? r - l : 1, b > t ? b - t : 1 };
 	}
 	o->usable = usable;
@@ -1646,6 +1957,8 @@ static void on_cursor_motion(struct wl_listener *l, void *data)
 {
 	struct vwm_server *s = FROM(struct vwm_server, l, cursor_motion);
 	struct wlr_pointer_motion_event *e = data;
+	if (s->idle_notifier)
+		wlr_idle_notifier_v1_notify_activity(s->idle_notifier, s->seat);
 	wlr_cursor_move(s->cursor, &e->pointer->base, e->delta_x, e->delta_y);
 	process_motion(s, e->time_msec);
 }
@@ -1654,6 +1967,8 @@ static void on_cursor_motion_absolute(struct wl_listener *l, void *data)
 {
 	struct vwm_server *s = FROM(struct vwm_server, l, cursor_motion_absolute);
 	struct wlr_pointer_motion_absolute_event *e = data;
+	if (s->idle_notifier)
+		wlr_idle_notifier_v1_notify_activity(s->idle_notifier, s->seat);
 	wlr_cursor_warp_absolute(s->cursor, &e->pointer->base, e->x, e->y);
 	process_motion(s, e->time_msec);
 }
@@ -1668,6 +1983,8 @@ static void on_cursor_button(struct wl_listener *l, void *data)
 {
 	struct vwm_server *s = FROM(struct vwm_server, l, cursor_button);
 	struct wlr_pointer_button_event *e = data;
+	if (s->idle_notifier)
+		wlr_idle_notifier_v1_notify_activity(s->idle_notifier, s->seat);
 	if (e->state == WL_POINTER_BUTTON_STATE_RELEASED) {
 		if (s->sticky_grab)
 			return;   /* Move or Size from the window menu: it ends with the next click */
@@ -1790,6 +2107,8 @@ static void on_cursor_axis(struct wl_listener *l, void *data)
 {
 	struct vwm_server *s = FROM(struct vwm_server, l, cursor_axis);
 	struct wlr_pointer_axis_event *e = data;
+	if (s->idle_notifier)
+		wlr_idle_notifier_v1_notify_activity(s->idle_notifier, s->seat);
 	wlr_seat_pointer_notify_axis(s->seat, e->time_msec, e->orientation, e->delta, e->delta_discrete, e->source, e->relative_direction);
 }
 
@@ -1804,6 +2123,35 @@ static void on_request_cursor(struct wl_listener *l, void *data)
 	struct wlr_seat_pointer_request_set_cursor_event *e = data;
 	if (s->seat->pointer_state.focused_client == e->seat_client)
 		wlr_cursor_set_surface(s->cursor, e->surface, e->hotspot_x, e->hotspot_y);
+}
+
+/* wp_cursor_shape_v1: the same request as set_cursor, but by name instead of a buffer
+ * (Chromium and Electron always use this one when the protocol is there). */
+static void on_cursor_set_shape(struct wl_listener *l, void *data)
+{
+	struct vwm_server *s = FROM(struct vwm_server, l, cursor_set_shape);
+	struct wlr_cursor_shape_manager_v1_request_set_shape_event *e = data;
+	if (e->device_type != WLR_CURSOR_SHAPE_MANAGER_V1_DEVICE_TYPE_POINTER)
+		return;
+	if (s->seat->pointer_state.focused_client == e->seat_client)
+		wlr_cursor_set_xcursor(s->cursor, s->xcursor, wlr_cursor_shape_v1_name(e->shape));
+}
+
+/* xdg-activation: an app asks the compositor to focus one of its surfaces, usually carrying the
+ * token of the surface that sent it here or of one it replied to (new browser windows, Electron). */
+static void on_activation_request(struct wl_listener *l, void *data)
+{
+	struct vwm_server *s = FROM(struct vwm_server, l, activation_request);
+	struct wlr_xdg_activation_v1_request_activate_event *e = data;
+	struct vwm_view *v;
+	wl_list_for_each(v, &s->views, link) {
+		struct wlr_surface *ws = v->xdg ? v->xdg->base->surface : v->x11 ? v->x11->surface : NULL;
+		if (ws == e->surface && v->mapped && !v->unmanaged) {
+			wlr_log(WLR_INFO, "xdg-activation: focusing %s", view_title(v));
+			vwm_view_activate(v);
+			return;
+		}
+	}
 }
 
 static void on_request_set_selection(struct wl_listener *l, void *data)
@@ -1876,6 +2224,8 @@ static void keyboard_key(struct wl_listener *l, void *data)
 	struct vwm_keyboard *k = FROM(struct vwm_keyboard, l, key);
 	struct vwm_server *s = k->server;
 	struct wlr_keyboard_key_event *e = data;
+	if (s->idle_notifier)
+		wlr_idle_notifier_v1_notify_activity(s->idle_notifier, s->seat);
 	uint32_t keycode = e->keycode + 8;
 	const xkb_keysym_t *syms;
 	int n = xkb_state_key_get_syms(k->keyboard->xkb_state, keycode, &syms);
@@ -2002,6 +2352,12 @@ int main(int argc, char **argv)
 	wlr_primary_selection_v1_device_manager_create(s.display);
 	wlr_viewporter_create(s.display);
 	wlr_fractional_scale_manager_v1_create(s.display, 1);
+	/* the protocols modern toolkits expect: Chromium and Electron (ozone), and desktop conveniences
+	 * like clipboard managers and idle-aware power saving */
+	wlr_single_pixel_buffer_manager_v1_create(s.display);
+	wlr_content_type_manager_v1_create(s.display, 1);
+	wlr_data_control_manager_v1_create(s.display);
+	wlr_presentation_create(s.display, s.backend, 2);
 
 	s.output_layout = wlr_output_layout_create(s.display);
 	wlr_xdg_output_manager_v1_create(s.display, s.output_layout);
@@ -2032,6 +2388,14 @@ int main(int argc, char **argv)
 
 	s.toplevels = wlr_foreign_toplevel_manager_v1_create(s.display);
 
+	s.activation = wlr_xdg_activation_v1_create(s.display);
+	if (s.activation) {
+		s.activation_request.notify = on_activation_request;
+		wl_signal_add(&s.activation->events.request_activate, &s.activation_request);
+	}
+	s.idle_notifier = wlr_idle_notifier_v1_create(s.display);
+	wlr_idle_inhibit_v1_create(s.display);
+
 	s.cursor = wlr_cursor_create();
 	wlr_cursor_attach_output_layout(s.cursor, s.output_layout);
 	s.xcursor = wlr_xcursor_manager_create(NULL, 24);
@@ -2044,6 +2408,11 @@ int main(int argc, char **argv)
 	s.seat = wlr_seat_create(s.display, "seat0");
 	s.new_input.notify = on_new_input;                 wl_signal_add(&s.backend->events.new_input, &s.new_input);
 	s.request_cursor.notify = on_request_cursor;       wl_signal_add(&s.seat->events.request_set_cursor, &s.request_cursor);
+	struct wlr_cursor_shape_manager_v1 *cursor_shape = wlr_cursor_shape_manager_v1_create(s.display, 1);
+	if (cursor_shape) {
+		s.cursor_set_shape.notify = on_cursor_set_shape;
+		wl_signal_add(&cursor_shape->events.request_set_shape, &s.cursor_set_shape);
+	}
 	s.request_set_selection.notify = on_request_set_selection; wl_signal_add(&s.seat->events.request_set_selection, &s.request_set_selection);
 	s.request_set_primary.notify = on_request_set_primary;     wl_signal_add(&s.seat->events.request_set_primary_selection, &s.request_set_primary);
 

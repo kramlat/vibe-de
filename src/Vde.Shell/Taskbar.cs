@@ -4,7 +4,7 @@ using Vibe.Registry;
 namespace Vde.Shell;
 
 // One top-level window of some application, as the compositor reports it.
-public sealed record WindowInfo(string Id, string Title, string AppId, bool IsActive = false, bool IsMinimized = false);
+public sealed record WindowInfo(string Id, string Title, string AppId, bool IsActive = false, bool IsMinimized = false, uint Pid = 0);
 
 // Where the taskbar learns about windows and how it acts on them. The compositor (or its protocol client) implements it.
 public interface IWindowSource

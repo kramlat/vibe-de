@@ -7,7 +7,12 @@ submodule under `native/third_party`). Build: `native/vwm/build.sh` → `native/
 
 - **Wayland**: xdg-shell windows, `wlr-layer-shell` (panels; exclusive zones shrink the area windows maximize
   into), `foreign-toplevel-management` (any taskbar can list windows), xdg-decoration, xdg-output, viewporter,
-  fractional-scale, data device and primary selection.
+  fractional-scale, data device and primary selection. The protocols modern toolkits expect are there too:
+  xdg-activation (the compositor focuses a surface an app asks for, e.g. a new browser window),
+  cursor-shape (Chromium and Electron set cursors by name), single-pixel-buffer, content-type,
+  wlroots data-control (clipboard managers), ext-idle-notify + idle-inhibit (screen stays on while a
+  presentation runs), and presentation-time. Chromium/Electron (VS Code, Edge, Chromium, Chrome) run
+  Wayland-native against it and open focused.
 - **XWayland**: started by vwm; X11 windows are ordinary windows (title, icon, maximize...). Menus and tooltips
   (override-redirect) are shown but are not listed as windows.
 - **Where it runs**: wlroots picks the backend. On a bare seat it drives the screens (DRM/libinput); inside a
@@ -38,14 +43,29 @@ Window menu (icon click, titlebar right-click, Alt+Space, or `menu N` over the s
 Minimize, Maximize, Close. Double-clicking the icon closes; double-clicking the titlebar does what
 `HKCU\Software\Vde\Windows\TitlebarDoubleClick` says (Maximize, Minimize, Close or None).
 
+Window shadows, Windows 11 style: a soft black rectangle behind each managed window, blurred on the CPU and
+cached per size in two strengths (focused `SHADOW_ALPHA_ACTIVE`, unfocused `SHADOW_ALPHA_INACTIVE` in
+`native/vwm/vwm.c`). The shadow reaches `SHADOW_MARGIN` past the window and falls `SHADOW_DROP` downward.
+It hides while the window is maximized, fullscreen, or not mapped, and it never intercepts the pointer
+(`point_accepts_input` refuses every hit), so clicks pass through its margin band.
+
 ## Control socket
 
 `$XDG_RUNTIME_DIR/vde/vwm.sock`, mode 0600. One JSON object per line out, one command per line in. The protocol
 is documented at the top of `native/vwm/ipc.c`. `Vde.Compositor.VwmClient` is the C# side, and it is the
 taskbar's `IWindowSource`, so the taskbar lists real windows when vwm runs.
 
+## System tray
+
+`Vde.Shell.Tray` (referenced by the taskbar host, `VExplore/TrayAreaController.cs`) implements the freedesktop
+StatusNotifierItem protocol: the shell owns `org.kde.StatusNotifierWatcher` and `com.canonical.dbusmenu`, apps
+register their `org.kde.StatusNotifierItem` objects, and the taskbar collects their icons next to the clock.
+Icons re-read on the app's NewTitle/NewIcon/NewToolTip signals, clicks call Activate / SecondaryActivate, and
+right-click opens the app's menu read (read-only) from its `com.canonical.dbusmenu` object. Items vanish when
+their connection leaves the bus.
+
 ## Not built yet
 
-Snapping/tiling, virtual desktops, an Alt+Tab switcher overlay, multi-monitor layout policy, window shadows and
+Snapping/tiling, virtual desktops, an Alt+Tab switcher overlay, multi-monitor layout policy, window
 animations, screen capture/lock protocols, input method support, the X11 window-manager mode, and the session
 glue (starting vwm, vexplore --chrome, the taskbar and the desktop together).

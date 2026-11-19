@@ -19,6 +19,7 @@ public static class ExplorerCommand
         usage: vexplore [folder]
                vexplore --files [folder]    a file manager window (the default)
                vexplore --settings          the Settings (Control Panel) window
+               vexplore --regedit           the registry editor for the HKCU and HKLM hives
                vexplore --launcher          the app launcher
                vexplore --desktop           the desktop: wallpaper and the icons of ~/Desktop
                vexplore --chrome            draws window titlebars for vwm (needs vwm running; no window of its own)
@@ -45,6 +46,7 @@ public static class ExplorerCommand
         {
             0 => "files",
             _ when args[0] == "--settings" && args.Length == 1 => "settings",
+            _ when args[0] == "--regedit" && args.Length == 1 => "regedit",
             _ when args[0] == "--launcher" && args.Length == 1 => "launcher",
             _ when args[0] == "--desktop" && args.Length == 1 => "desktop",
             _ when args[0] == "--taskbar" && args.Length == 1 => "taskbar",
@@ -72,6 +74,7 @@ public static class ExplorerCommand
         ShellApp.FirstWindow = () => window switch
         {
             "settings" => NewSettings(host2),
+            "regedit" => NewRegEdit(host2),
             "launcher" => NewLauncher(host2),
             "desktop" => NewDesktop(host2),
             "taskbar" => NewTaskbar(host2),
@@ -96,7 +99,7 @@ public static class ExplorerCommand
         var catalog = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
         var folders = new KnownFolders(xdg);
         var wallpapers = WallpaperCatalog.Find(xdg);
-        return new ControlPanelWindow(catalog, host.CurrentUser, item =>
+        var settings = new ControlPanelWindow(catalog, host.CurrentUser, item =>
         {
             if (item.Entry is { } entry)
                 Launch(host, entry);
@@ -105,6 +108,8 @@ public static class ExplorerCommand
         }, customPages: id => id == DesktopPageView.PageId
             ? new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine)
             : null);
+        WindowMica.Attach(settings, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        return settings;
     }
 
     // The window list comes from vwm when it is running; elsewhere the taskbar only shows its pinned apps.
@@ -119,6 +124,15 @@ public static class ExplorerCommand
             FileTypeFilter = [Avalonia.Platform.Storage.FilePickerFileTypes.ImageAll],
         });
         return picked.Count == 1 && picked[0].Path is { IsFile: true } uri ? uri.LocalPath : null;
+    }
+
+    // The registry editor edits the same two hives everything else goes through: the user's, writable, and the
+    // system's, readable (writes to it want the daemon as root, which the hive's permissions decide).
+    private static Window NewRegEdit(ExplorerHost host)
+    {
+        var window = new global::VExplore.Windows.RegEditWindow(host.CurrentUser, host.LocalMachine);
+        WindowMica.Attach(window, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        return window;
     }
 
     private static IWindowSource Windows()
@@ -141,7 +155,7 @@ public static class ExplorerCommand
         var engine = new Vde.Shell.Theme.ThemeEngine(Vde.Shell.Theme.ThemeCatalog.Discover());
         using var binding = engine.BindTo(host.CurrentUser);
         var apps = DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment());
-        var service = new ChromeService(client, new ChromeRenderer(apps));
+        var service = new ChromeService(client, new ChromeRenderer(apps, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine)));
         engine.Changed += (_, _) => service.RedrawAll();
         void PushWindowSettings()
         {
@@ -160,7 +174,26 @@ public static class ExplorerCommand
     {
         var apps = DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment());
         var model = new TaskbarModel(host.CurrentUser, apps, Windows(), entry => Launch(host, entry));
-        return new TaskbarWindow(model, () => Launch(host, "vexplore --launcher"));
+        var window = new TaskbarWindow(model, () => Launch(host, "vexplore --launcher"),
+            settings: DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        // Tell vwm this window is the taskbar: under Wayland there are no X11 struts, the role does it.
+        var role = ClaimRole(model.Edge switch
+        {
+            TaskbarEdge.Top => "top",
+            TaskbarEdge.Left => "left",
+            TaskbarEdge.Right => "right",
+            _ => "bottom",
+        });
+        window.Closed += (_, _) => role.Dispose();
+        // The tray: the shell becomes the session's StatusNotifierWatcher host and fills the slot.
+        window.Opened += async (_, _) =>
+        {
+            var tray = new TrayAreaController(window.View, () => window.Dock());
+            window.Closed += (_, _) => tray.Dispose();
+            try { await tray.StartAsync(); }
+            catch { /* a session without a bus just runs trayless */ }
+        };
+        return window;
     }
 
     private static Window NewDesktop(ExplorerHost host)
@@ -172,7 +205,9 @@ public static class ExplorerCommand
         var associations = new FileAssociations(xdg, mime, apps, ShellApp.Desktops(), host.Classes);
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
         var shell = new ShellExecute(associations, mime, types: types, elevation: ShellApp.Elevation);
-        return new DesktopWindow(folders.Get(KnownFolder.Desktop), host.CurrentUser, path =>
+        // Tell vwm this window is the desktop: it fills the screen and stays under everything.
+        var role = ClaimRole("desktop");
+        var window = new DesktopWindow(folders.Get(KnownFolder.Desktop), host.CurrentUser, path =>
         {
             try
             {
@@ -185,6 +220,19 @@ public static class ExplorerCommand
             }
         }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths), systemDefaults: host.LocalMachine, shellFolders: ShellApp.ShellFolders(host),
             openShellFolder: path => { try { shell.Run("vexplore --files " + ExecLineQuote(path)); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } });
+        window.Closed += (_, _) => role.Dispose();
+        return window;
+    }
+
+    // Opens a connection to vwm just to claim a role (desktop / an edge) for this process's windows: under
+    // Wayland there are no EWMH struts or window types for the desktop and the taskbar, so the shell says
+    // what its windows are and vwm arranges them. Kept alive until the window closes by the caller.
+    private static VwmClient ClaimRole(string role)
+    {
+        var claim = new VwmClient();
+        if (claim.Connect())
+            claim.AnnounceRole((uint)Environment.ProcessId, role);
+        return claim;
     }
 
     private static string ExecLineQuote(string path) => "\"" + path.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
@@ -198,10 +246,12 @@ public static class ExplorerCommand
         {
             FileRoots = [new KnownFolders(xdg).Get(KnownFolder.Documents), new KnownFolders(xdg).Get(KnownFolder.Desktop), new KnownFolders(xdg).Get(KnownFolder.Downloads)],
         };
-        return new LauncherWindow(model, entry => Launch(host, entry), item =>
+        var window = new LauncherWindow(model, entry => Launch(host, entry), item =>
         {
             if (item.Entry is { } entry) Launch(host, entry);
-        }, action => Footer(host, action, new KnownFolders(xdg).Get(KnownFolder.Home)));
+        }, action => Footer(host, action, new KnownFolders(xdg).Get(KnownFolder.Home)),
+            settings: DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        return window;
     }
 
     // The start menu footer's buttons. Power actions go through logind (systemctl), which asks polkit as usual;

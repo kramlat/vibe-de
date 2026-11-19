@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Vde.Freedesktop;
 using Vde.Shell;
+using Vde.Shell.Controls;
 using Vde.Shell.Theme;
 using Vde.Shell.ComDlg;
 using Vibe.Registry;
@@ -44,7 +45,8 @@ public sealed class ShellApp : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    public static AppBuilder Build() => AppBuilder.Configure<ShellApp>().UsePlatformDetect();
+    // Wayland first with an X11 fallback: on vwm the shell runs as a native Wayland client.
+    public static AppBuilder Build() => AppBuilder.Configure<ShellApp>().UsePlatformDetect().UseWaylandWithFallback();
 
     // ---- what the windows need from the rest of the shell ----
 
@@ -57,10 +59,12 @@ public sealed class ShellApp : Application
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
         var shell = new ShellExecute(associations, mime, types: types, elevation: Elevation);
         var start = folder is null ? new KnownFolders(xdg).Get(KnownFolder.Home) : AddressPath.IsShellPath(folder) ? folder : Path.GetFullPath(folder);
-        return new FileManagerWindow(start, new KnownFolders(xdg), path =>
+        var window = new FileManagerWindow(start, new KnownFolders(xdg), path =>
         {
             _ = OpenAsync(shell, path, associations, apps);   // no application: the chooser; an untrusted command: the password prompt
         }, types, shortcuts: Shortcuts, properties: paths => PropertyContext(host, paths), shellFolders: ShellFolders(host));
+        WindowMica.Attach(window, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        return window;
     }
 
     // What a Properties window needs: file types, rename, the tabs registered components add, and the groups the user is in.

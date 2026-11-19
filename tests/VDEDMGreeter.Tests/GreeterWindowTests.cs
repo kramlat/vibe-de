@@ -25,7 +25,7 @@ public class GreeterWindowTests
     private static GreeterWindow Make(Fake connection, IReadOnlyList<LoginUser>? users = null, Action<string>? power = null)
     {
         var model = new GreeterModel(connection, users ?? [Alice, Bob], [Vde, Plasma]);
-        var window = new GreeterWindow(model, now: () => new DateTime(2026, 10, 16, 21, 5, 0), power: power) { Width = 1000, Height = 640, WindowState = WindowState.Normal, SystemDecorations = SystemDecorations.Full };
+        var window = new GreeterWindow(model, now: () => new DateTime(2026, 10, 16, 21, 5, 0), power: power) { Width = 1000, Height = 640, WindowState = WindowState.Normal, SystemDecorations = Avalonia.Controls.WindowDecorations.Full };
         window.Show();
         return window;
     }

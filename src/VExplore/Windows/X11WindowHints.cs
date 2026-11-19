@@ -39,6 +39,10 @@ internal static class X11WindowHints
         try
         {
             if (!OperatingSystem.IsLinux()) return;
+            // the EWMH properties only reach an X11 manager; under Wayland the window announces its
+            // role to vwm over the control socket instead (VwmClient.AnnounceRole)
+            if (Environment.GetEnvironmentVariable("WAYLAND_DISPLAY") is not null
+                || Environment.GetEnvironmentVariable("WAYLAND_SOCKET") is not null) return;
             var handle = window.TryGetPlatformHandle();
             if (handle is null || handle.HandleDescriptor != "XID") return;
             var display = XOpenDisplay(IntPtr.Zero);

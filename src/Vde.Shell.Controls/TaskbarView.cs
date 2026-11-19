@@ -21,6 +21,7 @@ public sealed class TaskbarView : UserControl
     private readonly TextBlock _clock = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, FontSize = 12, TextAlignment = TextAlignment.Center };
     private readonly Border _bar = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(10) };
+    private IBrush? _mica;   // the wallpaper backdrop, or null for the theme's plain surface
 
     public TaskbarView(TaskbarModel model, Func<DateTime>? now = null)
     {
@@ -48,6 +49,14 @@ public sealed class TaskbarView : UserControl
 
     // The app buttons in order: for tests and screen readers.
     public IReadOnlyList<Button> AppButtons => _apps.Children.OfType<Button>().ToList();
+
+    // The panel's Mica: a blurred, tinted sample of the wallpaper (WallpaperMica), or null for the theme's
+    // plain surface. Set once by the shell hosting the taskbar; it survives Rebuild.
+    public void SetBackdrop(IBrush? mica)
+    {
+        _mica = mica;
+        _bar.Background = mica ?? ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
+    }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -97,7 +106,7 @@ public sealed class TaskbarView : UserControl
         dock.Children.Add(group);
 
         _bar.Child = dock;
-        _bar.Background = ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
+        _bar.Background = _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
         UpdateClock();
     }
 

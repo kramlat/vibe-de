@@ -74,7 +74,11 @@ public sealed class FileManagerWindow : Window
         DragDrop.SetAllowDrop(_list, true);
         _list.AddHandler(DragDrop.DragOverEvent, OnDragOver);
         _list.AddHandler(DragDrop.DropEvent, OnDrop);
-        _list.InnerList.PointerPressed += (_, e) => _dragStart = e.GetPosition(_list);
+        _list.InnerList.PointerPressed += (_, e) =>
+        {
+            _dragStart = e.GetPosition(_list);
+            _dragTrigger = e;
+        };
         _list.InnerList.PointerMoved += OnPointerMoved;
 
         var toolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Margin = new Thickness(6), Children = { _back, _forward, _up, _refresh, _hidden } };
@@ -125,6 +129,7 @@ public sealed class FileManagerWindow : Window
     // ---- file actions: the same ones the desktop has ----
 
     private Point? _dragStart;
+    private PointerPressedEventArgs? _dragTrigger;
     public string? Notice => StatusText;
 
     public void SelectEntries(params string[] names) => _list.Select(names);
@@ -236,9 +241,10 @@ public sealed class FileManagerWindow : Window
     private static IReadOnlyList<string> DroppedPaths(DragEventArgs e)
     {
         var formats = new Dictionary<string, byte[]>();
-        foreach (var format in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
-            if (e.Data.Get(format) is { } value)
-                formats[format] = value switch { byte[] b => b, string s => System.Text.Encoding.UTF8.GetBytes(s), _ => [] };
+        foreach (var item in e.DataTransfer.Items.Select(i => (IDataTransferItem)i))
+            foreach (var format in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
+                if (item.Contains(DataFormat.CreateBytesPlatformFormat(format)))
+                    formats[format] = item.TryGetValue(DataFormat.CreateBytesPlatformFormat(format));
         return FileTransfer.FromFormats(formats)?.Paths ?? [];
     }
 
@@ -250,10 +256,11 @@ public sealed class FileManagerWindow : Window
         if (Math.Abs(now.X - start.X) + Math.Abs(now.Y - start.Y) < 12)
             return;   // a click, not a drag
         _dragStart = null;
-        var data = new DataObject();
+        var data = new DataTransfer();
         foreach (var (format, bytes) in new FileTransfer(TransferKind.Copy, SelectedPaths).ToFormats())
-            data.Set(format, bytes);
-        await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link);
+            data.Add(DataTransferItem.Create(DataFormat.CreateBytesPlatformFormat(format), bytes));
+        if (_dragTrigger is { } trigger)
+            await DragDrop.DoDragDropAsync(trigger, data, DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link);
     }
 
     // The Properties window for the selection (or for this folder when nothing is selected). Not modal, as in Explorer.

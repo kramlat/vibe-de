@@ -188,8 +188,19 @@ public sealed class ThemeEngine
                     color = Default(token, dark);
                 inner[ThemeTokens.Key(token)] = new SolidColorBrush(color);
             }
+
+            // A Windows 11 dialog button: a solid panel on the window's Mica, a hairline border, a slightly
+            // darker hover. The Fluent theme reads these exact resource keys; leaving them unset leaves the
+            // translucent stock fill, which goes muddy over the washed wallpaper.
+            inner["ButtonBackground"] = new SolidColorBrush(dark ? Color.Parse("#2E2E2E") : Colors.White);
+            inner["ButtonBackgroundPointerOver"] = new SolidColorBrush(dark ? Color.Parse("#383838") : Color.Parse("#F6F6F6"));
+            inner["ButtonBackgroundPressed"] = new SolidColorBrush(dark ? Color.Parse("#424242") : Color.Parse("#F0F0F0"));
+            inner["ButtonBorderBrush"] = new SolidColorBrush(dark ? Color.Parse("#4A4A4A") : Color.Parse("#D9D9D9"));
+            inner["ButtonBorderBrushPointerOver"] = new SolidColorBrush(dark ? Color.Parse("#5C5C5C") : Color.Parse("#CFCFCF"));
+            inner["ButtonBorderBrushPressed"] = new SolidColorBrush(dark ? Color.Parse("#666666") : Color.Parse("#C9C9C9"));
             root.ThemeDictionaries[variant] = inner;
         }
+        root["ControlCornerRadius"] = new CornerRadius(4);   // Windows 11 rounds its controls at 4
         return root;
     }
 

@@ -446,8 +446,12 @@ public class DesktopShellFolderTests
             w.Show();
 
             var key = "::" + Vde.Components.ComponentInfo.NormalizeGuid(ShellFolderIds.Computer);
-            Assert.Equal(new Cell(0, 0), w.CellOf(key));        // first icon
-            Assert.Equal(new Cell(0, 1), w.CellOf("notes.txt")); // the files follow
+            var network = "::" + Vde.Components.ComponentInfo.NormalizeGuid(ShellFolderIds.Network);
+            var trash = "::" + Vde.Components.ComponentInfo.NormalizeGuid(ShellFolderIds.Trash);
+            Assert.Equal(new Cell(0, 0), w.CellOf(key));        // the shell folders first, in their order
+            Assert.Equal(new Cell(0, 1), w.CellOf(network));
+            Assert.Equal(new Cell(0, 2), w.CellOf(trash));
+            Assert.Equal(new Cell(0, 3), w.CellOf("notes.txt")); // the files follow
             w.SelectIcon(key);
             w.OpenSelected();
             Assert.Equal(["shell:Computer"], opened);

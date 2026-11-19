@@ -164,7 +164,7 @@ public class TaskbarTests
     }
 
     [AvaloniaTheory]
-    [InlineData(StartLayout.Modern, 460)]
+    [InlineData(StartLayout.Modern, 584)]   // wide enough for the six-across pinned tile grid
     [InlineData(StartLayout.Classic, 640)]
     public void The_start_menu_follows_the_layout_setting_and_both_styles_start_apps(StartLayout layout, int width)
     {

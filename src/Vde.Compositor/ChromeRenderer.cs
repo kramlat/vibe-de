@@ -4,6 +4,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Vde.Freedesktop;
+using Vde.Shell;
 using Vde.Shell.Controls;
 
 namespace Vde.Compositor;
@@ -13,18 +14,24 @@ namespace Vde.Compositor;
 public sealed class ChromeRenderer
 {
     private readonly DesktopEntryDatabase? _apps;
-    private readonly Window _host = new() { SystemDecorations = SystemDecorations.None, Background = Brushes.Transparent, Height = WindowChromeView.BarHeight, Width = 800, ShowInTaskbar = false };
+    private readonly Window _host = new() { SystemDecorations = Avalonia.Controls.WindowDecorations.None, Background = Brushes.Transparent, Height = WindowChromeView.BarHeight, Width = 800, ShowInTaskbar = false };
     private readonly WindowChromeView _view = new();
-    private readonly Window _menuHost = new() { SystemDecorations = SystemDecorations.None, Background = Brushes.Transparent, Width = WindowMenuView.Width_, Height = WindowMenuView.Height_, ShowInTaskbar = false };
+    private readonly Window _menuHost = new() { SystemDecorations = Avalonia.Controls.WindowDecorations.None, Background = Brushes.Transparent, Width = WindowMenuView.Width_, Height = WindowMenuView.Height_, ShowInTaskbar = false };
     private readonly WindowMenuView _menu = new();
 
-    public ChromeRenderer(DesktopEntryDatabase? apps = null)
+    public ChromeRenderer(DesktopEntryDatabase? apps = null, DesktopSettings? micaFromWallpaper = null)
     {
         _apps = apps;
         _host.Content = _view;
         _host.Show();   // attached to a visual tree, so icons and theme resources resolve
         _menuHost.Content = _menu;
         _menuHost.Show();
+        if (micaFromWallpaper is { } settings)
+        {
+            var blurred = WallpaperMica.Source(settings.Wallpaper);
+            if (blurred is { } b)
+                _view.SetBackdrop(new ImageBrush(b) { Stretch = Avalonia.Media.Stretch.UniformToFill });
+        }
     }
 
     // Premultiplied BGRA, request.Width x WindowChromeView.BarHeight.

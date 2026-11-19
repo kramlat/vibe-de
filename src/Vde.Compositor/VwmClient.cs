@@ -18,6 +18,9 @@ public sealed class VwmClient : IWindowSource, IDisposable
     private readonly object _lock = new();
     private readonly Dictionary<uint, WindowInfo> _windows = new();
     private readonly List<uint> _order = new();   // the order windows first appeared in, so taskbar buttons do not shuffle
+    // role claims made on behalf of this process's windows: pid of the owning process → the role it asked
+    // for and the window ids already claimed for it (cleared when the connection drops so it re-claims)
+    private readonly Dictionary<uint, (string Role, HashSet<uint> Claimed)> _claims = new();
     private Socket? _socket;
     private CancellationTokenSource? _stop;
 
@@ -68,6 +71,37 @@ public sealed class VwmClient : IWindowSource, IDisposable
     public void Close(string id) => Send("close", id);
     public void Maximize(string id) => Send("maximize", id);
     public void Unmaximize(string id) => Send("unmaximize", id);
+
+    // Names a kind of window this shell (or the process `pid`) owns: "desktop", "top", "bottom", "left" or
+    // "right". Claims are applied when vwm reports a window of that pid, and re-applied if it re-appears.
+    public void AnnounceRole(uint pid, string role)
+    {
+        if (role is not ("desktop" or "top" or "bottom" or "left" or "right"))
+            return;
+        List<uint> claimNow = new();
+        lock (_lock)
+        {
+            if (!_claims.TryGetValue(pid, out var claim))
+                _claims[pid] = claim = (role, new HashSet<uint>());
+            // a window of that pid may already be listed: claim it right away
+            foreach (var w in _windows.Values.Where(w => w.Pid == pid))
+                if (uint.TryParse(w.Id, out var wid) && claim.Claimed.Add(wid))
+                    claimNow.Add(wid);
+        }
+        foreach (var id in claimNow)
+            SendRole(role, id);
+    }
+
+    private void SendRole(string role, uint id)
+    {
+        if (_socket is not { } socket) return;
+        try
+        {
+            socket.Send(Encoding.ASCII.GetBytes($"role {id} {role}\n"));
+        }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
 
     public void Dispose()
     {
@@ -146,6 +180,8 @@ public sealed class VwmClient : IWindowSource, IDisposable
         {
             _windows.Clear();
             _order.Clear();
+            // vwm is gone: drop what was claimed so the roles are asked for again once it is back
+            foreach (var claim in _claims.Values) claim.Claimed.Clear();
         }
         if (!cancel.IsCancellationRequested)
         {
@@ -161,10 +197,11 @@ public sealed class VwmClient : IWindowSource, IDisposable
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            var ev = root.GetProperty("event").GetString();
-            var id = root.GetProperty("id").GetUInt32();
+            string? claimRole = null;
             lock (_lock)
             {
+                var ev = root.GetProperty("event").GetString();
+                var id = root.GetProperty("id").GetUInt32();
                 if (ev == "chrome")
                 {
                     var request = new ChromeRequest(id, root.GetProperty("width").GetInt32(), Bool(root, "active"), Bool(root, "maximized"),
@@ -181,17 +218,23 @@ public sealed class VwmClient : IWindowSource, IDisposable
                 {
                     _windows.Remove(id);
                     _order.Remove(id);
+                    // forget the claim for that id so the pid's next window is claimed again
+                    foreach (var claim in _claims.Values) claim.Claimed.Remove(id);
                     WindowClosed?.Invoke(this, id);
                 }
                 else if (ev == "window")
                 {
+                    var pid = root.TryGetProperty("pid", out var p) && p.ValueKind == JsonValueKind.Number ? p.GetUInt32() : 0;
                     var info = new WindowInfo(id.ToString(), Str(root, "title"), Str(root, "app_id"),
-                        Bool(root, "active"), Bool(root, "minimized"));
+                        Bool(root, "active"), Bool(root, "minimized"), pid);
                     if (!_windows.ContainsKey(id)) _order.Add(id);
                     _windows[id] = info;
+                    if (pid != 0 && _claims.TryGetValue(pid, out var claim) && claim.Claimed.Add(id))
+                        claimRole = claim.Role;   // a role claim waiting on this process's window
                 }
                 else return;
             }
+            if (claimRole is { } role) SendRole(role, root.GetProperty("id").GetUInt32());
             Changed?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)

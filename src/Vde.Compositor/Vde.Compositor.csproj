@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia.Headless" Version="11.3.11" />
+    <PackageReference Include="Avalonia.Headless" Version="12.1.6" />
     <ProjectReference Include="..\Vde.Shell\Vde.Shell.csproj" />
     <ProjectReference Include="..\Vde.Shell.Controls\Vde.Shell.Controls.csproj" />
     <ProjectReference Include="..\Vde.Shell.Theme\Vde.Shell.Theme.csproj" />

@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -102,10 +103,10 @@ public sealed class LauncherView : UserControl
         if (_model.Layout == StartLayout.Classic) RebuildClassic(); else RebuildModern();
     }
 
-    // Windows 11 style: pinned grid, then recommended.
+    // Windows 11 style: pinned grid under an "All apps" button, then a two-column recommended list.
     private void RebuildModern()
     {
-        _body.Children.Add(Heading("Pinned"));
+        _body.Children.Add(HeadingWith("Pinned", SideLink("All apps")));
         var pinned = _model.Pinned;
         if (pinned.Count == 0)
             _body.Children.Add(Muted("Pin apps from the list below."));
@@ -114,9 +115,11 @@ public sealed class LauncherView : UserControl
         var recent = _model.Recent;
         if (recent.Count > 0)
         {
-            _body.Children.Add(Heading("Recommended"));
+            _body.Children.Add(HeadingWith("Recommended", SideLink("More")));
+            var grid = new UniformGrid { Columns = 2 };
             foreach (var app in recent)
-                _body.Children.Add(Row(app.Name, "", app.Icon ?? "application-x-executable", () => Launch(app)));
+                grid.Children.Add(Row(app.Name, app.Comment ?? "Recently launched", app.Icon ?? "application-x-executable", () => Launch(app)));
+            _body.Children.Add(grid);
         }
     }
 
@@ -232,6 +235,32 @@ public sealed class LauncherView : UserControl
     }
 
     private Control Heading(string text) => new TextBlock { Text = text, FontWeight = FontWeight.SemiBold, Margin = new Thickness(4, 8, 0, 0) };
+
+    // A heading with a small bordered action on its right — the "Pinned / All apps >" and
+    // "Recommended / More >" rows of the Windows 11 start menu.
+    private Control HeadingWith(string text, Control side)
+    {
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        row.Children.Add(Heading(text));
+        Grid.SetColumn(side, 1);
+        row.Children.Add(side);
+        return row;
+    }
+
+    private Button SideLink(string text)
+    {
+        var button = new Button
+        {
+            Tag = text,
+            Padding = new Thickness(10, 4),
+            Background = Brushes.Transparent,
+            BorderBrush = ThemeTokens.Find(this, ThemeToken.Border, Brushes.LightGray),
+            BorderThickness = new Thickness(1),
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { new TextBlock { Text = text, FontSize = 12 }, new TextBlock { Text = ">", FontSize = 12 } } },
+        };
+        button.Click += (_, _) => ShowAllApps = true;
+        return button;
+    }
 
     private Control Muted(string text) => new TextBlock { Text = text, Foreground = ThemeTokens.Find(this, ThemeToken.TextSecondary, Brushes.Gray), Margin = new Thickness(4) };
 

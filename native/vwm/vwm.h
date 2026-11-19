@@ -44,8 +44,14 @@ struct vwm_view_info {
 	bool active, minimized, maximized, fullscreen, x11, decorated, pressed;
 	const char *hover;   /* "none", "min", "max" or "close": the chrome button under the pointer */
 	int x, y, width, height;
+	unsigned pid;   /* the client's pid: xdg toplevels have neither window types nor struts, so the shell
+	                 * announces the desktop/dock roles of its own windows over the control socket, and
+	                 * identifies itself by this (a process never shares a window with another) */
 };
 void vwm_view_get_info(struct vwm_view *view, struct vwm_view_info *out);
+/* Claims a role for a window over the control socket: "desktop" (the wallpaper window, full screen),
+ * "top"/"bottom"/"left"/"right" (a dock: it reserves its edge), "none" (back to a normal window). */
+void vwm_view_set_role(struct vwm_server *server, uint32_t id, const char *spec);
 struct vwm_view *vwm_find_view(struct vwm_server *server, uint32_t id);
 void vwm_each_view(struct vwm_server *server, void (*fn)(struct vwm_view *, void *), void *data);
 void vwm_view_activate(struct vwm_view *view);

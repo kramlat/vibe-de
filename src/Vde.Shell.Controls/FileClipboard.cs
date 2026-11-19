@@ -31,21 +31,28 @@ public sealed class AvaloniaFileClipboard(Func<TopLevel?> topLevel) : IFileClipb
             await clipboard.ClearAsync();
             return;
         }
-        var data = new DataObject();
+        var data = new DataTransfer();
         foreach (var (format, bytes) in transfer.ToFormats())
-            data.Set(format, bytes);
-        await clipboard.SetDataObjectAsync(data);
+            data.Add(DataTransferItem.Create(DataFormat.CreateBytesPlatformFormat(format), bytes));
+        await clipboard.SetDataAsync(data);
     }
+
+    private static readonly DataFormat<byte[]>[] FormatsOfInterest =
+        new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles, FileTransfer.KdeCutSelection }
+            .Select(DataFormat.CreateBytesPlatformFormat).ToArray();
 
     public async Task<FileTransfer?> GetAsync()
     {
         if (topLevel()?.Clipboard is not { } clipboard)
             return null;
+        var data = await clipboard.TryGetDataAsync();
+        if (data is null)
+            return null;
         var formats = new Dictionary<string, byte[]>();
-        foreach (var format in await clipboard.GetFormatsAsync())
-            if (format is FileTransfer.UriList or FileTransfer.GnomeCopiedFiles or FileTransfer.KdeCutSelection
-                && await clipboard.GetDataAsync(format) is { } value)
-                formats[format] = value switch { byte[] b => b, string s => System.Text.Encoding.UTF8.GetBytes(s), _ => [] };
+        foreach (var item in data.Items.Select(i => (IDataTransferItem)i))
+            foreach (var format in FormatsOfInterest)
+                if (item.Contains(format))
+                    formats[format.Identifier] = item.TryGetValue(format);
         return FileTransfer.FromFormats(formats);
     }
 }

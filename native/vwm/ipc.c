@@ -5,7 +5,7 @@
  *   {"event":"window","id":3,"title":"...","app_id":"...","active":true,"minimized":false,"maximized":false,
  *    "fullscreen":false,"x11":false,"x":10,"y":20,"width":800,"height":600}
  *   {"event":"closed","id":3}
- * In (one command per line):  list | activate N | minimize N | restore N | maximize N | unmaximize N | close N | quit
+ * In (one command per line):  list | role N desktop|top|bottom|left|right|none | activate N | minimize N | restore N | maximize N | unmaximize N | close N | quit
  *   {"event":"chrome","id":3,"width":800,"active":true,"maximized":false,"hover":"close","pressed":false,
  *    "title":"...","app_id":"..."}      <- the titlebar of window 3 needs drawing
  *   chrome N W H\n + W*H*4 bytes        -> its image, premultiplied ARGB8888 (BGRA bytes), W x H = width x TITLEBAR_H
@@ -88,9 +88,9 @@ static size_t format_window(struct vwm_view *view, char *out, size_t cap)
 	vwm_json_escape(app, sizeof app, i.app_id);
 	int n = snprintf(out, cap,
 		"{\"event\":\"window\",\"id\":%u,\"title\":\"%s\",\"app_id\":\"%s\",\"active\":%s,\"minimized\":%s,"
-		"\"maximized\":%s,\"fullscreen\":%s,\"x11\":%s,\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
+		"\"maximized\":%s,\"fullscreen\":%s,\"x11\":%s,\"pid\":%u,\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}\n",
 		i.id, title, app, i.active ? "true" : "false", i.minimized ? "true" : "false",
-		i.maximized ? "true" : "false", i.fullscreen ? "true" : "false", i.x11 ? "true" : "false",
+		i.maximized ? "true" : "false", i.fullscreen ? "true" : "false", i.x11 ? "true" : "false", i.pid,
 		i.x, i.y, i.width, i.height);
 	return n < 0 ? 0 : (size_t)n;
 }
@@ -151,6 +151,12 @@ static void run_command(struct client *c, char *line)
 		return;
 	if (!strcmp(verb, "list")) {
 		vwm_each_view(c->ipc->server, list_one, c);
+		return;
+	}
+	if (!strcmp(verb, "role")) {
+		char spec[16] = "";
+		if (sscanf(line, "role %u %15s", &id, spec) == 2)
+			vwm_view_set_role(c->ipc->server, id, spec);
 		return;
 	}
 	if (!strcmp(verb, "chrome") || !strcmp(verb, "menu")) {

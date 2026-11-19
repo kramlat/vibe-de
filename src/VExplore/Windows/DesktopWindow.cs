@@ -37,6 +37,7 @@ public sealed class DesktopWindow : Window
     private readonly Func<IReadOnlyList<string>, PropertySheetContext>? _properties;
     private readonly Canvas _canvas = new();
     private readonly Dictionary<string, Border> _icons = new(StringComparer.Ordinal);
+    private WallpaperMode _mode = WallpaperMode.Fill;
     private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
     private IReadOnlyList<FileEntry> _entries = [];
     private IReadOnlyDictionary<string, Cell> _layout = new Dictionary<string, Cell>();
@@ -66,7 +67,7 @@ public sealed class DesktopWindow : Window
         _clipboard = clipboard ?? new AvaloniaFileClipboard(() => GetTopLevel(this));
 
         Title = "Desktop";
-        SystemDecorations = SystemDecorations.None;
+        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
         ShowInTaskbar = false;
         X11WindowHints.SetType(this, X11WindowHints.Kind.Desktop);
         WindowState = WindowState.Maximized;
@@ -79,8 +80,10 @@ public sealed class DesktopWindow : Window
         AddHandler(DragDrop.DropEvent, (_, e) =>
         {
             var formats = new Dictionary<string, byte[]>();
-            foreach (var f in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
-                if (e.Data.Get(f) is { } v) formats[f] = v switch { byte[] b => b, string s => System.Text.Encoding.UTF8.GetBytes(s), _ => [] };
+            foreach (var item in e.DataTransfer.Items.Select(i => (IDataTransferItem)i))
+                foreach (var f in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
+                    if (item.Contains(DataFormat.CreateBytesPlatformFormat(f)))
+                        formats[f] = item.TryGetValue(DataFormat.CreateBytesPlatformFormat(f));
             if (FileTransfer.FromFormats(formats) is { } t)
                 HandleDrop(t.Paths, null, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
             e.Handled = true;
@@ -135,6 +138,7 @@ public sealed class DesktopWindow : Window
     {
         var settings = DesktopSettingsStore.Load(_hive, _defaults);
         Background = WallpaperBrush.Create(settings);
+        _mode = settings.Mode;
         _canvas.Children.Clear();
         _icons.Clear();
         // the shell folders first (This Computer, as the first icon), then the files of the desktop folder
@@ -191,7 +195,10 @@ public sealed class DesktopWindow : Window
         var label = new TextBlock
         {
             Text = text, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxHeight = 34, FontSize = 12,
-            Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Foreground = ThemeTokens.Find(this, ThemeToken.TextPrimary, Brushes.White),
+            // the Windows label look: plain lettering that lifts off the picture on a soft shadow
+            Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, OffsetX = 0, OffsetY = 1, Opacity = 0.6 },
         };
         var border = new Border
         {
@@ -201,7 +208,16 @@ public sealed class DesktopWindow : Window
             Child = new StackPanel
             {
                 Spacing = 4,
-                Children = { new ShellIcon { IconNames = iconNames, IconSize = 48, HorizontalAlignment = HorizontalAlignment.Center }, label },
+                // the Windows icon look: the artwork itself floats on a soft shadow, the label below just lifts
+                Children =
+                {
+                    new ShellIcon
+                    {
+                        IconNames = iconNames, IconSize = 48, HorizontalAlignment = HorizontalAlignment.Center,
+                        Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, OffsetX = 0, OffsetY = 1, Opacity = 0.5 },
+                    },
+                    label,
+                },
             },
         };
         border.PointerPressed += (_, e) => OnIconPressed(key, border, e);

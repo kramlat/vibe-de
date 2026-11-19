@@ -36,7 +36,7 @@ public sealed class GreeterWindow : Window
         _now = now ?? (() => DateTime.Now);
         _power = power ?? (_ => { });
         Title = "Login";
-        SystemDecorations = SystemDecorations.None;
+        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
         WindowState = WindowState.FullScreen;
         Background = background ?? new LinearGradientBrush
         {

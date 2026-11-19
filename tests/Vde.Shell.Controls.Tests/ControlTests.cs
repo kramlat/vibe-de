@@ -4,7 +4,6 @@ using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
-using Avalonia.Svg.Skia;
 using Avalonia.VisualTree;
 using Vde.Freedesktop;
 using Vde.Shell;
@@ -56,9 +55,9 @@ public class ShellIconProviderTests
         using var fx = new IconFixture();
         var provider = fx.Provider();
 
-        Assert.IsType<SvgImage>(provider.Load(["red"], 16));
+        Assert.IsType<Bitmap>(provider.Load(["red"], 16));   // SVG, rasterized at load
         Assert.IsType<Bitmap>(provider.Load(["blue"], 16));
-        Assert.IsType<SvgImage>(provider.Load(["no-such-icon"], 16));   // generic fallback
+        Assert.IsType<Bitmap>(provider.Load(["no-such-icon"], 16));   // generic fallback
         Assert.Same(provider.Load(["red"], 16), provider.Load(["red"], 16));   // cached
     }
 

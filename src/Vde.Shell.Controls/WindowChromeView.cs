@@ -20,6 +20,7 @@ public sealed class WindowChromeView : Border
     private readonly ShellIcon _icon = new() { IconSize = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(10, 0, 8, 0) };
     private readonly TextBlock _title = new() { VerticalAlignment = VerticalAlignment.Center, FontSize = 12, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(12, 0, 8, 0) };
     private readonly Glyph[] _glyphs;
+    private IBrush? _mica;
     private bool _active = true, _maximized;
     private ChromeButton _hover, _pressed;
 
@@ -78,12 +79,21 @@ public sealed class WindowChromeView : Border
 
     private void Apply()
     {
-        Background = ThemeTokens.Find(this, ThemeToken.Surface, new SolidColorBrush(Color.Parse("#202030")));
+        // Mica when the shell set a wallpaper backdrop (WallpaperMica), otherwise the theme's surface.
+        Background = _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, new SolidColorBrush(Color.Parse("#202030")));
         var primary = ThemeTokens.Find(this, ThemeToken.TextPrimary, Brushes.White);
         var secondary = ThemeTokens.Find(this, ThemeToken.TextSecondary, Brushes.Gray);
         _title.Foreground = _active ? primary : secondary;
         _icon.Opacity = _active ? 1 : 0.6;
         foreach (var g in _glyphs) g.InvalidateVisual();
+    }
+
+    // The titlebar's Mica: a blurred, tinted sample of the wallpaper, or null for the theme's plain surface.
+    // Set once by the renderer that produces the titlebar images; it survives Apply (and theme changes).
+    public void SetBackdrop(IBrush? mica)
+    {
+        _mica = mica;
+        Apply();
     }
 
     // One button: a hover fill and a drawn symbol (no font needed, so it looks the same everywhere).

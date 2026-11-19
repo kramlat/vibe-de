@@ -1,6 +1,5 @@
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
-using Avalonia.Svg.Skia;
 using Vde.Freedesktop;
 
 namespace Vde.Shell.Controls;
@@ -60,14 +59,9 @@ public sealed class ShellIconProvider
         try
         {
             if (path.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
-            {
-                var source = SvgSource.Load(path, null);
-                image = source is null ? null : new SvgImage { Source = source };
-            }
+                image = SvgRasterizer.Render(path);
             else
-            {
                 image = new Bitmap(path);
-            }
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {

@@ -252,7 +252,7 @@ public sealed class TerminalView : Control
 
     // ---- focus ----
 
-    protected override void OnGotFocus(GotFocusEventArgs e)
+    protected override void OnGotFocus(FocusChangedEventArgs e)
     {
         base.OnGotFocus(e);
         _blink.Start();
@@ -261,7 +261,7 @@ public sealed class TerminalView : Control
         InvalidateVisual();
     }
 
-    protected override void OnLostFocus(RoutedEventArgs e)
+    protected override void OnLostFocus(FocusChangedEventArgs e)
     {
         base.OnLostFocus(e);
         _blink.Stop();

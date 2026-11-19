@@ -34,6 +34,10 @@ proto=$(pkg-config --variable=pkgdatadir wayland-protocols)
 for x in xdg-shell; do
   "$scanner" server-header "$proto/stable/$x/$x.xml" "$out/$x-protocol.h"
 done
+# headers the wlroots-by-0.19 API headers include when their protocols are used
+for x in staging/cursor-shape/cursor-shape-v1 staging/content-type/content-type-v1; do
+  "$scanner" server-header "$proto/$x.xml" "$out/$(basename "$x" .xml)-protocol.h"
+done
 "$scanner" server-header "$here/../vdepanel/protocols/wlr-layer-shell-unstable-v1.xml" "$out/wlr-layer-shell-unstable-v1-protocol.h"
 ${CC:-cc} -std=gnu11 -Wall -Wextra -Wno-unused-parameter -DWLR_USE_UNSTABLE -I"$out" -I"$here" \
   "$here/vwm.c" "$here/ipc.c" "$here/json.c" -o "$out/vwm" \

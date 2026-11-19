@@ -49,7 +49,7 @@ public sealed class GreeterApp : Application
         if (demo && sessions.Count == 0) sessions = [new SessionEntry("vde", "Vibe Desktop Environment", "", ["start-vde"], SessionKind.Wayland, "VDE")];
         var model = new GreeterModel(connection, users, sessions, config.DefaultSession);
         var window = new GreeterWindow(model, background, power: Power);
-        if (demo) { window.WindowState = WindowState.Normal; window.SystemDecorations = SystemDecorations.Full; window.Width = 1100; window.Height = 700; }
+        if (demo) { window.WindowState = WindowState.Normal; window.SystemDecorations = Avalonia.Controls.WindowDecorations.Full; window.Width = 1100; window.Height = 700; }
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime lifetime)
         {
             lifetime.MainWindow = window;

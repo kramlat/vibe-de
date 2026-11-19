@@ -6,6 +6,6 @@ public class FluentSplash : FluentWindow {
     public FluentSplash() {
         CanResize = false;
         ShowInTaskbar = false;
-        SystemDecorations = Avalonia.Controls.SystemDecorations.None;
+        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
     }
 }
