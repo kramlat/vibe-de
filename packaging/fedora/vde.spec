@@ -96,6 +96,8 @@ fi
 %{_bindir}/mkhive
 %{_bindir}/RegSvrVDE
 %{_bindir}/regsvrvde
+%{_bindir}/vderegedit
+%{_bindir}/vdesettings
 %{_datadir}/vde
 %{_datadir}/backgrounds/vde
 %{_datadir}/icons/hicolor/scalable/places/start-here-vde.svg

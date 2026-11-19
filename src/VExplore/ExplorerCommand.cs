@@ -18,14 +18,14 @@ public static class ExplorerCommand
         Vibe Explorer: the VDE shell (taskbar, notification flyout, file manager).
         usage: vexplore [folder]
                vexplore --files [folder]    a file manager window (the default)
-               vexplore --settings          the Settings (Control Panel) window
-               vexplore --regedit           the registry editor for the HKCU and HKLM hives
+               vexplore --controlpanel      the Control Panel: the settings catalog as category links
                vexplore --launcher          the app launcher
                vexplore --desktop           the desktop: wallpaper and the icons of ~/Desktop
                vexplore --chrome            draws window titlebars for vwm (needs vwm running; no window of its own)
                vexplore --taskbar           the taskbar, docked to the edge in HKCU\Software\Vde\Taskbar
                vexplore --list-components   show registered components and whether the shell would load them
                -h, --help
+        (the registry editor is vderegedit, the Settings app is vdesettings)
 
         """;
 
@@ -45,8 +45,7 @@ public static class ExplorerCommand
         var window = args.Length switch
         {
             0 => "files",
-            _ when args[0] == "--settings" && args.Length == 1 => "settings",
-            _ when args[0] == "--regedit" && args.Length == 1 => "regedit",
+            _ when args[0] == "--controlpanel" && args.Length == 1 => "controlpanel",
             _ when args[0] == "--launcher" && args.Length == 1 => "launcher",
             _ when args[0] == "--desktop" && args.Length == 1 => "desktop",
             _ when args[0] == "--taskbar" && args.Length == 1 => "taskbar",
@@ -68,18 +67,54 @@ public static class ExplorerCommand
         }
 
         using var host2 = ExplorerHost.Open();
-        ShellApp.Host = host2;
         if (window == "chrome")
             return RunChrome(host2, error);
         ShellApp.FirstWindow = () => window switch
         {
-            "settings" => NewSettings(host2),
-            "regedit" => NewRegEdit(host2),
+            "controlpanel" => NewControlPanel(host2),
             "launcher" => NewLauncher(host2),
             "desktop" => NewDesktop(host2),
             "taskbar" => NewTaskbar(host2),
             _ => ShellApp.NewFileManager(host2, folder),
         };
+        return ShellApp.Build().StartWithClassicDesktopLifetime([]);
+    }
+
+    // vdesettings: the Settings app as its own program (the start menu, the desktop menu and the .desktop file launch it).
+    public static int RunSettings(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Any(a => a is "-h" or "--help")) { output.Write(SettingsUsageText); return 0; }
+        if (args.Length != 0) { error.Write(SettingsUsageText); return 2; }
+        using var host = ExplorerHost.Open();
+        return RunFirstWindow(host, () => NewSettings(host));
+    }
+
+    // vderegedit: the registry editor as its own program.
+    public static int RunRegEdit(string[] args, TextWriter output, TextWriter error)
+    {
+        if (args.Any(a => a is "-h" or "--help")) { output.Write(RegEditUsageText); return 0; }
+        if (args.Length != 0) { error.Write(RegEditUsageText); return 2; }
+        using var host = ExplorerHost.Open();
+        return RunFirstWindow(host, () => NewRegEdit(host));
+    }
+
+    public const string SettingsUsageText = """
+        Vibe Settings: display, appearance, desktop, taskbar, windows and more.
+        usage: vdesettings
+
+        """;
+
+    public const string RegEditUsageText = """
+        Vibe Registry Editor: the keys and values of the user and the system hive.
+        usage: vderegedit
+
+        """;
+
+    // The shared tail of the entry points: show the first window and run the shell lifetime.
+    private static int RunFirstWindow(ExplorerHost host, Func<Window> first)
+    {
+        ShellApp.Host = host;
+        ShellApp.FirstWindow = first;
         return ShellApp.Build().StartWithClassicDesktopLifetime([]);
     }
 
@@ -99,6 +134,7 @@ public static class ExplorerCommand
         var catalog = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
         var folders = new KnownFolders(xdg);
         var wallpapers = WallpaperCatalog.Find(xdg);
+        var device = DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine);
         var settings = new ControlPanelWindow(catalog, host.CurrentUser, item =>
         {
             if (item.Entry is { } entry)
@@ -107,9 +143,34 @@ public static class ExplorerCommand
                 Launch(host, command);
         }, customPages: id => id == DesktopPageView.PageId
             ? new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine)
-            : null);
-        WindowMica.Attach(settings, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+            : id == DisplayPageView.PageId
+                ? new DisplayPageView(host.CurrentUser)
+                : null, user: new UserProfile(), deviceSettings: device);
+        WindowMica.Attach(settings, device);
         return settings;
+    }
+
+    // The classic Control Panel: the catalog of items shown the Windows 7 way, category links first.
+    private static Window NewControlPanel(ExplorerHost host)
+    {
+        var xdg = XdgDirectories.Default;
+        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var catalog = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
+        var folders = new KnownFolders(xdg);
+        var wallpapers = WallpaperCatalog.Find(xdg);
+        var window = new ClassicControlPanelWindow(catalog, host.CurrentUser, item =>
+        {
+            if (item.Entry is { } entry)
+                Launch(host, entry);
+            else if (item.Command is { } command)
+                Launch(host, command);
+        }, customPages: id => id == DesktopPageView.PageId
+            ? new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine)
+            : id == DisplayPageView.PageId
+                ? new DisplayPageView(host.CurrentUser)
+                : null);
+        WindowMica.Attach(window, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        return window;
     }
 
     // The window list comes from vwm when it is running; elsewhere the taskbar only shows its pinned apps.
@@ -218,7 +279,7 @@ public static class ExplorerCommand
             {
                 Console.Error.WriteLine("vexplore: " + e.Message);
             }
-        }, types, openSettings: () => { try { shell.Run("vexplore --settings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths), systemDefaults: host.LocalMachine, shellFolders: ShellApp.ShellFolders(host),
+        }, types, openSettings: () => { try { shell.Run("vdesettings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths), systemDefaults: host.LocalMachine, shellFolders: ShellApp.ShellFolders(host),
             openShellFolder: path => { try { shell.Run("vexplore --files " + ExecLineQuote(path)); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } });
         window.Closed += (_, _) => role.Dispose();
         return window;
@@ -261,7 +322,7 @@ public static class ExplorerCommand
         var command = action switch
         {
             LauncherFooterAction.Files => "vexplore --files " + ExecLineQuote(home),
-            LauncherFooterAction.Settings => "vexplore --settings",
+            LauncherFooterAction.Settings => "vdesettings",
             LauncherFooterAction.SignOut => "vde-session --logout",
             LauncherFooterAction.Sleep => "systemctl suspend",
             LauncherFooterAction.Restart => "systemctl reboot",

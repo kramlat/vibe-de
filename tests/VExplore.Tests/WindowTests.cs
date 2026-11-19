@@ -55,6 +55,38 @@ public class WindowTests
     }
 
     [AvaloniaFact]
+    public void Tabs_hold_their_own_folder_and_the_window_api_follows_the_active_tab()
+    {
+        using var t = new Tree();
+        var window = new FileManagerWindow(t.Home, t.Folders, _ => { });
+        window.Show();
+        window.Navigate(Path.Combine(t.Home, "Documents"));
+        Assert.Equal("Documents", window.Title);
+
+        window.NewTab();
+        Assert.Equal(2, window.Views.Count);
+        Assert.Equal(t.Home, window.CurrentFolder);            // the api speaks for the active tab
+        Assert.Equal("home", window.Title);
+        Assert.Equal(Path.Combine(t.Home, "Documents"), window.Views[0].CurrentFolder);
+
+        window.Navigate(Path.Combine(t.Root, "does-not-exist"));
+        Assert.Contains("cannot be opened", window.StatusText);   // the error lands in the tab it was caused in
+        Assert.DoesNotContain("cannot be opened", window.Views[0].StatusText);
+
+        window.CycleTab(-1);
+        Assert.Equal("Documents", window.Title);
+
+        window.CloseTab(window.ActiveView);                    // closing the active tab leaves the other one showing
+        Assert.Equal([Path.Combine(t.Root, "does-not-exist")], window.Views.Select(v => v.CurrentFolder));
+        Assert.Equal("does-not-exist", window.Title);
+
+        var closed = false;
+        window.Closed += (_, _) => closed = true;
+        window.CloseTab(window.ActiveView);
+        Assert.True(closed);                                   // the last tab closes the window
+    }
+
+    [AvaloniaFact]
     public void The_file_manager_navigates_with_history_up_and_the_address_bar_and_opens_files_through_the_shell()
     {
         using var t = new Tree();
@@ -126,9 +158,88 @@ public class WindowTests
 
         window.Open(window.ShownItems[0]);
         Assert.Equal("appearance", window.OpenPageId);                              // our own page shows inside the window
+        Assert.Equal("Appearance", window.PageName);
+        Assert.Null(window.PageCategory);                                           // the category view has no breadcrumb of its own
         window.Search("printers");
         window.Open(window.ShownItems.Single());
         Assert.Equal("printers", Assert.Single(handed).Id);                         // anything else is started by the shell
+    }
+
+    [AvaloniaFact]
+    public void The_display_page_selects_arranges_and_stores_displays()
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var screens = new List<Vde.Shell.Controls.DisplayScreen>
+        {
+            new(1920, 1080, 1, false, 1920, 0),
+            new(1920, 1080, 1.25, true, 0, 0),
+        };
+        var page = new Vde.Shell.Controls.DisplayPageView(hive, () => screens) { Width = 800 };
+        var window = new Window { Content = page };
+        window.Show();
+
+        Assert.Equal(2, page.Tiles.Count);                                          // both displays, the primary first
+        Assert.Equal(1, page.SelectedDisplay);
+        page.SelectDisplay(2);
+        Assert.Equal(2, page.SelectedDisplay);
+
+        // Every choice is written to the display key as it is made.
+        page.SetMode("Duplicate");
+        page.SetBrightness(40);
+        page.SetNightLight(true);
+        var settings = DisplaySettingsStore.Load(hive);
+        Assert.Equal("Duplicate", settings.MultipleDisplays);
+        Assert.True(settings.NightLight);
+        Assert.Equal(40, settings.Displays[2].Brightness);
+
+        // Dragging rearranges the displays; the places come back relative to the top-left one.
+        page.MoveDisplay(1, 2600, 0);
+        Assert.Equal((680, 0), (page.LayoutSlots[1].X, page.LayoutSlots[1].Y));                // display 1 ends right of display 2
+        Assert.Equal((0, 0), (page.LayoutSlots[2].X, page.LayoutSlots[2].Y));                 // ...display 2 keeps its place
+    }
+
+    [AvaloniaFact]
+    public void The_classic_control_panel_lists_link_groups_and_opens_pages_or_hands_off_other_items()
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var key = ControlPanelCatalog.RegistryKey + "\\printers";
+        hive.SetValue(key, "Name", RegistryValueKind.String, "Printers");
+        hive.SetValue(key, "Command", RegistryValueKind.String, "/bin/true");
+        hive.SetValue(key, "Category", RegistryValueKind.String, "Devices");
+        var catalog = ControlPanelCatalog.Load(null, hive, null, []);
+        var handed = new List<ControlPanelItem>();
+        var window = new ClassicControlPanelWindow(catalog, hive, handed.Add);
+        window.Show();
+
+        Assert.Equal(new[] { "Appearance", "Desktop", "Start menu", "Display", "Notifications", "Keyboard", "Printers", "Terminal" },  // home: up to three sub-links per category
+            window.ShownItems.Select(i => i.Name));
+        window.Open(window.ShownItems.First(i => i.PageId == "appearance"));
+        Assert.Equal("appearance", window.OpenPageId);                              // our own page shows inside the window
+        window.Search("printers");
+        window.Open(window.ShownItems.Single());
+        Assert.Equal("printers", Assert.Single(handed).Id);
+    }
+
+    [AvaloniaFact]
+    public void The_settings_window_opens_the_display_page_with_its_breadcrumb()
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var screens = new List<Vde.Shell.Controls.DisplayScreen>
+        {
+            new(1920, 1080, 1, true, 0, 0),
+            new(1366, 768, 1, false, 1920, 0),
+        };
+        var window = new ControlPanelWindow(ControlPanelCatalog.Load(null, hive, null, []), hive, _ => { },
+            customPages: id => id == Vde.Shell.Controls.DisplayPageView.PageId
+                ? new Vde.Shell.Controls.DisplayPageView(hive, () => screens) : null);
+        window.Show();
+
+        window.Search("display");
+        var item = window.ShownItems.First(i => i.PageId == "display");
+        window.Open(item);
+        Assert.Equal("display", window.OpenPageId);                                 // the page shows inside the window
+        Assert.Equal("Display", window.PageName);
+        Assert.Equal("System", window.PageCategory);                                // the breadcrumb reads System › Display
     }
 
     [AvaloniaFact]
@@ -186,6 +297,50 @@ public class Screenshots
         var window = new FileManagerWindow(new KnownFolders(xdg).Get(KnownFolder.Home), new KnownFolders(xdg), _ => { }, types) { Width = 980, Height = 560 };
         window.Show();
         window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "filemanager.png"));
+    }
+
+    [AvaloniaFact]
+    public void Settings_screenshot()
+    {
+        var dir = Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var window = new ControlPanelWindow(ControlPanelCatalog.Load(null, hive, null, []), hive, _ => { }) { Width = 1020, Height = 700 };
+        window.Show();
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "settings.png"));
+    }
+
+    [AvaloniaFact]
+    public void Control_panel_screenshot()
+    {
+        var dir = Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        Vde.Shell.Controls.ShellIconProvider.Default = new Vde.Shell.Controls.ShellIconProvider();
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var window = new ClassicControlPanelWindow(ControlPanelCatalog.Load(null, hive, null, []), hive, _ => { }) { Width = 900, Height = 600 };
+        window.Show();
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "controlpanel.png"));
+    }
+
+    [AvaloniaFact]
+    public void Display_settings_screenshot()
+    {
+        var dir = Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        Vde.Shell.Controls.ShellIconProvider.Default = new Vde.Shell.Controls.ShellIconProvider();
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var screens = new List<Vde.Shell.Controls.DisplayScreen>
+        {
+            new(1920, 1080, 1, true, 0, 0),
+            new(1366, 768, 1, false, 1920, 0),
+        };
+        var window = new ControlPanelWindow(ControlPanelCatalog.Load(null, hive, null, []), hive, _ => { },
+            customPages: id => id == Vde.Shell.Controls.DisplayPageView.PageId
+                ? new Vde.Shell.Controls.DisplayPageView(hive, () => screens) : null) { Width = 1020, Height = 700 };
+        window.Show();
+        window.Search("display");
+        window.Open(window.ShownItems.First(i => i.PageId == "display"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "display.png"));
     }
 }
 

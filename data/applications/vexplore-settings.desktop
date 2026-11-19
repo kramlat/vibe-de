@@ -2,7 +2,7 @@
 Type=Application
 Name=Settings
 Comment=Appearance, taskbar, windows, terminal and more
-Exec=vexplore --settings
+Exec=vdesettings
 Icon=preferences-system
 Terminal=false
 Categories=Settings;DesktopSettings;

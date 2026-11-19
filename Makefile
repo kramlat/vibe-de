@@ -19,10 +19,10 @@ BUILD       := build
 PUBLISH     := $(BUILD)/publish
 
 # project directory under src/ -> published executable name (see each .csproj AssemblyName)
-DOTNET_PROJECTS := fhived mkhive RegSvrVDE VExplore VTerminal VDESession VDEDM VDEDMGreeter VDENotify
+DOTNET_PROJECTS := fhived mkhive RegSvrVDE VExplore VdeRegEdit VdeSettings VTerminal VDESession VDEDM VDEDMGreeter VDENotify
 
 # commands people type, linked into PREFIX/bin
-BIN_LINKS := vexplore vterminal vde-session vdedm vdedm-greeter mkhive RegSvrVDE
+BIN_LINKS := vexplore vterminal vde-session vdedm vdedm-greeter mkhive RegSvrVDE vderegedit vdesettings
 
 export DOTNET_CLI_TELEMETRY_OPTOUT := 1
 export DOTNET_NOLOGO := 1

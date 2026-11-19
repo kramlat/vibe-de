@@ -106,6 +106,8 @@ public static class BuiltInPages
             ["window", "titlebar", "double click", "maximize", "minimize"], ItemSource.BuiltIn) { PageId = "windows" },
         new("taskbar", "Taskbar", "Which screen edge it sits on and how apps are aligned", "preferences-desktop", ControlPanelCategories.Appearance,
             ["taskbar", "dock", "panel", "edge", "left", "right", "top", "bottom", "center", "centre"], ItemSource.BuiltIn) { PageId = "taskbar" },
+        new("display", "Display", "Scale, resolution, orientation and multiple displays", "video-display", ControlPanelCategories.System,
+            ["display", "screen", "monitor", "resolution", "scale", "brightness", "night light", "orientation", "arrange", "multiple"], ItemSource.BuiltIn) { PageId = "display" },
         new("terminal", "Terminal", "Default shell, font and copy behaviour of vterminal", "utilities-terminal", ControlPanelCategories.Apps,
             ["terminal", "shell", "powershell", "bash", "console", "font"], ItemSource.BuiltIn) { PageId = "terminal" },
         new("keyboard", "Keyboard", "Shortcut style: PC or Apple", "input-keyboard", ControlPanelCategories.Devices,

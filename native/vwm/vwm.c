@@ -1224,6 +1224,38 @@ static void on_new_xdg_toplevel(struct wl_listener *l, void *data)
 	v->set_app_id.notify = xdg_set_app_id;         wl_signal_add(&top->events.set_app_id, &v->set_app_id);
 }
 
+/* Popups configured on first commit: wlroots 0.18+ leaves the initial xdg configure to the compositor
+ * (tinywl does the same), so without this no menu ever maps. The unconstrain keeps menus on an output. */
+struct vwm_popup {
+	struct wlr_xdg_popup *popup;
+	struct wl_listener commit;
+	struct wl_listener destroy;
+};
+
+static void popup_commit(struct wl_listener *l, void *data)
+{
+	struct vwm_popup *p = FROM(struct vwm_popup, l, commit);
+	if (!p->popup->base->initial_commit)
+		return;
+	struct vwm_server *s = the_server;
+	struct wlr_output *out = wlr_output_layout_output_at(s->output_layout, s->cursor->x, s->cursor->y);
+	if (out) {
+		struct wlr_box usable;
+		wlr_output_layout_get_box(s->output_layout, out, &usable);
+		wlr_xdg_popup_unconstrain_from_box(p->popup, &usable);   // also schedules the configure
+	} else {
+		wlr_xdg_surface_schedule_configure(p->popup->base);
+	}
+}
+
+static void popup_destroy(struct wl_listener *l, void *data)
+{
+	struct vwm_popup *p = FROM(struct vwm_popup, l, destroy);
+	wl_list_remove(&p->commit.link);
+	wl_list_remove(&p->destroy.link);
+	free(p);
+}
+
 static void on_new_xdg_popup(struct wl_listener *l, void *data)
 {
 	struct wlr_xdg_popup *popup = data;
@@ -1232,6 +1264,12 @@ static void on_new_xdg_popup(struct wl_listener *l, void *data)
 		return;
 	struct wlr_scene_tree *parent_tree = parent->data;
 	popup->base->data = wlr_scene_xdg_surface_create(parent_tree, popup->base);
+	struct vwm_popup *p = calloc(1, sizeof(*p));
+	if (!p)
+		return;
+	p->popup = popup;
+	p->commit.notify = popup_commit;     wl_signal_add(&popup->base->surface->events.commit, &p->commit);
+	p->destroy.notify = popup_destroy;   wl_signal_add(&popup->base->surface->events.destroy, &p->destroy);
 }
 
 /* Who draws the titlebar. Server-side: vwm composites the image the shell renders with the Avalonia theme

@@ -62,8 +62,8 @@ public sealed class ShellApp : Application
         var window = new FileManagerWindow(start, new KnownFolders(xdg), path =>
         {
             _ = OpenAsync(shell, path, associations, apps);   // no application: the chooser; an untrusted command: the password prompt
-        }, types, shortcuts: Shortcuts, properties: paths => PropertyContext(host, paths), shellFolders: ShellFolders(host));
-        WindowMica.Attach(window, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        }, types, shortcuts: Shortcuts, properties: paths => PropertyContext(host, paths), shellFolders: ShellFolders(host),
+            settings: DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));   // the tabbed chrome takes the mica crop itself
         return window;
     }
 
@@ -96,7 +96,7 @@ public sealed class ShellApp : Application
         {
             if (item.Entry is { } entry) ExplorerCommand.Launch(host, entry);
             else if (item.Command is { } command) ExplorerCommand.Launch(host, command);
-            else new ShellExecute(new FileAssociations(XdgDirectories.Default, new MimeDatabase(XdgDirectories.Default), DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment()), Desktops(), host.Classes), new MimeDatabase(XdgDirectories.Default)).Run("vexplore --settings");
+            else new ShellExecute(new FileAssociations(XdgDirectories.Default, new MimeDatabase(XdgDirectories.Default), DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment()), Desktops(), host.Classes), new MimeDatabase(XdgDirectories.Default)).Run("vdesettings");
         };
         return catalog;
     }

@@ -2,7 +2,7 @@
 Type=Application
 Name=Registry Editor
 Comment=Keys and values of the user and system hives
-Exec=vexplore --regedit
+Exec=vderegedit
 Icon=preferences-system
 Terminal=false
 Categories=Settings;System;
