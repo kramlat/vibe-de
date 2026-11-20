@@ -113,6 +113,64 @@ public class RegEditModelTests
 public class RegEditWindowTests
 {
     [AvaloniaFact]
+    public void HKEY_CLASSES_ROOT_is_traversable_merged_and_editable_into_the_user_hive()
+    {
+        var user = new Hive("HKCU");
+        var machine = new Hive("HKLM");
+        machine.SetValue(@"Software\Classes\.txt", "", RegistryValueKind.String, "txtfile");
+        machine.SetValue(@"Software\Classes\.sys", "", RegistryValueKind.String, "sysfile");
+        user.SetValue(@"Software\Classes\.txt", "", RegistryValueKind.String, "mine");   // the user's wins
+
+        var window = new RegEditWindow(user, machine);
+        window.Show();
+
+        Assert.True(window.SelectPath(@"HKEY_CLASSES_ROOT\.sys"));   // opens the root on the way
+        Assert.Contains(@"HKEY_CLASSES_ROOT\.sys", window.VisiblePaths);   // a system-only class shows
+        Assert.Contains(@"HKEY_CLASSES_ROOT\.txt", window.VisiblePaths);
+        Assert.True(window.SelectPath(@"HKEY_CLASSES_ROOT\.txt"));
+        Assert.Equal("mine", window.ShownValueRows.Single(r => r.Name == "").Data.Trim('"'));
+
+        window.SelectPath(@"HKEY_CLASSES_ROOT\.sys");
+        window.SetValueText(RegistryValueKind.String, "Note", "hi");   // written to the user hive, not the system one
+        Assert.Equal("hi", user.GetValue(@"Software\Classes\.sys", "Note")!.Data);
+        Assert.Null(machine.GetValue(@"Software\Classes\.sys", "Note"));
+    }
+
+    [AvaloniaFact]
+    public void HKEY_USERS_and_HKEY_CURRENT_CONFIG_are_traversable_and_write_through_to_the_hives()
+    {
+        var user = new Hive("HKCU");
+        var machine = new Hive("HKLM");
+        user.SetValue(@"Software\Mine", "A", RegistryValueKind.Int32, 1);
+        machine.SetValue(RegistryStore.CurrentConfigPath + @"\Display", "Dpi", RegistryValueKind.Int32, 96);
+
+        var window = new RegEditWindow(user, machine);
+        window.Show();
+
+        var uid = RegistryIdentity.Current.Uid.ToString();
+        Assert.True(window.SelectPath(@"HKEY_USERS\" + uid + @"\Software\Mine"));   // the user's own profile is their hive
+        Assert.Equal(["A"], window.ShownValues);
+        Assert.True(window.SelectPath(@"HKEY_CURRENT_CONFIG\Display"));
+        Assert.Equal(["Dpi"], window.ShownValues);
+        Assert.True(window.SelectPath(@"HKEY_USERS\.DEFAULT"));   // exists even before anything is written to it
+        window.NewValue(RegistryValueKind.String, interactive: false);
+        Assert.True(machine.KeyExists(@"Users\.DEFAULT"));
+    }
+
+    [Fact]
+    public void The_classes_root_is_a_hive_whose_root_always_exists()
+    {
+        var user = new Hive("HKCU");
+        IHive classes = new ClassesRoot(user, new Hive("HKLM"));
+        Assert.Equal("HKCR", classes.Name);
+        Assert.True(classes.KeyExists(""));
+        Assert.Empty(classes.GetSubKeyNames(""));
+        classes.SetValue(@".abc", "", RegistryValueKind.String, "x");
+        Assert.Equal(1, classes.GetKeyInfo("").SubKeyCount);
+        Assert.True(user.KeyExists(@"Software\Classes\.abc"));
+    }
+
+    [AvaloniaFact]
     public void The_tree_shows_the_roots_and_selecting_a_key_shows_its_values()
     {
         var user = new Hive("HKCU");
@@ -123,7 +181,7 @@ public class RegEditWindowTests
         var window = new RegEditWindow(user, machine);
         window.Show();
 
-        Assert.Equal([RegEditModel.UserRoot, RegEditModel.MachineRoot], window.VisiblePaths);
+        Assert.Equal([RegEditModel.UserRoot, RegEditModel.MachineRoot, RegEditModel.ClassesRootName, RegEditModel.UsersRootName, RegEditModel.CurrentConfigName], window.VisiblePaths);
         Assert.True(window.SelectPath(@"HKEY_CURRENT_USER\Software\Vde\Taskbar"));
         Assert.Equal(@"HKEY_CURRENT_USER\Software\Vde\Taskbar", window.SelectedPath);
         Assert.Equal(["", "Height"], window.ShownValues);   // "" is the default value; the row shows it as "(Default)"
@@ -143,10 +201,10 @@ public class RegEditWindowTests
         var window = new RegEditWindow(user, machine);
         window.Show();
 
-        Assert.Equal([RegEditModel.UserRoot, RegEditModel.MachineRoot], window.VisiblePaths);   // nothing opened yet
+        Assert.Equal([RegEditModel.UserRoot, RegEditModel.MachineRoot, RegEditModel.ClassesRootName, RegEditModel.UsersRootName, RegEditModel.CurrentConfigName], window.VisiblePaths);   // nothing opened yet
         Assert.True(window.SelectPath(@"HKEY_CURRENT_USER\Software\Deep"));
         Assert.Equal(
-            [RegEditModel.UserRoot, @"HKEY_CURRENT_USER\Software", @"HKEY_CURRENT_USER\Software\Deep", RegEditModel.MachineRoot],
+            [RegEditModel.UserRoot, @"HKEY_CURRENT_USER\Software", @"HKEY_CURRENT_USER\Software\Deep", RegEditModel.MachineRoot, RegEditModel.ClassesRootName, RegEditModel.UsersRootName, RegEditModel.CurrentConfigName],
             window.VisiblePaths);
     }
 
@@ -195,7 +253,7 @@ public class RegEditWindowTests
         window.DeleteSelectedKey();
         Assert.False(user.KeyExists("Test"));
         Assert.Equal("HKEY_CURRENT_USER", window.SelectedPath);
-        Assert.Equal([RegEditModel.UserRoot, RegEditModel.MachineRoot], window.VisiblePaths);
+        Assert.Equal([RegEditModel.UserRoot, RegEditModel.MachineRoot, RegEditModel.ClassesRootName, RegEditModel.UsersRootName, RegEditModel.CurrentConfigName], window.VisiblePaths);
     }
 
     [AvaloniaFact]

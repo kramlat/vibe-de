@@ -1796,7 +1796,7 @@ public class ControlPanelTests
         using var fx = new Fixture();
         var system = Reg(); var user = Reg();
         Item(system, "printers", "Printers", category: "Devices", keywords: ["print"]);
-        Item(system, "appearance", "Look (system)");                          // overrides the built-in with the same id
+        Item(system, "colors", "Look (system)");                          // overrides the built-in with the same id
         Item(user, "printers", "My Printers", category: "Devices");           // and the user's overrides the system's
         Item(user, "broken", "Nothing to open", command: null);               // no command or component: ignored
         Item(user, "applet", "Applet", command: null, component: "{11111111-0000-4000-8000-000000000001}");
@@ -1807,7 +1807,7 @@ public class ControlPanelTests
         var catalog = ControlPanelCatalog.Load(system, user, apps, ["VDE"]);
 
         Assert.Equal("My Printers", catalog.Items.Single(i => i.Id == "printers").Name);
-        Assert.Equal("Look (system)", catalog.Items.Single(i => i.Id == "appearance").Name);
+        Assert.Equal("Look (system)", catalog.Items.Single(i => i.Id == "colors").Name);
         Assert.Contains(catalog.Items, i => i.Id == "notifications" && i.Source == ItemSource.BuiltIn && i.PageId == "notifications");
         Assert.DoesNotContain(catalog.Items, i => i.Id == "broken");
         Assert.Equal("{11111111-0000-4000-8000-000000000001}", catalog.Items.Single(i => i.Id == "applet").ComponentClsid);
@@ -1828,7 +1828,7 @@ public class ControlPanelTests
 
         Assert.Equal(new[] { "Bluetooth", "Wi-Fi", "Sound" }, catalog.Search("bluetooth").Select(i => i.Name));   // name > keyword > description
         Assert.Equal(new[] { "Bluetooth" }, catalog.Search("bluetooth pair").Select(i => i.Name));            // both words must match
-        Assert.Equal("Appearance", catalog.Search("dark").First().Name);                                      // built-in keyword
+        Assert.Equal("Colors", catalog.Search("dark").First().Name);                                      // built-in keyword
         Assert.Empty(catalog.Search("zzzz"));
         Assert.Empty(catalog.Search("   "));
     }
@@ -1839,8 +1839,11 @@ public class ControlPanelTests
         var hive = Reg();
         var dnd = new SettingBinding(hive, BuiltInPages.Notifications.Settings.Single(s => s.Id == "dnd"));
         var timeout = new SettingBinding(hive, BuiltInPages.Notifications.Settings.Single(s => s.Id == "timeout"));
-        var variant = new SettingBinding(hive, BuiltInPages.Appearance.Settings.Single(s => s.Id == "variant"));
-        var accent = new SettingBinding(hive, BuiltInPages.Appearance.Settings.Single(s => s.Id == "accent"));
+        var variant = new SettingBinding(hive, new SettingDefinition("variant", "Mode", SettingKind.Choice, @"Software\Vde\Appearance", "Variant")
+        {
+            Default = "System", Choices = [new("System", "System"), new("Light", "Light"), new("Dark", "Dark")],
+        });
+        var accent = new SettingBinding(hive, new SettingDefinition("accent", "Accent", SettingKind.Color, @"Software\Vde\Appearance", "Accent"));
 
         Assert.Equal(false, dnd.Read());
         Assert.Equal(5000L, timeout.Read());
@@ -1848,7 +1851,7 @@ public class ControlPanelTests
 
         Assert.True(dnd.Write(true));
         Assert.Equal(true, dnd.Read());
-        Assert.Equal(1u, hive.GetValue(@"Software\Vde\Notifications", "DoNotDisturb")!.Data);   // the same value the notification service reads
+        Assert.Equal(true, hive.GetValue(@"Software\Vde\Notifications", "DoNotDisturb")!.Data);   // the same value the notification service reads
 
         Assert.True(timeout.Write(8000L));
         Assert.False(timeout.Write(10L));                // below the minimum
@@ -1955,8 +1958,8 @@ public class LauncherTests
             Assert.Equal(new[] { "Kate" }, model.Search("kat").Select(r => r.Title));
             Assert.Empty(model.Search("   "));
             Assert.Empty(model.Search("nothing matches this"));
-            // dark/theme search reaches the built-in Appearance page, in the same list
-            Assert.Contains(model.Search("dark"), r => r.Kind == "Setting" && r.Title == "Appearance");
+            // dark/theme search reaches the built-in Colors page, in the same list
+            Assert.Contains(model.Search("dark"), r => r.Kind == "Setting" && r.Title == "Colors");
         }
     }
 }

@@ -102,7 +102,7 @@ public sealed class ShellFolderCatalog
             var key = $@"{NamespacesKey}\{root}";
             if (hive is null || !hive.KeyExists(key)) continue;
             foreach (var name in hive.GetSubKeyNames(key))
-                if (ComponentInfo.NormalizeGuid(name) is { } clsid && hive.GetValue($@"{key}\{name}", "Hidden") is { Kind: RegistryValueKind.DWord, Data: uint h } && h != 0)
+                if (ComponentInfo.NormalizeGuid(name) is { } clsid && RegistryBool.Get(hive, $@"{key}\{name}", "Hidden") == true)
                     hidden.Add(clsid);
         }
         return All().Where(i => i.Namespaces.Contains(root, StringComparer.OrdinalIgnoreCase) && !hidden.Contains(i.Clsid) && !i.Attributes.HasFlag(ShellFolderAttributes.Hidden))
@@ -128,10 +128,10 @@ public sealed class ShellFolderCatalog
         var registration = _components.Find(clsid);
         if (registration is null)
             return null;   // a ShellFolder key with no server behind it: nothing to open
-        var attributes = _classes.GetValue(key, "Attributes") is { Kind: RegistryValueKind.DWord, Data: uint a } ? (ShellFolderAttributes)a : ShellFolderAttributes.Folder;
+        var attributes = RegistryNumber.Get(_classes, key, "Attributes") is { } a ? (ShellFolderAttributes)a : ShellFolderAttributes.Folder;
         var name = _classes.GetValue(key, "Name")?.Data as string ?? registration.Component.Description ?? parsing;
         var places = _classes.GetValue(key, "Namespaces") is { Kind: RegistryValueKind.MultiString } n ? (string[])n.Data! : [];
-        var order = _classes.GetValue(key, "Order") is { Kind: RegistryValueKind.DWord, Data: uint o } ? (int)Math.Min(o, int.MaxValue) : 100;
+        var order = RegistryNumber.Get(_classes, key, "Order") is { } o ? (int)Math.Clamp(o, int.MinValue, int.MaxValue) : 100;
         return new ShellFolderInfo(clsid, parsing, name, attributes, false, registration) { Namespaces = places, Order = order };
     }
 }

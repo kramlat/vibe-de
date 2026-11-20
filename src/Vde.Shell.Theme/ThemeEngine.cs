@@ -189,6 +189,20 @@ public sealed class ThemeEngine
                 inner[ThemeTokens.Key(token)] = new SolidColorBrush(color);
             }
 
+            // The theme's colours for the base theme's own resources (Simple's Theme* brushes).
+            foreach (var (name, color) in dark ? theme.DarkPalette : theme.LightPalette)
+            {
+                inner[name + "Color"] = color;
+                inner[name + "Brush"] = new SolidColorBrush(color);
+            }
+            if (accent is { } pick && theme.Base == ThemeBase.Simple)   // the user's accent beats the theme's own
+            {
+                inner["HighlightColor"] = pick;
+                inner["HighlightBrush"] = new SolidColorBrush(pick);
+                inner["ThemeAccentColor"] = pick;
+                inner["ThemeAccentBrush"] = new SolidColorBrush(pick);
+            }
+
             // A Windows 11 dialog button: a solid panel on the window's Mica, a hairline border, a slightly
             // darker hover. The Fluent theme reads these exact resource keys; leaving them unset leaves the
             // translucent stock fill, which goes muddy over the washed wallpaper.
@@ -200,7 +214,7 @@ public sealed class ThemeEngine
             inner["ButtonBorderBrushPressed"] = new SolidColorBrush(dark ? Color.Parse("#666666") : Color.Parse("#C9C9C9"));
             root.ThemeDictionaries[variant] = inner;
         }
-        root["ControlCornerRadius"] = new CornerRadius(4);   // Windows 11 rounds its controls at 4
+        root["ControlCornerRadius"] = new CornerRadius(theme.CornerRadius ?? 4);   // Windows 11 rounds its controls at 4
         return root;
     }
 

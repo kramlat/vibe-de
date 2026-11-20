@@ -32,7 +32,7 @@ public static class DisplaySettingsStore
     public static DisplaySettings Load(IHive hive)
     {
         string? Text(string name) => hive.GetValue(DisplaySettings.KeyPath, name) is { Kind: RegistryValueKind.String, Data: string { Length: > 0 } s } ? s : null;
-        uint? DWord(string name) => hive.GetValue(DisplaySettings.KeyPath, name) is { Kind: RegistryValueKind.DWord, Data: uint d } ? d : null;
+        long? DWord(string name) => RegistryNumber.Get(hive, DisplaySettings.KeyPath, name);
 
         var slots = new List<DisplaySlot>();
         if (Text("Layout") is { } layout)
@@ -59,7 +59,7 @@ public static class DisplaySettingsStore
             MultipleDisplays = Text("MultipleDisplays") is { } mode && System.Text.RegularExpressions.Regex.IsMatch(mode, "^(Extend|Duplicate|Only[0-9]+)$") ? mode : "Extend",
             Slots = slots,
             Displays = displays,
-            NightLight = DWord("NightLight") is { } night && night != 0,
+            NightLight = RegistryBool.Get(hive, DisplaySettings.KeyPath, "NightLight", false),
         };
     }
 
@@ -68,12 +68,12 @@ public static class DisplaySettingsStore
         hive.SetValue(DisplaySettings.KeyPath, "Layout", RegistryValueKind.String,
             string.Join(";", settings.Slots.Select(s => $"{s.X:0},{s.Y:0}")));
         hive.SetValue(DisplaySettings.KeyPath, "MultipleDisplays", RegistryValueKind.String, settings.MultipleDisplays);
-        hive.SetValue(DisplaySettings.KeyPath, "NightLight", RegistryValueKind.DWord, settings.NightLight ? 1u : 0u);
+        RegistryBool.Set(hive, DisplaySettings.KeyPath, "NightLight", settings.NightLight);
         foreach (var (number, config) in settings.Displays)
         {
             hive.SetValue(DisplaySettings.KeyPath, $"Display{number}", RegistryValueKind.String,
                 $"{config.Scale},{config.Orientation},{config.Resolution}");
-            hive.SetValue(DisplaySettings.KeyPath, $"Brightness{number}", RegistryValueKind.DWord, (uint)Math.Clamp(config.Brightness, 0, 100));
+            RegistryNumber.Set(hive, DisplaySettings.KeyPath, $"Brightness{number}", Math.Clamp(config.Brightness, 0, 100));
         }
     }
 

@@ -47,7 +47,7 @@ public class CatalogTests
         using var fx = new ThemeFixture();
         var catalog = ThemeCatalog.Discover(fx.Xdg);
 
-        Assert.Equal(new[] { "fluent", "simple" }, catalog.Themes.Select(t => t.Id));
+        Assert.Equal(new[] { "fluent", "simple", "breeze", "redmond" }, catalog.Themes.Select(t => t.Id));
         Assert.All(catalog.Themes, t => Assert.True(t.IsBuiltIn));
         Assert.Equal("fluent", catalog.FindOrDefault("no-such-theme").Id);
     }
@@ -102,7 +102,7 @@ public class CatalogTests
 
         Assert.Equal("Nord (mine)", catalog.Find("nord")!.Name);
         Assert.Equal("Fluent", catalog.Find("fluent")!.Name);
-        Assert.Equal(3, catalog.Themes.Count);
+        Assert.Equal(5, catalog.Themes.Count);
     }
 
     [Fact]

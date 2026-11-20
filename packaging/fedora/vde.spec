@@ -111,6 +111,12 @@ fi
 %{_datadir}/polkit-1/rules.d/50-vdedm-greeter.rules
 %{_prefix}/lib/systemd/system/fhived-system.service
 %{_prefix}/lib/systemd/system/fhived-system.socket
+%{_prefix}/lib/systemd/system/pamsam.service
+%{_prefix}/lib/systemd/system/pamsam.socket
+%{_prefix}/lib/systemd/system/secman.service
+%{_prefix}/lib/systemd/system/secman.socket
+%{_prefix}/lib/systemd/system/sysman.service
+%{_prefix}/lib/systemd/system/sysman.socket
 %{_prefix}/lib/systemd/system/vdedm.service
 %{_prefix}/lib/systemd/user/fhived.service
 %{_prefix}/lib/systemd/user/fhived.socket

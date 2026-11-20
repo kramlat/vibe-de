@@ -7,6 +7,12 @@ namespace Vibe.Registry.Remote;
 public static class FhiveClient
 {
     public const string SystemSocket = "/run/fhive/system.sock";
+    // PAMSAM serves HKLM\SAM here; when it is running, HKLM shows it as the key SAM.
+    public const string SamSocket = "/run/pamsam/sam.sock";
+    // SECMAN serves HKLM\Security here (PAM, SELinux, AppArmor...); when it is running, HKLM shows it as the key Security.
+    public const string SecuritySocket = "/run/secman/security.sock";
+    // SYSMAN serves HKLM\System here (ControlSet, Enum, Services, Class...); when it is running, HKLM shows it as the key System.
+    public const string SystemKeySocket = "/run/sysman/system.sock";
 
     // $XDG_RUNTIME_DIR/fhive/user.sock, or null when there is no runtime directory.
     public static string? UserSocket(Func<string, string?>? env = null)
@@ -18,18 +24,24 @@ public static class FhiveClient
     // HKLM and HKCU, each from its daemon if reachable, else from its file. Paths and sockets default to the
     // standard places; tests and unusual installs can pass their own.
     public static RegistryStore OpenStore(
-        string? userHivePath = null, string? systemHivePath = null, string? userSocket = null, string? systemSocket = null, bool watch = true)
+        string? userHivePath = null, string? systemHivePath = null, string? userSocket = null, string? systemSocket = null, bool watch = true, string? samSocket = null, string? securitySocket = null, string? systemKeySocket = null)
     {
         // A file is only opened for a hive with no daemon: opening it anyway would create it and watch it for nothing.
         IHive system = TryConnect(systemSocket ?? SystemSocket)
             ?? Hive.OpenShared("HKLM", systemHivePath ?? RegistryStore.DefaultSystemHivePath, watch, readOnly: true);
+        var mounts = new Dictionary<string, IHive>();
+        if (TryConnect(samSocket ?? SamSocket) is { } sam) mounts["SAM"] = sam;
+        if (TryConnect(securitySocket ?? SecuritySocket) is { } security) mounts["Security"] = security;
+        if (TryConnect(systemKeySocket ?? SystemKeySocket) is { } systemKey) mounts["System"] = systemKey;
+        if (mounts.Count > 0)
+            system = new MountedHive(system, mounts);
         IHive user = TryConnect(userSocket ?? UserSocket())
             ?? Hive.OpenShared("HKCU", userHivePath ?? RegistryStore.DefaultUserHivePath, watch);
         return new RegistryStore(system, user);
     }
 
     // True when the hive is served by a daemon, false when this process has the file itself.
-    public static bool IsServedByDaemon(IHive hive) => hive is RemoteHive;
+    public static bool IsServedByDaemon(IHive hive) => (hive is MountedHive mounted ? mounted.Base : hive) is RemoteHive;
 
     private static IHive? TryConnect(string? socket)
     {

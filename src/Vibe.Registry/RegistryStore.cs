@@ -6,12 +6,21 @@ public sealed class RegistryStore : IDisposable
     public IHive LocalMachine { get; }
     public IHive CurrentUser { get; }
     public ClassesRoot ClassesRoot { get; }
+    // HKU: the user profiles reachable from here; HKCC: the current hardware profile (HKLM\System\CurrentControlSet\Hardware Profiles\Current, as on Windows).
+    public UsersRoot Users { get; }
+    public IHive CurrentConfig { get; }
+    // HKPD and HKDD: empty handles kept for compatibility only.
+    public IHive PerformanceData { get; } = new EmptyRoot(EmptyRoot.PerformanceDataName);
+    public IHive DynData { get; } = new EmptyRoot(EmptyRoot.DynDataName);
+    public const string CurrentConfigPath = @"System\CurrentControlSet\Hardware Profiles\Current";
 
     public RegistryStore(IHive localMachine, IHive currentUser)
     {
         LocalMachine = localMachine;
         CurrentUser = currentUser;
         ClassesRoot = new ClassesRoot(currentUser, localMachine);
+        Users = new UsersRoot(currentUser, localMachine);
+        CurrentConfig = new HiveAlias("HKCC", localMachine, CurrentConfigPath);
     }
 
     // $XDG_CONFIG_HOME/hive/User.fhive and /etc/hive/System.fhive, opened for sharing between processes.

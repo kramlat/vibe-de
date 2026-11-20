@@ -33,6 +33,14 @@ public sealed record ThemeInfo
     public IReadOnlyDictionary<ThemeToken, Color> LightTokens { get; init; } = new Dictionary<ThemeToken, Color>();
     public IReadOnlyDictionary<ThemeToken, Color> DarkTokens { get; init; } = new Dictionary<ThemeToken, Color>();
 
+    // Colours for the base theme's own resources, by name without the Color/Brush suffix ("ThemeBackground",
+    // "ThemeControlMid", "Highlight"...). Only the Simple base has such resources; others ignore this.
+    public IReadOnlyDictionary<string, Color> LightPalette { get; init; } = new Dictionary<string, Color>();
+    public IReadOnlyDictionary<string, Color> DarkPalette { get; init; } = new Dictionary<string, Color>();
+
+    // How round the stock controls' corners are; null keeps the shell's Windows 11 value.
+    public double? CornerRadius { get; init; }
+
     public string? Directory { get; init; }
     public bool IsBuiltIn => Directory is null;
 }

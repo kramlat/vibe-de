@@ -166,14 +166,14 @@ public class WindowTests
         var window = new ControlPanelWindow(catalog, hive, handed.Add);
         window.Show();
 
-        Assert.Equal(new[] { "Appearance", "Desktop", "Start menu", "Taskbar", "Windows" }, window.ShownItems.Select(i => i.Name));          // the first category is selected
-        window.Search("dark");
-        Assert.Equal("Appearance", window.ShownItems[0].Name);
+        Assert.Equal(new[] { "Colors", "Desktop", "Lock screen", "Screen saver", "Start menu", "Taskbar", "Themes", "Windows" }, window.ShownItems.Select(i => i.Name));          // the first category is selected
+        window.Search("titlebar");
+        Assert.Equal("Windows", window.ShownItems[0].Name);
 
         window.Open(window.ShownItems[0]);
-        Assert.Equal("appearance", window.OpenPageId);                              // our own page shows inside the window
-        Assert.Equal("Appearance", window.PageName);
-        Assert.Null(window.PageCategory);                                           // the category view has no breadcrumb of its own
+        Assert.Equal("windows", window.OpenPageId);                                 // our own page shows inside the window
+        Assert.Equal("Windows", window.PageName);
+        Assert.Equal("Appearance", window.PageCategory);                            // the breadcrumb: category, then page
         window.Search("printers");
         window.Open(window.ShownItems.Single());
         Assert.Equal("printers", Assert.Single(handed).Id);                         // anything else is started by the shell
@@ -196,7 +196,7 @@ public class WindowTests
                 wallpapers: new List<WallpaperInfo> { new("Aurora", first), new("Meadow", second) });
             window.Show();
 
-            Assert.Equal(new[] { "Appearance", "Desktop", "Start menu", "Taskbar", "Windows" }, window.ShownItems.Select(i => i.Name));
+            Assert.Equal(new[] { "Colors", "Desktop", "Lock screen", "Screen saver", "Start menu", "Taskbar", "Themes", "Windows" }, window.ShownItems.Select(i => i.Name));
             Assert.Equal(2, window.PersonalizationTiles.Count);
             Assert.Null(window.SelectedPersonalizationTile);                             // no wallpaper set yet
 
@@ -256,10 +256,10 @@ public class WindowTests
         var window = new ClassicControlPanelWindow(catalog, hive, handed.Add);
         window.Show();
 
-        Assert.Equal(new[] { "Appearance", "Desktop", "Start menu", "Display", "Notifications", "Keyboard", "Printers", "Terminal" },  // home: up to three sub-links per category
+        Assert.Equal(new[] { "Colors", "Desktop", "Lock screen", "Display", "Notifications", "Screen timeout", "Keyboard", "Printers", "Terminal" },  // home: up to three sub-links per category
             window.ShownItems.Select(i => i.Name));
-        window.Open(window.ShownItems.First(i => i.PageId == "appearance"));
-        Assert.Equal("appearance", window.OpenPageId);                              // our own page shows inside the window
+        window.Open(window.ShownItems.First(i => i.PageId == "power"));
+        Assert.Equal("power", window.OpenPageId);                              // our own page shows inside the window
         window.Search("printers");
         window.Open(window.ShownItems.Single());
         Assert.Equal("printers", Assert.Single(handed).Id);

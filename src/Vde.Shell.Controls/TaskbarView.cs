@@ -21,6 +21,7 @@ public sealed class TaskbarView : UserControl
     private readonly TextBlock _clock = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, FontSize = 12, TextAlignment = TextAlignment.Center };
     private readonly Border _bar = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(10) };
+    private bool _accentFill;   // "Show accent color on Start and taskbar"
     private IBrush? _mica;   // the wallpaper backdrop, or null for the theme's plain surface
 
     public TaskbarView(TaskbarModel model, Func<DateTime>? now = null)
@@ -55,8 +56,19 @@ public sealed class TaskbarView : UserControl
     public void SetBackdrop(IBrush? mica)
     {
         _mica = mica;
-        _bar.Background = mica ?? ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
+        _bar.Background = BarBrush();
     }
+
+    // Fills the bar with the theme's accent instead of its surface or Mica.
+    public void SetAccentFill(bool on)
+    {
+        _accentFill = on;
+        _bar.Background = BarBrush();
+    }
+
+    private IBrush BarBrush() => _accentFill
+        ? ThemeTokens.Find(this, ThemeToken.Accent, Brushes.DodgerBlue)
+        : _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
@@ -106,7 +118,7 @@ public sealed class TaskbarView : UserControl
         dock.Children.Add(group);
 
         _bar.Child = dock;
-        _bar.Background = _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
+        _bar.Background = BarBrush();
         UpdateClock();
     }
 

@@ -321,20 +321,15 @@ public static class NotificationSettingsStore
 
     public static void Save(IHive hive, NotificationSettings settings)
     {
-        hive.SetValue(KeyPath, "DoNotDisturb", RegistryValueKind.DWord, settings.DoNotDisturb ? 1u : 0u);
-        hive.SetValue(KeyPath, "DefaultTimeoutMs", RegistryValueKind.DWord, (uint)settings.DefaultTimeout.TotalMilliseconds);
-        hive.SetValue(KeyPath, "MaxActive", RegistryValueKind.DWord, (uint)settings.MaxActive);
-        hive.SetValue(KeyPath, "MaxPerApp", RegistryValueKind.DWord, (uint)settings.MaxPerApp);
-        hive.SetValue(KeyPath, "HistoryLimit", RegistryValueKind.DWord, (uint)settings.HistoryLimit);
+        RegistryBool.Set(hive, KeyPath, "DoNotDisturb", settings.DoNotDisturb);
+        RegistryNumber.Set(hive, KeyPath, "DefaultTimeoutMs", (long)settings.DefaultTimeout.TotalMilliseconds);
+        RegistryNumber.Set(hive, KeyPath, "MaxActive", settings.MaxActive);
+        RegistryNumber.Set(hive, KeyPath, "MaxPerApp", settings.MaxPerApp);
+        RegistryNumber.Set(hive, KeyPath, "HistoryLimit", settings.HistoryLimit);
     }
 
     // A missing or wrongly typed value means "the default": a bad registry entry must not break notifications.
-    private static long? Number(IHive hive, string name) => hive.GetValue(KeyPath, name) switch
-    {
-        { Kind: RegistryValueKind.DWord, Data: uint d } => d,
-        { Kind: RegistryValueKind.Int32, Data: int i } => i,
-        _ => null,
-    };
+    private static long? Number(IHive hive, string name) => RegistryNumber.Get(hive, KeyPath, name);
 
     private static bool? Flag(IHive hive, string name) => hive.GetValue(KeyPath, name) switch
     {

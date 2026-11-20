@@ -41,8 +41,8 @@ public static class SessionComponents
             var current = spec;
             if (hive is not null)
             {
-                if (hive.GetValue(key, "Enabled") is { Kind: RegistryValueKind.DWord, Data: uint on })
-                    current = current with { Enabled = on != 0 };
+                if (RegistryBool.Get(hive, key, "Enabled") is { } on)
+                    current = current with { Enabled = on };
                 if (spec.Critical is false && hive.GetValue(key, "Command") is { Kind: RegistryValueKind.String, Data: string { Length: > 0 } command }
                     && ExecLine.Tokenize(command) is { Count: > 0 } argv)
                     current = current with { Command = argv };

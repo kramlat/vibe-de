@@ -2,7 +2,7 @@ namespace Vibe.Registry;
 
 // HKEY_CLASSES_ROOT: a merged view of Software\Classes in the system hive (HKLM) and the user hive (HKCU).
 // Reads see both, with the user's values winning; writes and deletes only ever touch the user hive.
-public sealed class ClassesRoot
+public sealed class ClassesRoot : IHive
 {
     public const string KeyPath = @"Software\Classes";
 
@@ -21,8 +21,41 @@ public sealed class ClassesRoot
             _system.Changed += Relay;
     }
 
+    public string Name => "HKCR";
+
+    // The root itself always exists, even before anyone has registered a class.
     public bool KeyExists(string path)
-        => _user.KeyExists(Map(path)) || (_system?.KeyExists(Map(path)) ?? false);
+        => IsRoot(path) || _user.KeyExists(Map(path)) || (_system?.KeyExists(Map(path)) ?? false);
+
+    // Counts are of the merged view; flags, times and permissions are those of the key that wins (the user's).
+    public RegistryKeyInfo GetKeyInfo(string path)
+    {
+        var winner = Hives().FirstOrDefault(h => h.KeyExists(Map(path)));
+        if (winner is null)
+            return IsRoot(path)
+                ? new RegistryKeyInfo(default, DateTime.UtcNow, DateTime.UtcNow, 0, 0, _user.GetKeyPermissions(""))
+                : throw new KeyNotFoundException($"Key '{path}' does not exist.");
+        var info = winner.GetKeyInfo(Map(path));
+        return info with { SubKeyCount = GetSubKeyNames(path).Count, ValueCount = GetValues(path).Count };
+    }
+
+    public PosixPermissions GetKeyPermissions(string path)
+        => (Hives().FirstOrDefault(h => h.KeyExists(Map(path))) ?? _user).GetKeyPermissions(Map(path));
+
+    // Changing a key that only the system hive has first overrides it in the user hive.
+    public void SetKeyFlags(string path, RegistryKeyFlags flags)
+    {
+        _user.CreateKey(Map(path));
+        _user.SetKeyFlags(Map(path), flags);
+    }
+
+    public void SetKeyPermissions(string path, PosixPermissions permissions)
+    {
+        _user.CreateKey(Map(path));
+        _user.SetKeyPermissions(Map(path), permissions);
+    }
+
+    private static bool IsRoot(string path) => path.Trim('\\').Length == 0;
 
     public IReadOnlyList<string> GetSubKeyNames(string path)
     {
@@ -34,7 +67,7 @@ public sealed class ClassesRoot
                 found = true;
                 names.UnionWith(hive.GetSubKeyNames(Map(path)));
             }
-        return found ? names.ToList() : throw new KeyNotFoundException($"Key '{path}' does not exist.");
+        return found || IsRoot(path) ? names.ToList() : throw new KeyNotFoundException($"Key '{path}' does not exist.");
     }
 
     public RegistryValue? GetValue(string path, string name)
@@ -66,7 +99,7 @@ public sealed class ClassesRoot
                 foreach (var value in hive.GetValues(Map(path)))
                     merged[value.Name] = value;
             }
-        return found
+        return found || IsRoot(path)
             ? merged.Values.OrderBy(v => v.Name, StringComparer.OrdinalIgnoreCase).ToList()
             : throw new KeyNotFoundException($"Key '{path}' does not exist.");
     }

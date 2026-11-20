@@ -67,8 +67,8 @@ public static class DesktopSettingsStore
             Text("Wallpaper"),
             Enum.TryParse<WallpaperMode>(Text("WallpaperMode"), true, out var mode) && Enum.IsDefined(mode) ? mode : defaults.Mode,
             Text("BackgroundColor") is { } c && System.Text.RegularExpressions.Regex.IsMatch(c, "^#[0-9a-fA-F]{6}$") ? c : defaults.BackgroundColor,
-            Source("ShowIcons").GetValue(KeyPath, "ShowIcons") is { Kind: RegistryValueKind.DWord, Data: uint d } ? d != 0 : defaults.ShowIcons,
-            Source("IconSize").GetValue(KeyPath, "IconSize") is { Kind: RegistryValueKind.DWord, Data: uint size } && size is >= 16 and <= 256 ? IconSizes.Snap((int)size) : defaults.IconSize);
+            RegistryBool.Get(Source("ShowIcons"), KeyPath, "ShowIcons", defaults.ShowIcons),
+            RegistryNumber.Get(Source("IconSize"), KeyPath, "IconSize") is { } size and >= 16 and <= 256 ? IconSizes.Snap((int)size) : defaults.IconSize);
     }
 
     public static void Save(IHive hive, DesktopSettings settings)
@@ -77,8 +77,8 @@ public static class DesktopSettingsStore
         hive.SetValue(KeyPath, "Wallpaper", RegistryValueKind.String, settings.Wallpaper ?? "");
         hive.SetValue(KeyPath, "WallpaperMode", RegistryValueKind.String, settings.Mode.ToString());
         hive.SetValue(KeyPath, "BackgroundColor", RegistryValueKind.String, settings.BackgroundColor);
-        hive.SetValue(KeyPath, "ShowIcons", RegistryValueKind.DWord, settings.ShowIcons ? 1u : 0u);
-        hive.SetValue(KeyPath, "IconSize", RegistryValueKind.DWord, (uint)IconSizes.Snap(settings.IconSize));
+        RegistryBool.Set(hive, KeyPath, "ShowIcons", settings.ShowIcons);
+        RegistryNumber.Set(hive, KeyPath, "IconSize", IconSizes.Snap(settings.IconSize));
     }
 
     public static IReadOnlyDictionary<string, Cell> LoadPositions(IHive hive)

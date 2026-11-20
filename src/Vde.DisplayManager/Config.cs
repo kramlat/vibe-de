@@ -28,7 +28,7 @@ public sealed record DmConfig
         var d = new DmConfig();
         if (hklm is null) return d;
         string? Text(string name) => hklm.GetValue(KeyPath, name) is { Kind: RegistryValueKind.String, Data: string { Length: > 0 } s } ? s : null;
-        uint? Number(string name) => hklm.GetValue(KeyPath, name) is { Kind: RegistryValueKind.DWord, Data: uint n } ? n : null;
+        long? Number(string name) => RegistryNumber.Get(hklm, KeyPath, name);
         return d with
         {
             Vt = Number("Vt") is { } vt and >= 1 and <= 63 ? (int)vt : d.Vt,

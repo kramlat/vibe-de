@@ -23,6 +23,9 @@ public sealed class RegEditWindow : Window
 {
     private readonly KnownFolders _folders;
     private readonly IHive _user, _machine;
+    private readonly UsersRoot _users;       // HKEY_USERS and HKEY_CURRENT_CONFIG: virtual roots onto the two hives
+    private readonly IHive _config;
+    private readonly ClassesRoot _classes;   // HKEY_CLASSES_ROOT: the alias root merging Software\Classes of both hives
     private readonly List<RegKeyNode> _roots = [];
     private readonly ObservableCollection<RegKeyNode> _visible = [];
     private readonly ListBox _tree = new();
@@ -40,7 +43,10 @@ public sealed class RegEditWindow : Window
         _user = currentUser;
         _machine = localMachine;
         _folders = folders ?? new KnownFolders();
-        foreach (var (name, hive) in new[] { (RegEditModel.UserRoot, _user), (RegEditModel.MachineRoot, _machine) })
+        _classes = new ClassesRoot(_user, _machine);
+        _users = new UsersRoot(_user, _machine);
+        _config = new HiveAlias("HKCC", _machine, RegistryStore.CurrentConfigPath);
+        foreach (var (name, hive) in new (string, IHive)[] { (RegEditModel.UserRoot, _user), (RegEditModel.MachineRoot, _machine), (RegEditModel.ClassesRootName, _classes), (RegEditModel.UsersRootName, _users), (RegEditModel.CurrentConfigName, _config) })
         {
             var root = new RegKeyNode(name, "", name, hive, 0);
             root.Inspect();
@@ -82,7 +88,7 @@ public sealed class RegEditWindow : Window
             }
         };
 
-        foreach (var hive in new[] { _user, _machine })
+        foreach (var hive in new IHive[] { _user, _machine })
             hive.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(Refresh);
 
         _tree.ContextMenu = KeyMenu();
@@ -658,7 +664,7 @@ public sealed class RegEditWindow : Window
     // ---- layout ----
 
     // The window the way regedit lays it out: the menu bar, the address line under it, the key tree beside
-    // the values of the chosen key with Name/Type/Data headers, and the status bar along the bottom.
+    // the values of the chosen key with Name/Type/Permissions/Data headers, and the status bar along the bottom.
     private Control BuildLayout()
     {
         var border = ThemeTokens.Find(this, ThemeToken.Border, Brushes.LightGray);
@@ -677,10 +683,10 @@ public sealed class RegEditWindow : Window
 
         var header = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("240,130,*"),
+            ColumnDefinitions = new ColumnDefinitions(ValueColumns),
             Margin = new Thickness(8, 6, 8, 3),
         };
-        foreach (var (text, column) in new[] { ("Name", 0), ("Type", 1), ("Data", 2) })
+        foreach (var (text, column) in new[] { ("Name", 0), ("Type", 1), ("Permissions", 2), ("Data", 3) })
         {
             var label = new TextBlock { [Grid.ColumnProperty] = column, Text = text };
             header.Children.Add(label);
@@ -750,9 +756,12 @@ public sealed class RegEditWindow : Window
 
     private static Point[] RightArrow() => [new(2, 0), new(7, 4), new(2, 8)];
 
+    // Name, Type, Permissions (rwxr-xr-x and the octal mode), Data.
+    private const string ValueColumns = "240,130,150,*";
+
     private static Grid ValueRow(RegValueRow row) => new()
     {
-        ColumnDefinitions = new ColumnDefinitions("240,130,*"), Margin = new Thickness(8, 2),
+        ColumnDefinitions = new ColumnDefinitions(ValueColumns), Margin = new Thickness(8, 2),
         Children =
         {
             new StackPanel
@@ -771,7 +780,12 @@ public sealed class RegEditWindow : Window
             },
             new TextBlock
             {
-                Text = row.Data, [Grid.ColumnProperty] = 2, TextTrimming = TextTrimming.CharacterEllipsis,
+                Text = row.Permissions is { } p ? $"{p.Symbolic} ({p.ModeText})" : "", [Grid.ColumnProperty] = 2, VerticalAlignment = VerticalAlignment.Center,
+                Opacity = 0.75, FontSize = 12, FontFamily = new FontFamily("monospace"),
+            },
+            new TextBlock
+            {
+                Text = row.Data, [Grid.ColumnProperty] = 3, TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
             },
         },

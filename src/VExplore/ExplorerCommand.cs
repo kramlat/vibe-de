@@ -22,6 +22,7 @@ public static class ExplorerCommand
                vexplore --launcher          the app launcher
                vexplore --desktop           the desktop: wallpaper and the icons of ~/Desktop
                vexplore --chrome            draws window titlebars for vwm (needs vwm running; no window of its own)
+               vexplore --lock              the lock screen (a preview: not secure yet, any key dismisses it)
                vexplore --taskbar           the taskbar, docked to the edge in HKCU\Software\Vde\Taskbar
                vexplore --list-components   show registered components and whether the shell would load them
                -h, --help
@@ -49,6 +50,7 @@ public static class ExplorerCommand
             _ when args[0] == "--launcher" && args.Length == 1 => "launcher",
             _ when args[0] == "--desktop" && args.Length == 1 => "desktop",
             _ when args[0] == "--taskbar" && args.Length == 1 => "taskbar",
+            _ when args[0] == "--lock" && args.Length == 1 => "lock",
             _ when args[0] == "--chrome" && args.Length == 1 => "chrome",
             _ when args[0] == "--files" && args.Length <= 2 => "files",
             _ when !args[0].StartsWith('-') && args.Length == 1 => "files",
@@ -76,6 +78,7 @@ public static class ExplorerCommand
             "launcher" => NewLauncher(host2),
             "desktop" => NewDesktop(host2),
             "taskbar" => NewTaskbar(host2),
+            "lock" => new LockScreenWindow(host2.CurrentUser, host2.LocalMachine),
             _ => ShellApp.NewFileManager(host2, folder),
         };
         StartupTrace.Mark("program started");
@@ -144,14 +147,26 @@ public static class ExplorerCommand
                 Launch(host, entry);
             else if (item.Command is { } command)
                 Launch(host, command);
-        }, customPages: id => id == DesktopPageView.PageId
-            ? new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine)
-            : id == DisplayPageView.PageId
-                ? new DisplayPageView(host.CurrentUser)
-                : null, user: new UserProfile(), deviceSettings: device, wallpapers: wallpapers);
+        }, customPages: id => CustomPage(host, wallpapers, id), user: new UserProfile(), deviceSettings: device, wallpapers: wallpapers);
         WindowMica.Attach(settings, device);
         return settings;
     }
+
+    // Apps that can show a status on the lock screen: the installed weather, calendar, clock and mail programs.
+    private static IReadOnlyList<SettingChoice> StatusApps() => ShellData.Apps(Locale.FromEnvironment()).Entries
+        .Where(e => !e.NoDisplay && !e.Hidden && new[] { "weather", "calendar", "clock", "mail" }.Any(w => e.Name.Contains(w, StringComparison.OrdinalIgnoreCase)))
+        .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).Select(e => new SettingChoice(e.Id, e.Name)).ToList();
+
+    // The pages of ours that are more than a list of settings.
+    private static Avalonia.Controls.Control? CustomPage(ExplorerHost host, IReadOnlyList<WallpaperInfo> wallpapers, string id) => id switch
+    {
+        DesktopPageView.PageId => new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine),
+        DisplayPageView.PageId => new DisplayPageView(host.CurrentUser),
+        LockScreenPageView.PageId => new LockScreenPageView(host.CurrentUser, wallpapers, StatusApps(), BrowseForWallpaperAsync, host.LocalMachine),
+        ThemesPageView.PageId => new ThemesPageView(host.CurrentUser, Vde.Shell.Theme.ThemeCatalog.Discover(), host.LocalMachine),
+        ColorsPageView.PageId => new ColorsPageView(host.CurrentUser, host.LocalMachine),
+        _ => null,
+    };
 
     // The classic Control Panel: the catalog of items shown the Windows 7 way, category links first.
     private static Window NewControlPanel(ExplorerHost host)
@@ -167,11 +182,7 @@ public static class ExplorerCommand
                 Launch(host, entry);
             else if (item.Command is { } command)
                 Launch(host, command);
-        }, customPages: id => id == DesktopPageView.PageId
-            ? new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine)
-            : id == DisplayPageView.PageId
-                ? new DisplayPageView(host.CurrentUser)
-                : null);
+        }, customPages: id => CustomPage(host, wallpapers, id));
         WindowMica.Attach(window, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
         return window;
     }
@@ -249,6 +260,7 @@ public static class ExplorerCommand
             _ => "bottom",
         });
         window.Closed += (_, _) => role.Dispose();
+        window.FollowAppearance(host.CurrentUser);
         // The tray: the shell becomes the session's StatusNotifierWatcher host and fills the slot.
         window.Opened += async (_, _) =>
         {

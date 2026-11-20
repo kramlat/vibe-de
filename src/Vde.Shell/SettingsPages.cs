@@ -13,6 +13,7 @@ public sealed record SettingDefinition(
 {
     public IReadOnlyList<SettingChoice> Choices { get; init; } = [];   // Choice
     public long Min { get; init; }                                      // Number
+    public long Step { get; init; } = 100;                              // what the up/down arrows add
     public long Max { get; init; } = long.MaxValue;
     public object? Default { get; init; }                               // what it shows when the registry has nothing
 }
@@ -21,17 +22,6 @@ public sealed record SettingsPage(string Id, string Title, IReadOnlyList<Setting
 
 public static class BuiltInPages
 {
-    public static readonly SettingsPage Appearance = new("appearance", "Appearance",
-    [
-        new("theme", "Theme", SettingKind.Choice, @"Software\Vde\Appearance", "Theme") { Default = "fluent" },   // choices come from the theme catalog
-        new("variant", "Mode", SettingKind.Choice, @"Software\Vde\Appearance", "Variant")
-        {
-            Default = "System",
-            Choices = [new("System", "Use the system setting"), new("Light", "Light"), new("Dark", "Dark")],
-        },
-        new("accent", "Accent colour", SettingKind.Color, @"Software\Vde\Appearance", "Accent", "Leave empty for the theme's own accent."),
-    ]);
-
     public static readonly SettingsPage Notifications = new("notifications", "Notifications",
     [
         new("dnd", "Do not disturb", SettingKind.Toggle, @"Software\Vde\Notifications", "DoNotDisturb", "Only critical notifications are shown.") { Default = false },
@@ -67,6 +57,29 @@ public static class BuiltInPages
         new("copy", "Copy text as soon as it is selected", SettingKind.Toggle, TerminalKey, "CopyOnSelect") { Default = false },
     ]);
 
+    public const string PowerKey = @"Software\Vde\Power";
+
+    // Settings only for now: nothing yet turns the screen off, sleeps or locks from them.
+    public static readonly SettingsPage Power = new("power", "Screen timeout",
+    [
+        new("screenoff", "Turn off my screen after (minutes, 0 is never)", SettingKind.Number, PowerKey, "ScreenOffMinutes") { Min = 0, Max = 1440, Step = 1, Default = 10L },
+        new("sleep", "Make my device sleep after (minutes, 0 is never)", SettingKind.Number, PowerKey, "SleepMinutes") { Min = 0, Max = 1440, Step = 1, Default = 30L },
+        new("lock", "Lock the screen when it turns off", SettingKind.Toggle, PowerKey, "LockOnScreenOff") { Default = true },
+    ]);
+
+    public const string ScreenSaverKey = @"Software\Vde\ScreenSaver";
+
+    // Settings only for now: no screen saver program runs yet.
+    public static readonly SettingsPage ScreenSaver = new("screensaver", "Screen saver",
+    [
+        new("saver", "Screen saver", SettingKind.Choice, ScreenSaverKey, "Name")
+        {
+            Default = "None", Choices = [new("None", "(None)"), new("Blank", "Blank"), new("Clock", "Clock")],
+        },
+        new("wait", "Wait (minutes)", SettingKind.Number, ScreenSaverKey, "WaitMinutes") { Min = 1, Max = 1440, Step = 1, Default = 5L },
+        new("logon", "On resume, display the lock screen", SettingKind.Toggle, ScreenSaverKey, "LockOnResume") { Default = false },
+    ]);
+
     public const string WindowsKey = @"Software\Vde\Windows";
 
     public static readonly SettingsPage Windows = new("windows", "Windows",
@@ -92,12 +105,20 @@ public static class BuiltInPages
         },
     ]);
 
-    public static readonly IReadOnlyList<SettingsPage> Pages = [Appearance, StartMenu, Taskbar, Windows, Terminal, Notifications, Keyboard];
+    public static readonly IReadOnlyList<SettingsPage> Pages = [Power, ScreenSaver, StartMenu, Taskbar, Windows, Terminal, Notifications, Keyboard];
 
     public static readonly IReadOnlyList<ControlPanelItem> Items =
     [
-        new("appearance", "Appearance", "Theme, light or dark mode and accent colour", "preferences-desktop-theme", ControlPanelCategories.Appearance,
-            ["theme", "dark", "light", "colour", "color", "accent", "look"], ItemSource.BuiltIn) { PageId = "appearance" },
+        new("themes", "Themes", "Choose the style of your windows and controls", "preferences-desktop-theme", ControlPanelCategories.Appearance,
+            ["theme", "themes", "personalization", "look", "style"], ItemSource.BuiltIn) { PageId = "themes" },
+        new("colors", "Colors", "Accent color, light or dark mode, transparency effects", "preferences-desktop-color", ControlPanelCategories.Appearance,
+            ["colour", "color", "accent", "dark", "light", "mode", "transparency", "mica", "title bar", "taskbar"], ItemSource.BuiltIn) { PageId = "colors" },
+        new("lockscreen", "Lock screen", "Lock screen images, apps and animations", "system-lock-screen", ControlPanelCategories.Appearance,
+            ["lock", "lockscreen", "sign-in", "picture", "slideshow", "background"], ItemSource.BuiltIn) { PageId = "lockscreen" },
+        new("screensaver", "Screen saver", "Choose a screen saver and how long to wait for it", "preferences-desktop-screensaver", ControlPanelCategories.Appearance,
+            ["screensaver", "screen saver", "idle", "blank"], ItemSource.BuiltIn) { PageId = "screensaver" },
+        new("screentimeout", "Screen timeout", "When the screen turns off, the device sleeps and the screen locks", "preferences-system-power", ControlPanelCategories.System,
+            ["power", "sleep", "screen off", "timeout", "battery", "idle"], ItemSource.BuiltIn) { PageId = "power" },
         new("desktop", "Desktop", "Wallpaper, background colour and desktop icons", "preferences-desktop-wallpaper", ControlPanelCategories.Appearance,
             ["wallpaper", "background", "picture", "image", "desktop", "icons", "colour", "color"], ItemSource.BuiltIn) { PageId = "desktop" },
         new("startmenu", "Start menu", "Windows 11 or Windows 10 layout", "start-here-vde", ControlPanelCategories.Appearance,
@@ -132,8 +153,8 @@ public sealed class SettingBinding(IHive hive, SettingDefinition definition)
             return definition.Default;
         return definition.Kind switch
         {
-            SettingKind.Toggle => value switch { { Kind: RegistryValueKind.DWord, Data: uint d } => d != 0, { Kind: RegistryValueKind.Bool, Data: bool b } => b, _ => definition.Default },
-            SettingKind.Number => value switch { { Kind: RegistryValueKind.DWord, Data: uint d } => Math.Clamp(d, definition.Min, definition.Max), _ => definition.Default },
+            SettingKind.Toggle => RegistryBool.Get(hive, definition.KeyPath, definition.ValueName) is { } on ? on : definition.Default,
+            SettingKind.Number => RegistryNumber.Get(hive, definition.KeyPath, definition.ValueName) is { } n ? Math.Clamp(n, definition.Min, definition.Max) : definition.Default,
             SettingKind.Choice or SettingKind.Text or SettingKind.Color => value is { Kind: RegistryValueKind.String, Data: string s } ? s : definition.Default,
             _ => definition.Default,
         };
@@ -145,10 +166,10 @@ public sealed class SettingBinding(IHive hive, SettingDefinition definition)
         switch (definition.Kind)
         {
             case SettingKind.Toggle when newValue is bool on:
-                hive.SetValue(definition.KeyPath, definition.ValueName, RegistryValueKind.DWord, on ? 1u : 0u);
+                RegistryBool.Set(hive, definition.KeyPath, definition.ValueName, on);
                 return true;
             case SettingKind.Number when newValue is long n && n >= definition.Min && n <= definition.Max && n <= uint.MaxValue:
-                hive.SetValue(definition.KeyPath, definition.ValueName, RegistryValueKind.DWord, (uint)n);
+                RegistryNumber.Set(hive, definition.KeyPath, definition.ValueName, n);
                 return true;
             case SettingKind.Choice when newValue is string c && (definition.Choices.Count == 0 || definition.Choices.Any(x => x.Value == c)) && c.Length > 0:
             case SettingKind.Text when newValue is string:

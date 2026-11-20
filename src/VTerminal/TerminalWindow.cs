@@ -297,11 +297,10 @@ public sealed class TerminalWindow : Window
     private void ApplyView(TerminalView view)
     {
         var family = _hive.GetValue(BuiltInPages.TerminalKey, "FontFamily") is { Kind: RegistryValueKind.String, Data: string { Length: > 0 } f } ? f : "monospace";
-        var size = _hive.GetValue(BuiltInPages.TerminalKey, "FontSize") is { Kind: RegistryValueKind.QWord, Data: long n } ? n
-            : _hive.GetValue(BuiltInPages.TerminalKey, "FontSize") is { Kind: RegistryValueKind.DWord, Data: uint d } ? d : 13;
+        var size = RegistryNumber.Get(_hive, BuiltInPages.TerminalKey, "FontSize", 13);
         view.FontFamilyName = family;
         view.TerminalFontSize = size;
-        view.CopyOnSelect = _hive.GetValue(BuiltInPages.TerminalKey, "CopyOnSelect") is { Kind: RegistryValueKind.DWord, Data: uint c } && c != 0;
+        view.CopyOnSelect = RegistryBool.Get(_hive, BuiltInPages.TerminalKey, "CopyOnSelect", false);
         Color Of(ThemeToken token, Color fallback) => ThemeTokens.Find(this, token, new SolidColorBrush(fallback)) is ISolidColorBrush b ? b.Color : fallback;
         view.Palette = TerminalPalette.ForBackground(Of(ThemeToken.Surface, Color.Parse("#1E1E1E")), Of(ThemeToken.TextPrimary, Color.Parse("#CCCCCC")), Of(ThemeToken.Accent, Color.Parse("#0078D4")));
     }

@@ -11,6 +11,7 @@ public sealed class TaskbarWindow : Window
 {
     private readonly TaskbarModel _model;
     private readonly DesktopSettings? _settings;
+    private bool _transparency = true;
 
     public TaskbarWindow(TaskbarModel model, Action startMenu, Func<DateTime>? now = null, DesktopSettings? settings = null)
     {
@@ -31,6 +32,20 @@ public sealed class TaskbarWindow : Window
     }
 
     public TaskbarView View { get; }
+
+    // Follows the Colors page: the accent on the bar, and no Mica when transparency is off.
+    public void FollowAppearance(Vibe.Registry.IHive hive)
+    {
+        void Apply()
+        {
+            var selection = Vde.Shell.Theme.ThemeSettings.Load(hive);
+            _transparency = selection.Transparency;
+            View.SetAccentFill(selection.AccentOnTaskbar);
+            ApplyBackdrop();
+        }
+        Apply();
+        hive.Changed += (_, c) => { if (c.IsUnder(Vde.Shell.Theme.ThemeSettings.KeyPath)) Avalonia.Threading.Dispatcher.UIThread.Post(Apply); };
+    }
 
     // Sizes and places the window along the model's edge of the screen it is on.
     public void Dock()
@@ -72,6 +87,11 @@ public sealed class TaskbarWindow : Window
     {
         if (_settings is null)
             return;
+        if (!_transparency)
+        {
+            View.SetBackdrop(null);
+            return;
+        }
         var blurred = WallpaperMica.Source(_settings.Wallpaper);
         var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
         if (blurred is null || screen is null)

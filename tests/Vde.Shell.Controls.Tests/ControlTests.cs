@@ -457,11 +457,11 @@ public class FileManagerControlTests
         Assert.Equal(5000m, timeout.Value);
 
         dnd.IsChecked = true;
-        Assert.Equal(1u, hive.GetValue(@"Software\Vde\Notifications", "DoNotDisturb")!.Data);   // written straight to the registry
+        Assert.Equal(true, hive.GetValue(@"Software\Vde\Notifications", "DoNotDisturb")!.Data);   // written straight to the registry
         timeout.Value = 8000;
-        Assert.Equal(8000u, hive.GetValue(@"Software\Vde\Notifications", "DefaultTimeoutMs")!.Data);
+        Assert.Equal(8000, hive.GetValue(@"Software\Vde\Notifications", "DefaultTimeoutMs")!.Data);
         timeout.Value = 10;                                                                      // below the 500 minimum: refused
-        Assert.Equal(8000u, hive.GetValue(@"Software\Vde\Notifications", "DefaultTimeoutMs")!.Data);
+        Assert.Equal(8000, hive.GetValue(@"Software\Vde\Notifications", "DefaultTimeoutMs")!.Data);
 
         hive.SetValue(@"Software\Vde\Notifications", "DoNotDisturb", Vibe.Registry.RegistryValueKind.DWord, 0u);   // a script flips it
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
@@ -582,7 +582,7 @@ public class FileManagerControlTests
             Assert.Equal("zip.desktop", model.Recent[0].Id);                                       // launching records it
 
             view.SearchText = "dark";
-            Assert.Contains("Appearance", view.VisibleTitles);                                      // settings come up in the same search
+            Assert.Contains("Colors", view.VisibleTitles);                                          // settings come up in the same search
             view.SearchText = "qqqq";
             Assert.Empty(view.VisibleTitles);                                                       // and nothing from anywhere else
         }

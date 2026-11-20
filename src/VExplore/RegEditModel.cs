@@ -12,6 +12,10 @@ public static class RegEditModel
     public const string UserRoot = "HKEY_CURRENT_USER";
     public const string MachineRoot = "HKEY_LOCAL_MACHINE";
     public const string ClassesRootName = "HKEY_CLASSES_ROOT";
+    public const string UsersRootName = "HKEY_USERS";
+    public const string CurrentConfigName = "HKEY_CURRENT_CONFIG";
+    public const string PerformanceDataName = "HKEY_PERFORMANCE_DATA";   // compatibility handles: not shown in the tree
+    public const string DynDataName = "HKEY_DYN_DATA";
     // HKEY_CLASSES_ROOT sections of a .reg file land in the user hive where ClassesRoot maps them.
     public const string ClassesBasePath = @"Software\Classes";
 
@@ -252,6 +256,9 @@ public static class RegEditModel
                      (UserRoot, user, ""),
                      (MachineRoot, machine, ""),
                      (ClassesRootName, user, ClassesBasePath),
+                     (CurrentConfigName, machine, RegistryStore.CurrentConfigPath),
+                     (UsersRootName + @"\" + UsersRoot.DefaultProfile, machine, UsersRoot.DefaultProfilePath),
+                     (UsersRootName + @"\" + RegistryIdentity.Current.Uid, user, ""),
                  })
         {
             // ApplyTo wants the sections already stripped of their HKEY_ root; it shifts them under basePath.
@@ -275,6 +282,10 @@ public static class RegEditModel
         "HKCU" or "HKEY_CURRENT_USER" => UserRoot,
         "HKLM" or "HKEY_LOCAL_MACHINE" => MachineRoot,
         "HKCR" or "HKEY_CLASSES_ROOT" => ClassesRootName,
+        "HKU" or "HKEY_USERS" => UsersRootName,
+        "HKCC" or "HKEY_CURRENT_CONFIG" => CurrentConfigName,
+        "HKPD" or "HKEY_PERFORMANCE_DATA" => PerformanceDataName,
+        "HKDD" or "HKEY_DYN_DATA" => DynDataName,
         _ => hive.Name.ToUpperInvariant(),
     };
 

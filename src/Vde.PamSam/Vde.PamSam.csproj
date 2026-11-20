@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- PAMSAM: the PAM-backed security accounts manager. The protocol, the server and the client. -->
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Vde.PamSam</RootNamespace>
+    <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vde.DisplayManager\Vde.DisplayManager.csproj" />
+    <ProjectReference Include="..\Vibe.Registry.Remote\Vibe.Registry.Remote.csproj" />
+  </ItemGroup>
+
+</Project>

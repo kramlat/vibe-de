@@ -116,7 +116,10 @@ public sealed class ControlPanelWindow : Window
     public IReadOnlyList<ControlPanelItem> ShownItems => _shown;
     public string? OpenPageId => (_pageView as SettingsPageView)?.PageId
         ?? (_pageView is DesktopPageView ? DesktopPageView.PageId : null)
-        ?? (_pageView is DisplayPageView ? DisplayPageView.PageId : null);
+        ?? (_pageView is DisplayPageView ? DisplayPageView.PageId : null)
+        ?? (_pageView is ThemesPageView ? ThemesPageView.PageId : null)
+        ?? (_pageView is ColorsPageView ? ColorsPageView.PageId : null)
+        ?? (_pageView is LockScreenPageView ? LockScreenPageView.PageId : null);
     public SettingsPageView? Page => _pageView as SettingsPageView;
     // The breadcrumb of an open page ("Display" with category "System"), for hosts and tests.
     public string PageName => _pageHeadName.Text ?? "";
@@ -206,6 +209,12 @@ public sealed class ControlPanelWindow : Window
 
     private void ShowPage(string id, Control view)
     {
+        if (view is LockScreenPageView lock_)   // its related-settings links open sibling pages
+            lock_.OpenPage += (_, pageId) =>
+            {
+                if (_catalog.Items.FirstOrDefault(i => string.Equals(i.PageId, pageId, StringComparison.OrdinalIgnoreCase)) is { } target)
+                    Open(target);
+            };
         _pageView = view;
         _pageHead.IsVisible = true;
         _title.IsVisible = false;

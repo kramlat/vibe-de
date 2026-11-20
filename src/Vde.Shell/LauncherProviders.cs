@@ -26,9 +26,9 @@ public sealed class LauncherProviders(ClassesRoot classes, IHive userHive, Regis
 
     public bool IsAuthorized(string clsid)
         => ComponentInfo.NormalizeGuid(clsid) is { } id
-            && userHive.GetValue(KeyPath, id) is { Kind: RegistryValueKind.DWord } v && v.Data is uint flag && flag == 1;
+            && RegistryBool.Get(userHive, KeyPath, id) == true;
 
-    public void Authorize(string clsid) => Set(clsid, 1u);
+    public void Authorize(string clsid) => Set(clsid, true);
 
     public void Revoke(string clsid)
     {
@@ -36,9 +36,9 @@ public sealed class LauncherProviders(ClassesRoot classes, IHive userHive, Regis
             userHive.DeleteValue(KeyPath, id);
     }
 
-    private void Set(string clsid, uint value)
+    private void Set(string clsid, bool value)
     {
         var id = ComponentInfo.NormalizeGuid(clsid) ?? throw new ArgumentException("Not a GUID.", nameof(clsid));
-        userHive.SetValue(KeyPath, id, RegistryValueKind.DWord, value);
+        RegistryBool.Set(userHive, KeyPath, id, value);
     }
 }

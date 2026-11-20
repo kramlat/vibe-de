@@ -19,7 +19,7 @@ BUILD       := build
 PUBLISH     := $(BUILD)/publish
 
 # project directory under src/ -> published executable name (see each .csproj AssemblyName)
-DOTNET_PROJECTS := fhived mkhive RegSvrVDE VExplore VdeRegEdit VdeSettings VTerminal VDESession VDEDM VDEDMGreeter VDENotify VTaskMgr
+DOTNET_PROJECTS := fhived PAMSAM SECMAN SYSMAN mkhive RegSvrVDE VExplore VdeRegEdit VdeSettings VTerminal VDESession VDEDM VDEDMGreeter VDENotify VTaskMgr
 
 # commands people type, linked into PREFIX/bin
 BIN_LINKS := vexplore vterminal vtaskmgr vde-session vdedm vdedm-greeter mkhive RegSvrVDE vderegedit vdesettings
@@ -67,7 +67,7 @@ install:
 	install -Dm644 data/dbus/org.freedesktop.Notifications.service $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.Notifications.service
 	# systemd: the registry daemons and the display manager are system units, the user's registry and notifications user units
 	install -d $(DESTDIR)$(UNITDIR)/system $(DESTDIR)$(UNITDIR)/user
-	install -m644 data/systemd/fhived-system.service data/systemd/fhived-system.socket data/systemd/vdedm.service $(DESTDIR)$(UNITDIR)/system/
+	install -m644 data/systemd/fhived-system.service data/systemd/fhived-system.socket data/systemd/pamsam.service data/systemd/pamsam.socket data/systemd/secman.service data/systemd/secman.socket data/systemd/sysman.service data/systemd/sysman.socket data/systemd/vdedm.service $(DESTDIR)$(UNITDIR)/system/
 	install -m644 data/systemd/fhived.service data/systemd/fhived.socket data/systemd/vdenotify.service $(DESTDIR)$(UNITDIR)/user/
 	install -Dm644 data/sysusers.d/vdedm.conf $(DESTDIR)$(PREFIX)/lib/sysusers.d/vdedm.conf
 	install -Dm644 data/tmpfiles.d/vdedm.conf $(DESTDIR)$(PREFIX)/lib/tmpfiles.d/vdedm.conf
@@ -85,7 +85,7 @@ uninstall:
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/vde.desktop $(DESTDIR)$(DATADIR)/applications/vexplore.desktop \
 	      $(DESTDIR)$(DATADIR)/applications/vexplore-settings.desktop $(DESTDIR)$(DATADIR)/applications/vterminal.desktop $(DESTDIR)$(DATADIR)/applications/vtaskmgr.desktop \
 	      $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.Notifications.service
-	rm -f $(DESTDIR)$(UNITDIR)/system/fhived-system.* $(DESTDIR)$(UNITDIR)/system/vdedm.service $(DESTDIR)$(UNITDIR)/user/fhived.* $(DESTDIR)$(UNITDIR)/user/vdenotify.service
+	rm -f $(DESTDIR)$(UNITDIR)/system/fhived-system.* $(DESTDIR)$(UNITDIR)/system/pamsam.* $(DESTDIR)$(UNITDIR)/system/secman.* $(DESTDIR)$(UNITDIR)/system/sysman.* $(DESTDIR)$(UNITDIR)/system/vdedm.service $(DESTDIR)$(UNITDIR)/user/fhived.* $(DESTDIR)$(UNITDIR)/user/vdenotify.service
 	rm -f $(DESTDIR)$(PREFIX)/lib/sysusers.d/vdedm.conf $(DESTDIR)$(PREFIX)/lib/tmpfiles.d/vdedm.conf $(DESTDIR)$(DATADIR)/polkit-1/rules.d/50-vdedm-greeter.rules
 
 # What the whole test suite says; the packaging step does not run it (it needs a display for some tests).

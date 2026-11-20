@@ -94,7 +94,7 @@ public sealed class SettingsPageView : UserControl
                 };
                 return combo;
             case SettingKind.Number:
-                var number = new NumericUpDown { Minimum = d.Min, Maximum = Math.Min(d.Max, 1_000_000_000), Increment = 100, MinWidth = 160, FormatString = "0" };
+                var number = new NumericUpDown { Minimum = d.Min, Maximum = Math.Min(d.Max, 1_000_000_000), Increment = d.Step, MinWidth = 160, FormatString = "0" };
                 number.ValueChanged += (_, _) => { if (number.Value is { } v) Apply(binding, (long)v); };
                 return number;
             default:

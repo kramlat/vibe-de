@@ -167,9 +167,9 @@ public static class ShellFolderSetup
             if (!installing) continue;   // unregistering removes the whole CLSID key, ShellFolder included
             classes.SetValue(key, "ParsingName", RegistryValueKind.String, parsing);
             classes.SetValue(key, "Name", RegistryValueKind.String, name);
-            classes.SetValue(key, "Attributes", RegistryValueKind.DWord, (uint)Attributes);
+            RegistryNumber.Set(classes, key, "Attributes", (int)Attributes);
             classes.SetValue(key, "Namespaces", RegistryValueKind.MultiString, ShellFolderIds.Places(clsid));
-            classes.SetValue(key, "Order", RegistryValueKind.DWord, (uint)order);
+            RegistryNumber.Set(classes, key, "Order", order);
         }
     }
 }
