@@ -143,7 +143,7 @@ public class TaskbarTests
         Assert.Contains("05", window.View.ClockText);
 
         if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is { Length: > 0 } dir)
-            window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"taskbar-{edge}-{alignment}.png"));
+            window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"taskbar-{edge}-{alignment}.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 
     [AvaloniaFact]
@@ -183,7 +183,7 @@ public class TaskbarTests
         Assert.Equal(layout == StartLayout.Modern, buttons.Count(b => b == "Okular") == 1 && !buttons.Contains("Konsole"));   // modern recommends the recent one
 
         if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is { Length: > 0 } dir)
-            window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"startmenu-{layout}.png"));
+            window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"startmenu-{layout}.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
 
         window.View.GetVisualDescendants().OfType<Button>().First(b => (string?)b.Tag == "Kate").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
         Assert.Equal(new[] { "kate.desktop" }, started);

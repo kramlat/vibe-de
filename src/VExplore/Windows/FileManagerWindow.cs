@@ -54,7 +54,7 @@ public sealed class FileManagerWindow : Window
         // The compositor draws a titlebar only for windows that ask for one; this window wants tabs in the
         // titlebar, so the chrome here is the window's own, on the transparent rounded body every shell
         // window in Windows 11 mode uses.
-        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
+        WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         Background = Brushes.Transparent;
 
@@ -70,6 +70,10 @@ public sealed class FileManagerWindow : Window
         Content = body;
 
         NewTab(startFolder);
+        Opened += (_, _) => StartupTrace.Mark("window opened");
+        EventHandler? first = null;
+        first = (_, _) => { LayoutUpdated -= first; StartupTrace.Mark("first layout done"); StartupTrace.ShotIfAsked(this); StartupTrace.ExitIfAsked(); };
+        LayoutUpdated += first;
     }
 
     // The titlebar strip above the folder pages, with the resize edges over everything.
@@ -105,6 +109,7 @@ public sealed class FileManagerWindow : Window
         public required FileManagerView View;
         public required Border Header;
         public required TextBlock Label;
+        public required ShellIcon Icon;
     }
 
     private Grid Titlebar()
@@ -216,7 +221,10 @@ public sealed class FileManagerWindow : Window
     public void NewTab(string? folder = null)   // a new tab starts in the given folder, else the active tab's home
     {
         var view = new FileManagerView(folder ?? _active.View.Home, _folders, _openFile, _types, _actions, _clipboard, _shortcuts, _properties, _shellFolders);
-        var label = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 160, VerticalAlignment = VerticalAlignment.Center };
+        // the path, cut at its start when it is long: the folder's own name at the end is what matters
+        var label = new TextBlock { TextTrimming = TextTrimming.PrefixCharacterEllipsis, MaxWidth = 240, VerticalAlignment = VerticalAlignment.Center };
+        var icon = new ShellIcon { IconSize = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+        DockPanel.SetDock(icon, Dock.Left);
         var close = new Button
         {
             Content = new TextBlock { Text = "\u2715", FontSize = 9, VerticalAlignment = VerticalAlignment.Center },
@@ -230,10 +238,10 @@ public sealed class FileManagerWindow : Window
             Height = BarHeight,
             VerticalAlignment = VerticalAlignment.Stretch,
             Background = Brushes.Transparent,
-            Child = new DockPanel { LastChildFill = true, Children = { close, label } },
+            Child = new DockPanel { LastChildFill = true, Children = { close, icon, label } },
         };
 
-        var tab = new Tab { View = view, Header = header, Label = label };
+        var tab = new Tab { View = view, Header = header, Label = label, Icon = icon };
         DockPanel.SetDock(close, Dock.Right);
         close.PointerPressed += (_, e) => e.Handled = true;   // the header must not see it as a tab switch
         close.Click += (_, _) => CloseTab(tab);
@@ -246,7 +254,8 @@ public sealed class FileManagerWindow : Window
         };
 
         view.TitleChanged += (_, _) => TabTitleChanged(tab);
-        label.Text = view.FolderTitle;
+        label.Text = view.FolderPath;
+        icon.IconNames = view.FolderIconNames;
 
         _pages.Children.Add(view);
         Grid.SetRow(view, 0);
@@ -258,9 +267,26 @@ public sealed class FileManagerWindow : Window
     // The tab header and the window title follow the folder the tab shows.
     private void TabTitleChanged(Tab tab)
     {
-        tab.Label.Text = tab.View.FolderTitle;
+        tab.Label.Text = tab.View.FolderPath;
+        tab.Icon.IconNames = tab.View.FolderIconNames;
+        ToolTip.SetTip(tab.Header, tab.View.FolderPath);
         if (tab == _active)
-            Title = tab.View.FolderTitle;
+            ShowFolder(tab);
+    }
+
+    // The window is named after the path of the folder it shows, and wears that folder's icon.
+    private void ShowFolder(Tab tab)
+    {
+        Title = tab.View.FolderPath;
+        try
+        {
+            if (ShellIconProvider.Default.Load(tab.View.FolderIconNames, 32, 1) is Avalonia.Media.Imaging.Bitmap bitmap)
+                Icon = new WindowIcon(bitmap);
+        }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            // a platform that cannot take a window icon keeps the program's
+        }
     }
 
     private void SelectTab(Tab tab)
@@ -271,7 +297,7 @@ public sealed class FileManagerWindow : Window
             t.View.IsVisible = t == tab;
             t.Header.Background = t == tab ? ThemeTokens.Find(this, ThemeToken.HoverFill, Brushes.LightGray) : Brushes.Transparent;
         }
-        Title = tab.View.FolderTitle;
+        ShowFolder(tab);
     }
 
     public void CloseTab(FileManagerView view)

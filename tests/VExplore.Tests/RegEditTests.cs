@@ -32,7 +32,7 @@ public class RegEditModelTests
         Assert.Equal(new byte[] { 0x0A, 0xFF, 0x01 }, RegEditModel.Parse(RegistryValueKind.Binary, "0a, ff-01"));
         Assert.Equal(Array.Empty<byte>(), RegEditModel.Parse(RegistryValueKind.Binary, ""));
         Assert.Equal(new[] { "a", "b" }, RegEditModel.Parse(RegistryValueKind.MultiString, "a\nb\n\n"));
-        Assert.True((bool)RegEditModel.Parse(RegistryValueKind.Bool, "1"));
+        Assert.True((bool)RegEditModel.Parse(RegistryValueKind.Bool, "1")!);
         Assert.Equal("expand %PATH% here", RegEditModel.Parse(RegistryValueKind.ExpandString, "expand %PATH% here"));
     }
 
@@ -196,5 +196,38 @@ public class RegEditWindowTests
         Assert.False(user.KeyExists("Test"));
         Assert.Equal("HKEY_CURRENT_USER", window.SelectedPath);
         Assert.Equal([RegEditModel.UserRoot, RegEditModel.MachineRoot], window.VisiblePaths);
+    }
+
+    [AvaloniaFact]
+    public void The_address_line_names_the_selected_key_the_regedit_way()
+    {
+        var user = new Hive("HKCU");
+        var machine = new Hive("HKLM");
+        user.CreateKey(@"Software\Vde\Taskbar");
+
+        var window = new RegEditWindow(user, machine);
+        window.Show();
+
+        Assert.Equal("Computer\\HKEY_CURRENT_USER", window.AddressText);
+        Assert.True(window.SelectPath(@"HKEY_CURRENT_USER\Software\Vde\Taskbar"));
+        Assert.Equal("Computer\\HKEY_CURRENT_USER\\Software\\Vde\\Taskbar", window.AddressText);
+    }
+
+    [AvaloniaFact]
+    public void Favorites_are_bookmarks_in_the_user_hive()
+    {
+        var user = new Hive("HKCU");
+        var machine = new Hive("HKLM");
+        user.CreateKey(@"Software\Vde\Taskbar");
+
+        var window = new RegEditWindow(user, machine);
+        window.Show();
+        Assert.True(window.SelectPath(@"HKEY_CURRENT_USER\Software\Vde\Taskbar"));
+        window.AddFavorite("Taskbar");
+
+        Assert.Equal(@"HKEY_CURRENT_USER\Software\Vde\Taskbar",
+            user.GetValue(@"Software\Vde\Regedit\Favorites", "Taskbar")!.Data);
+
+        Assert.Throws<ArgumentException>(() => window.AddFavorite("bad\\name"));
     }
 }

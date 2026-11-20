@@ -4,8 +4,6 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
-using Avalonia.Media.Imaging;
-using Avalonia.Platform;
 using Avalonia.Threading;
 using System.Runtime.InteropServices;
 using Vde.Shell.Controls;
@@ -51,7 +49,7 @@ public sealed class TrayAreaController : IDisposable
     private void Populate(TrayHost host)
     {
         _taskbar.TrayArea.Children.Clear();
-        foreach (var icon in host.Icons)
+        foreach (var icon in host.Icons.Where(i => i.Status != "Passive"))   // an app that sets Passive is asking not to be shown
             _taskbar.TrayArea.Children.Add(MakeButton(host, icon));
     }
 
@@ -62,10 +60,10 @@ public sealed class TrayAreaController : IDisposable
             Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = Brushes.Transparent,
             Width = 24, Height = 24, Tag = icon,
         };
-        if (icon.BestIconName.Length > 0)
-            button.Content = new ShellIcon { IconName = icon.BestIconName, IconSize = 24 };
-        else if (icon.BestPixmap is { } pixmap && TryBitmap(pixmap) is { } image)
-            button.Content = new Image { Source = image, Width = pixmap.Width, Height = pixmap.Height };
+        if (icon.BestPixmap is { } pixmap && icon.BestIconName.Length == 0 && TryBitmap(pixmap) is { } image)
+            button.Content = new Image { Source = image, Width = 20, Height = 20, Stretch = Stretch.Uniform };   // whatever size the app drew, in the slot
+        else if (icon.BestIconName.Length > 0)
+            button.Content = new ShellIcon { IconNames = IconNamesFor(icon), IconSize = 22 };   // 22 is the theme's own size for panels
         else
             button.Content = new TextBlock { Text = "·", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center, FontSize = 18 };
 
@@ -89,6 +87,36 @@ public sealed class TrayAreaController : IDisposable
             _ = ShowMenuAsync(menu, button);
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         return button;
+    }
+
+    // The icon's name, preceded by the file it names in the app's own icon folder (IconThemePath) when it has one:
+    // libappindicator apps keep their pictures in a temporary theme the system's theme does not know.
+    private static IReadOnlyList<string> IconNamesFor(TrayIcon icon)
+    {
+        var name = icon.BestIconName;
+        if (icon.IconThemePath.Length > 0 && FindInThemePath(icon.IconThemePath, name) is { } file)
+            return [file, name];
+        return [name];
+    }
+
+    private static string? FindInThemePath(string root, string name)
+    {
+        try
+        {
+            if (Path.IsPathRooted(name)) return null;
+            if (!Directory.Exists(root)) return null;
+            var found = Directory.EnumerateFiles(root, name + ".*", new EnumerationOptions { RecurseSubdirectories = true, MaxRecursionDepth = 4, IgnoreInaccessible = true })
+                .Where(f => f.EndsWith(".png", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                .Take(64).ToList();
+            // the size folder nearest to 22 (hicolor/24x24/apps/name.png), a plain svg counting as perfect
+            int Distance(string f) => f.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? 0
+                : int.TryParse(Path.GetFileName(Path.GetDirectoryName(Path.GetDirectoryName(f)) ?? "").Split('x')[0], out var size) ? Math.Abs(size - 22) : 1000;
+            return found.OrderBy(Distance).FirstOrDefault();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
     }
 
     // Activate, and when the item cannot be activated (AppIndicator-style items export nothing

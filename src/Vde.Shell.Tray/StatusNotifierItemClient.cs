@@ -29,20 +29,64 @@ public sealed class StatusNotifierItemClient : IDisposable
         Icon = new TrayIcon(service, path);
     }
 
-    public static Task<StatusNotifierItemClient?> OpenAsync(DBusConnection connection, string service)
-        => OpenAsync(connection, service, ObjectPathsFor(service));
+    // registration: what the watcher holds, "bus-name" or "bus-name/object/path".
+    public static Task<StatusNotifierItemClient?> OpenAsync(DBusConnection connection, string registration)
+    {
+        if (!IsValidRegistration(registration))
+            return Task.FromResult<StatusNotifierItemClient?>(null);
+        var (service, path) = SplitRegistration(registration);
+        return OpenAsync(connection, service, path is null ? ObjectPathsFor(service) : [path]);
+    }
 
-    // The paths an item may live at, in probing order: the KDE-planned path derived from the name
-    // (dashes become slashes), then the two conventional ones.
+    // The bus drops a connection that sends a message to a name or path that is not valid, so nothing from an
+    // app is ever put into a message before it has been checked here.
+    public static bool IsValidBusName(string name)
+    {
+        if (name.Length is 0 or > 255) return false;
+        bool unique = name[0] == ':';
+        var elements = (unique ? name[1..] : name).Split('.');
+        if (elements.Length < 2 && !unique) return false;
+        foreach (var element in elements)
+        {
+            if (element.Length == 0) return false;
+            if (!unique && char.IsAsciiDigit(element[0])) return false;
+            if (!element.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-')) return false;
+        }
+        return true;
+    }
+
+    public static bool IsValidObjectPath(string path)
+    {
+        if (path == "/") return true;
+        if (path.Length == 0 || path[0] != '/' || path.Length > 4096) return false;
+        return path[1..].Split('/').All(e => e.Length > 0 && e.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'));
+    }
+
+    // What the watcher accepts as a registration: a valid bus name, optionally followed by a valid object path.
+    public static bool IsValidRegistration(string registration)
+    {
+        var (service, path) = SplitRegistration(registration);
+        return IsValidBusName(service) && (path is null || IsValidObjectPath(path));
+    }
+
+    // A bus name cannot contain '/', so the first one starts the object path.
+    public static (string Service, string? Path) SplitRegistration(string registration)
+    {
+        int slash = registration.IndexOf('/');
+        return slash < 0 ? (registration, null) : (registration[..slash], registration[slash..]);
+    }
+
+    // The paths an item may live at, in probing order: the one nearly everything uses, the KDE-planned path
+    // derived from the name (dashes become slashes), then the other conventional one.
     public static string[] ObjectPathsFor(string service)
     {
         string derived = "/" + service.TrimStart('/').Replace('-', '/').Replace('.', '/');
-        return [derived, "/StatusNotifierItem", "/org/kde/status_notifier_item"];
+        return ["/StatusNotifierItem", derived, "/org/kde/status_notifier_item"];
     }
 
     public static async Task<StatusNotifierItemClient?> OpenAsync(DBusConnection connection, string service, IReadOnlyList<string> paths)
     {
-        foreach (var path in paths)
+        foreach (var path in paths.Where(IsValidObjectPath))
         {
             var client = new StatusNotifierItemClient(connection, service, path);
             try
@@ -58,8 +102,9 @@ public sealed class StatusNotifierItemClient : IDisposable
             {
                 // not there: the next path, then
             }
-            catch (InvalidOperationException)
+            catch (Exception e) when (e is InvalidOperationException or ArgumentException)
             {
+                // a malformed name or path from a strange client: not an item
             }
         }
         return null;
@@ -67,9 +112,20 @@ public sealed class StatusNotifierItemClient : IDisposable
 
     public void Dispose()
     {
-        foreach (var w in _watches)
+        // may be reached from the host and from a bus signal at the same time
+        IDisposable[] watches;
+        lock (_watches)
+        {
+            watches = _watches.ToArray();
+            _watches.Clear();
+        }
+        foreach (var w in watches)
             try { w.Dispose(); } catch (ObjectDisposedException) { }
-        _watches.Clear();
+    }
+
+    private void Track(IDisposable watch)
+    {
+        lock (_watches) _watches.Add(watch);
     }
 
     // Left click, at the icon's screen position; -1 when unknown.
@@ -92,14 +148,14 @@ public sealed class StatusNotifierItemClient : IDisposable
     private async Task WatchAsync()
     {
         // The item's own announcement signals: each means a fresh read of its properties.
-        _watches.Add(await WatchSignalAsync("NewTitle", ReadIconAsync));
-        _watches.Add(await WatchSignalAsync("NewIcon", ReadIconAsync));
-        _watches.Add(await WatchSignalAsync("NewAttentionIcon", ReadIconAsync));
-        _watches.Add(await WatchSignalAsync("NewToolTip", ReadIconAsync));
-        _watches.Add(await WatchSignalAsync("NewStatus", ReadIconAsync));
+        Track(await WatchSignalAsync("NewTitle", ReadIconAsync));
+        Track(await WatchSignalAsync("NewIcon", ReadIconAsync));
+        Track(await WatchSignalAsync("NewAttentionIcon", ReadIconAsync));
+        Track(await WatchSignalAsync("NewToolTip", ReadIconAsync));
+        Track(await WatchSignalAsync("NewStatus", ReadIconAsync));
 
         // The item disappears when its connection goes: the bus tells everyone.
-        _watches.Add(await _connection.WatchSignalAsync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameOwnerChanged",
+        Track(await _connection.WatchSignalAsync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameOwnerChanged",
             (Message m, object? _) => { var r = m.GetBodyReader(); return (r.ReadString(), r.ReadString(), r.ReadString()); },
             (Notification<(string, string, string)> n) =>
             {
@@ -211,6 +267,7 @@ public sealed class StatusNotifierItemClient : IDisposable
             Category = TextFrom(props, "Category") ?? "",
             Status = TextFrom(props, "Status") ?? "Active",
             IconName = TextFrom(props, "IconName") ?? "",
+            IconThemePath = TextFrom(props, "IconThemePath") ?? "",
             IconPixmap = PixmapFrom(props, "IconPixmap"),
             AttentionIconName = TextFrom(props, "AttentionIconName") ?? "",
             AttentionIconPixmap = PixmapFrom(props, "AttentionIconPixmap"),

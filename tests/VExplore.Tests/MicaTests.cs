@@ -5,9 +5,9 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
-using Avalonia.VisualTree;
 using Vde.Shell;
 using Vde.Shell.Controls;
+using Avalonia.VisualTree;
 
 namespace VExplore.Tests;
 
@@ -22,7 +22,7 @@ public class MicaTests
         using (var fb = bmp.Lock())
             for (int i = 0; i < 200 * 100; i++)
                 System.Runtime.InteropServices.Marshal.WriteInt32(fb.Address, i * 4, unchecked((b << 24) | (g << 16) | (r << 8) | 0xFF));
-        bmp.Save(path);
+        bmp.Save(path, new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
         return path;
     }
 
@@ -103,7 +103,11 @@ public class MicaTests
             var labels = FindLabels(w);
             Assert.NotEmpty(labels);
             foreach (var label in labels)
-                Assert.IsType<Avalonia.Media.DropShadowEffect>(label.Effect);   // the Win11 lift-off shadow
+            {
+                Assert.IsType<Avalonia.Media.DropShadowEffect>(label.Effect);   // the soft shadow
+                Assert.Equal(Avalonia.Media.Brushes.White, label.Fill);          // white, whatever the theme, like Plasma's desktop
+                Assert.Equal(2, label.MaxLines);
+            }
         }
         finally
         {
@@ -112,14 +116,14 @@ public class MicaTests
         }
     }
 
-    private static System.Collections.Generic.List<Avalonia.Controls.TextBlock> FindLabels(Avalonia.Controls.Window w)
+    private static System.Collections.Generic.List<Vde.Shell.Controls.OutlinedLabel> FindLabels(Avalonia.Controls.Window w)
     {
-        var found = new System.Collections.Generic.List<Avalonia.Controls.TextBlock>();
+        var found = new System.Collections.Generic.List<Vde.Shell.Controls.OutlinedLabel>();
         void Walk(Visual v)
         {
             foreach (var child in v.GetVisualChildren())
             {
-                if (child is Avalonia.Controls.TextBlock t && t.Text == "red.txt")
+                if (child is Vde.Shell.Controls.OutlinedLabel t && t.Text == "red.txt")
                     found.Add(t);
                 Walk((Visual)child);
             }

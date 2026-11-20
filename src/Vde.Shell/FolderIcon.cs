@@ -10,6 +10,36 @@ public static class FolderIcon
 {
     public const string FileName = ".directory";
 
+    // The icon a folder shows: its own (.directory) when it has one, then the one its role has (the home folder,
+    // Documents, Downloads...), then the plain folder. The way Dolphin and Plasma choose.
+    public static IReadOnlyList<string> NamesFor(string folder, KnownFolders? known = null)
+    {
+        var names = new List<string>();
+        if (Read(folder) is { } custom)
+            names.Add(custom);
+        if (known is not null)
+        {
+            var full = Path.GetFullPath(folder).TrimEnd('/');
+            foreach (var (which, icon) in Roles)
+                if (string.Equals(known.Get(which).TrimEnd('/'), full, StringComparison.Ordinal))
+                {
+                    names.Add(icon);
+                    break;
+                }
+        }
+        if (Path.GetFullPath(folder) == "/")
+            names.Add("drive-harddisk");
+        names.Add("folder");
+        return names;
+    }
+
+    private static readonly (KnownFolder Which, string Icon)[] Roles =
+    [
+        (KnownFolder.Home, "user-home"), (KnownFolder.Desktop, "user-desktop"), (KnownFolder.Documents, "folder-documents"),
+        (KnownFolder.Downloads, "folder-download"), (KnownFolder.Music, "folder-music"), (KnownFolder.Pictures, "folder-pictures"),
+        (KnownFolder.Videos, "folder-videos"), (KnownFolder.Templates, "folder-templates"), (KnownFolder.PublicShare, "folder-publicshare"),
+    ];
+
     // null when the folder has no custom icon (or the file is unreadable or says something odd).
     public static string? Read(string folder)
     {

@@ -19,10 +19,10 @@ BUILD       := build
 PUBLISH     := $(BUILD)/publish
 
 # project directory under src/ -> published executable name (see each .csproj AssemblyName)
-DOTNET_PROJECTS := fhived mkhive RegSvrVDE VExplore VdeRegEdit VdeSettings VTerminal VDESession VDEDM VDEDMGreeter VDENotify
+DOTNET_PROJECTS := fhived mkhive RegSvrVDE VExplore VdeRegEdit VdeSettings VTerminal VDESession VDEDM VDEDMGreeter VDENotify VTaskMgr
 
 # commands people type, linked into PREFIX/bin
-BIN_LINKS := vexplore vterminal vde-session vdedm vdedm-greeter mkhive RegSvrVDE vderegedit vdesettings
+BIN_LINKS := vexplore vterminal vtaskmgr vde-session vdedm vdedm-greeter mkhive RegSvrVDE vderegedit vdesettings
 
 export DOTNET_CLI_TELEMETRY_OPTOUT := 1
 export DOTNET_NOLOGO := 1
@@ -34,12 +34,15 @@ native:
 	native/vwm/build.sh
 	native/vterm/build.sh
 
+# ReadyToRun: the native image saves every app's per-process JIT, which windows opening was dominated by
+PUBLISH_FLAGS := -p:PublishReadyToRun=true -p:PublishReadyToRunShowWarnings=false
+
 dotnet:
 	@mkdir -p $(PUBLISH)
 	@for p in $(DOTNET_PROJECTS); do \
 	    echo "publish $$p"; \
 	    $(DOTNET) publish src/$$p -c $(CONFIG) -o $(PUBLISH) --nologo -v q \
-	        -r $(RID) --self-contained false -p:DebugType=None -p:DebugSymbols=false -p:UseAppHost=true || exit 1; \
+	        -r $(RID) --self-contained false -p:DebugType=None -p:DebugSymbols=false -p:UseAppHost=true $(PUBLISH_FLAGS) || exit 1; \
 	done
 
 install:
@@ -80,7 +83,7 @@ uninstall:
 	rm -rf $(DESTDIR)$(LIBDIR) $(DESTDIR)$(DATADIR)/vde $(DESTDIR)$(DATADIR)/backgrounds/vde $(DESTDIR)$(DATADIR)/doc/vde $(DESTDIR)$(DATADIR)/licenses/vde
 	rm -f $(DESTDIR)$(PREFIX)/bin/start-vde $(DESTDIR)$(PREFIX)/bin/regsvrvde $(addprefix $(DESTDIR)$(PREFIX)/bin/,$(BIN_LINKS))
 	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/vde.desktop $(DESTDIR)$(DATADIR)/applications/vexplore.desktop \
-	      $(DESTDIR)$(DATADIR)/applications/vexplore-settings.desktop $(DESTDIR)$(DATADIR)/applications/vterminal.desktop \
+	      $(DESTDIR)$(DATADIR)/applications/vexplore-settings.desktop $(DESTDIR)$(DATADIR)/applications/vterminal.desktop $(DESTDIR)$(DATADIR)/applications/vtaskmgr.desktop \
 	      $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.Notifications.service
 	rm -f $(DESTDIR)$(UNITDIR)/system/fhived-system.* $(DESTDIR)$(UNITDIR)/system/vdedm.service $(DESTDIR)$(UNITDIR)/user/fhived.* $(DESTDIR)$(UNITDIR)/user/vdenotify.service
 	rm -f $(DESTDIR)$(PREFIX)/lib/sysusers.d/vdedm.conf $(DESTDIR)$(PREFIX)/lib/tmpfiles.d/vdedm.conf $(DESTDIR)$(DATADIR)/polkit-1/rules.d/50-vdedm-greeter.rules

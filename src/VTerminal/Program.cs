@@ -5,6 +5,7 @@ using Avalonia.Themes.Fluent;
 using Vde.Freedesktop;
 using Vde.Shell.Theme;
 using Vde.Terminal;
+using Vde.Shell.Controls;
 using Vibe.Registry;
 using Vibe.Registry.Remote;
 using VTerminal;
@@ -24,7 +25,7 @@ if (Pty.FindLauncher() is null)
     return 1;
 }
 
-return AppBuilder.Configure<App>().UsePlatformDetect().UseWaylandWithFallback().StartWithClassicDesktopLifetime([]);
+return AppBuilder.Configure<App>().UsePlatformDetect().UseVdeRender().UseWaylandWithFallback().StartWithClassicDesktopLifetime([]);
 
 public sealed class App : Application
 {
@@ -55,6 +56,9 @@ public sealed class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime lifetime)
         {
             lifetime.MainWindow = window;
+            // Surfaces exist once the window is shown; the codec names the backend that won.
+            window.Opened += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => RenderSetup.LogRenderer(window), Avalonia.Threading.DispatcherPriority.Background);
             // being told to end (logout, kill) closes the windows properly, which also ends the programs running in them
             foreach (var signal in new[] { System.Runtime.InteropServices.PosixSignal.SIGTERM, System.Runtime.InteropServices.PosixSignal.SIGHUP, System.Runtime.InteropServices.PosixSignal.SIGINT })
                 _signals.Add(System.Runtime.InteropServices.PosixSignalRegistration.Create(signal, c => { c.Cancel = true; Avalonia.Threading.Dispatcher.UIThread.Post(() => lifetime.Shutdown()); }));

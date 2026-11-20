@@ -16,7 +16,7 @@ public sealed class TaskbarWindow : Window
     {
         _model = model;
         _settings = settings;
-        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
+        WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         ShowInTaskbar = false;
         Topmost = true;
         CanResize = false;

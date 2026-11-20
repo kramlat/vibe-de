@@ -28,9 +28,14 @@ public static class WindowMica
 
         void Apply(object? sender, EventArgs e)
         {
-            var blurred = WallpaperMica.Source(settings.Wallpaper);
+            var blurred = WallpaperMica.Peek(settings.Wallpaper);
             if (blurred is null)
+            {
+                // not made yet (the first window of a fresh cache): open now on the plain surface, and paint
+                // the backdrop when a worker thread has it
+                WallpaperMica.WhenReady(settings.Wallpaper, () => Avalonia.Threading.Dispatcher.UIThread.Post(() => Apply(window, EventArgs.Empty)));
                 return;
+            }
             var screen = window.Screens.ScreenFromWindow(window) ?? window.Screens.Primary;
             if (screen is null)
                 return;

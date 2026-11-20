@@ -51,8 +51,8 @@ public sealed class AvaloniaFileClipboard(Func<TopLevel?> topLevel) : IFileClipb
         var formats = new Dictionary<string, byte[]>();
         foreach (var item in data.Items.Select(i => (IDataTransferItem)i))
             foreach (var format in FormatsOfInterest)
-                if (item.Contains(format))
-                    formats[format.Identifier] = item.TryGetValue(format);
+                if (item.Contains(format) && item.TryGetValue(format) is { } bytes)
+                    formats[format.Identifier] = bytes;
         return FileTransfer.FromFormats(formats);
     }
 }

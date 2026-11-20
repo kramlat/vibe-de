@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Task Manager
+GenericName=System Monitor
+Comment=Processes, CPU and memory
+Exec=vtaskmgr
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+Keywords=processes;cpu;memory;kill;end task;performance;
+StartupWMClass=vtaskmgr

@@ -132,12 +132,12 @@ public sealed class Client(DBusConnection connection) : IDisposable
     public async Task<IDisposable> WatchClosedAsync(Action<uint, uint> handler)
         => await Connection.WatchSignalAsync(Dest, Path, Iface, "NotificationClosed",
             (Message m, object? _) => { var r = m.GetBodyReader(); return (r.ReadUInt32(), r.ReadUInt32()); },
-            (Exception? e, (uint, uint) v) => { if (e is null) handler(v.Item1, v.Item2); }, null, false, ObserverFlags.None);
+            (Notification<(uint, uint)> n) => { if (n.HasValue) handler(n.Value.Item1, n.Value.Item2); return ValueTask.CompletedTask; }, null, false, ObserverFlags.None);
 
     public async Task<IDisposable> WatchActionsAsync(Action<uint, string> handler)
         => await Connection.WatchSignalAsync(Dest, Path, Iface, "ActionInvoked",
             (Message m, object? _) => { var r = m.GetBodyReader(); return (r.ReadUInt32(), r.ReadString()); },
-            (Exception? e, (uint, string) v) => { if (e is null) handler(v.Item1, v.Item2); }, null, false, ObserverFlags.None);
+            (Notification<(uint, string)> n) => { if (n.HasValue) handler(n.Value.Item1, n.Value.Item2); return ValueTask.CompletedTask; }, null, false, ObserverFlags.None);
 
     public void Dispose() => Connection.Dispose();
 }

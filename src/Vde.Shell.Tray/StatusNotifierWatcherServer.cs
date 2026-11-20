@@ -100,8 +100,12 @@ public sealed class StatusNotifierWatcherServer : IPathMethodHandler, IDisposabl
             {
                 case "RegisterStatusNotifierItem" when request.SignatureAsString is "s":
                     {
+                        // An app registers either its bus name (KDE style: "org.kde.StatusNotifierItem-1234-1", the item at
+                        // /StatusNotifierItem) or just the object path (libappindicator / Ayatana style: "/org/ayatana/...");
+                        // in that case the item lives on the connection that sent the call, and the registration is
+                        // "sender/path", which is what hosts read back from RegisteredStatusNotifierItems.
                         var service = request.GetBodyReader().ReadString();
-                        RegisterItem(service);
+                        RegisterItem(service.StartsWith('/') && request.SenderAsString is { Length: > 0 } sender ? sender + service : service);
                         using var writer = context.CreateReplyWriter("");
                         context.Reply(writer.CreateMessage());
                         break;
@@ -119,11 +123,19 @@ public sealed class StatusNotifierWatcherServer : IPathMethodHandler, IDisposabl
         {
             context.ReplyError("org.freedesktop.DBus.Error.InvalidArgs", e.Message);
         }
+        catch (Exception e)
+        {
+            // Whatever a client sends, an exception here must never escape: it would end the bus connection and the
+            // tray with it. The caller is told, and everyone else carries on.
+            context.ReplyError("org.freedesktop.DBus.Error.Failed", e.Message);
+        }
         return default;
     }
 
     private void RegisterItem(string service)
     {
+        if (!StatusNotifierItemClient.IsValidRegistration(service))
+            throw new ArgumentException($"'{service}' is not a bus name or an object path");
         bool added;
         lock (_gate)
         {
@@ -167,7 +179,7 @@ public sealed class StatusNotifierWatcherServer : IPathMethodHandler, IDisposabl
                     // a variant is its type string followed by the value
                     using (var writer = context.CreateReplyWriter("v"))
                     {
-                        writer.WriteString("as");
+                        writer.WriteSignature("as");
                         writer.WriteArray(RegisteredItems);
                         context.Reply(writer.CreateMessage());
                     }
@@ -182,8 +194,7 @@ public sealed class StatusNotifierWatcherServer : IPathMethodHandler, IDisposabl
                 case "ProtocolVersion":
                     using (var writer = context.CreateReplyWriter("v"))
                     {
-                        writer.WriteString("i");
-                        writer.WriteInt32(0);
+                        writer.WriteVariantInt32(0);
                         context.Reply(writer.CreateMessage());
                     }
                     return;
@@ -198,15 +209,14 @@ public sealed class StatusNotifierWatcherServer : IPathMethodHandler, IDisposabl
             var dict = writer.WriteDictionaryStart();
             writer.WriteDictionaryEntryStart();
             writer.WriteString("RegisteredStatusNotifierItems");
-            writer.WriteString("as");
+            writer.WriteSignature("as");
             writer.WriteArray(RegisteredItems);
             writer.WriteDictionaryEntryStart();
             writer.WriteString("IsStatusNotifierHostRegistered");
             writer.WriteVariantBool(true);
             writer.WriteDictionaryEntryStart();
             writer.WriteString("ProtocolVersion");
-            writer.WriteString("i");
-            writer.WriteInt32(0);
+            writer.WriteVariantInt32(0);
             writer.WriteDictionaryEnd(dict);
             context.Reply(writer.CreateMessage());
             return;

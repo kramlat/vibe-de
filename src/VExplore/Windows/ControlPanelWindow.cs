@@ -21,7 +21,10 @@ public sealed class ControlPanelWindow : Window
     private readonly Action<ControlPanelItem> _openExternal;
     private readonly Func<string, Control?>? _customPages;
     private readonly DesktopSettings? _deviceSettings;
-    private readonly TextBox _search = new() { Watermark = "Find a setting" };
+    private readonly IReadOnlyList<WallpaperInfo>? _wallpapers;
+    private WrapPanel? _tiles;          // the theme tiles of the Personalization landing
+    private IBrush _accent = Brushes.DodgerBlue;   // the accent colour the tiles and mock window draw with
+    private readonly TextBox _search = new() { PlaceholderText = "Find a setting" };
     private readonly StackPanel _nav = new() { Spacing = 2 };
     private readonly TextBlock _title = new() { FontWeight = FontWeight.SemiBold, FontSize = 26, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly ContentControl _body = new();
@@ -37,7 +40,7 @@ public sealed class ControlPanelWindow : Window
     // openExternal starts items that are not pages of ours (a command, a component, a .desktop settings program).
     public ControlPanelWindow(ControlPanelCatalog catalog, IHive hive, Action<ControlPanelItem> openExternal,
         IReadOnlyDictionary<string, IReadOnlyList<SettingChoice>>? choices = null, Func<string, Control?>? customPages = null,
-        UserProfile? user = null, DesktopSettings? deviceSettings = null)
+        UserProfile? user = null, DesktopSettings? deviceSettings = null, IReadOnlyList<WallpaperInfo>? wallpapers = null)
     {
         _customPages = customPages;
         _catalog = catalog;
@@ -45,6 +48,7 @@ public sealed class ControlPanelWindow : Window
         _openExternal = openExternal;
         _choices = choices ?? new Dictionary<string, IReadOnlyList<SettingChoice>>();
         _deviceSettings = deviceSettings;
+        _wallpapers = wallpapers;
         Title = "Settings";
         Width = 1020; Height = 700;
 
@@ -115,8 +119,36 @@ public sealed class ControlPanelWindow : Window
         ?? (_pageView is DisplayPageView ? DisplayPageView.PageId : null);
     public SettingsPageView? Page => _pageView as SettingsPageView;
     // The breadcrumb of an open page ("Display" with category "System"), for hosts and tests.
-    public string PageName => _pageHeadName.Text;
+    public string PageName => _pageHeadName.Text ?? "";
     public string? PageCategory => _pageHeadCategory.IsVisible ? _pageHeadCategory.Text : null;
+
+    // The theme tiles on the Personalization landing: which one, and which is applied (null = none), for tests.
+    public IReadOnlyList<Button> PersonalizationTiles
+    {
+        get
+        {
+            var tiles = new List<Button>();
+            if (_tiles is { } panel)
+                foreach (var child in panel.Children)
+                    if (child is Button button) tiles.Add(button);
+            return tiles;
+        }
+    }
+    public int? SelectedPersonalizationTile
+    {
+        get
+        {
+            if (_tiles is null) return null;
+            var index = 0;
+            foreach (var child in _tiles.Children)
+            {
+                if (child is Button { BorderBrush: IBrush edge } && Equals(edge, _accent))
+                    return index;
+                index++;
+            }
+            return null;
+        }
+    }
 
     private Button NavButton(string category)
     {
@@ -190,14 +222,21 @@ public sealed class ControlPanelWindow : Window
     {
         _shown = items;
         _heading = heading;
+        _tiles = null;
         if (!_pageHead.IsVisible)   // a category's cards sit under its title
         {
             _title.Text = heading;
             _title.IsVisible = true;
         }
         var cards = new StackPanel { Spacing = 4 };
-        if (!_pageHead.IsVisible && heading == NavLabel(ControlPanelCategories.System))
-            cards.Children.Add(DeviceCard());
+        if (!_pageHead.IsVisible)
+        {
+            if (heading == NavLabel(ControlPanelCategories.System))
+                cards.Children.Add(DeviceCard());
+            else if (heading == NavLabel(ControlPanelCategories.Appearance)
+                && _wallpapers is { Count: > 0 })
+                cards.Children.Add(PersonalizationHeader());
+        }
         if (items.Count == 0)
             cards.Children.Add(new TextBlock { Text = "No matching settings.", Opacity = 0.7, Margin = new Thickness(2, 8, 0, 0) });
         foreach (var item in items)
@@ -300,6 +339,122 @@ public sealed class ControlPanelWindow : Window
             Background = fill ?? new SolidColorBrush(Color.FromRgb(96, 96, 96)),
             Child = fill is null ? new TextBlock { Text = profile.Initial, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeight.SemiBold } : null,
         };
+    }
+
+    // Windows 11's Personalization landing: the wallpaper previewed with a mock window over it, and the
+    // installed wallpapers as theme tiles beside it; picking a tile applies the wallpaper right away.
+    private Control PersonalizationHeader()
+    {
+        var settings = DesktopSettingsStore.Load(_hive);
+        _accent = ThemeTokens.Find(this, ThemeToken.Accent, Brushes.DodgerBlue);
+
+        IBrush preview;
+        try { preview = WallpaperBrush.Create(settings); }
+        catch (Exception) { preview = DeviceGradient(); }
+
+        var previewBorder = new Border
+        {
+            Width = 320, Height = 180, CornerRadius = new CornerRadius(6), ClipToBounds = true,
+            Background = preview,
+            BorderBrush = ThemeTokens.Find(this, ThemeToken.Border, Brushes.LightGray),
+            BorderThickness = new Thickness(1),
+            Child = MockWindow(),
+        };
+
+        var label = new TextBlock
+        {
+            Text = "Select a theme to apply", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 8),
+        };
+        var tiles = new WrapPanel { Orientation = Orientation.Horizontal };
+        _tiles = tiles;
+        foreach (var wallpaper in _wallpapers!)
+            tiles.Children.Add(ThemeTile(wallpaper, string.Equals(wallpaper.Path, settings.Wallpaper, StringComparison.OrdinalIgnoreCase)));
+
+        var gallery = new StackPanel { Spacing = 0, Children = { label, tiles } };
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*") };
+        previewBorder.SetValue(Grid.ColumnProperty, 0);
+        row.Children.Add(previewBorder);
+        gallery.SetValue(Grid.ColumnProperty, 1);
+        gallery.Margin = new Thickness(20, 0, 0, 0);
+        gallery.VerticalAlignment = VerticalAlignment.Top;
+        row.Children.Add(gallery);
+
+        var header = new Border { Margin = new Thickness(0, 0, 0, 10), Child = row };
+        return header;
+    }
+
+    // The little window drawn over the preview page — grey text lines and the accent button.
+    private Control MockWindow()
+    {
+        var lines = new StackPanel { Spacing = 5 };
+        foreach (var width in new[] { 72.0, 62.0, 66.0 })
+            lines.Children.Add(new Border { Width = width, Height = 3, CornerRadius = new CornerRadius(1.5), Background = new SolidColorBrush(Color.FromRgb(0xc9, 0xc9, 0xc9)) });
+        lines.Children.Add(new Border { Width = 26, Height = 9, CornerRadius = new CornerRadius(2), Background = _accent, Margin = new Thickness(0, 5, 0, 0) });
+
+        return new Border
+        {
+            Width = 108, Height = 68, CornerRadius = new CornerRadius(6),
+            Background = new SolidColorBrush(Color.FromRgb(0xfa, 0xfa, 0xfa)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0xd4, 0xd4, 0xd4)),
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(45, 0, 0, 0),
+            Child = new Border { Padding = new Thickness(11), Child = lines, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
+        };
+    }
+
+    private Control ThemeTile(WallpaperInfo wallpaper, bool selected)
+    {
+        var picture = new Border
+        {
+            Width = 120, Height = 68, CornerRadius = new CornerRadius(4), ClipToBounds = true,
+            Background = ThemeTokens.Find(this, ThemeToken.Track, Brushes.LightGray),
+        };
+        if (Thumbnail(wallpaper.Path) is { } thumb)
+            picture.Child = new Image { Source = thumb, Stretch = Stretch.UniformToFill };
+
+        var plate = new Border
+        {
+            Width = 22, Height = 22, CornerRadius = new CornerRadius(3), Background = Brushes.White,
+            HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(4),
+            Child = new Border { Width = 10, Height = 10, CornerRadius = new CornerRadius(1), Background = _accent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
+        };
+
+        var tile = new Grid();
+        tile.Children.Add(picture);
+        tile.Children.Add(plate);
+
+        var button = new Button
+        {
+            Tag = "themewall:" + wallpaper.Path,
+            Padding = new Thickness(0),
+            CornerRadius = new CornerRadius(4),
+            Background = Brushes.Transparent,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            BorderBrush = selected ? _accent : ThemeTokens.Find(this, ThemeToken.Border, Brushes.LightGray),
+            BorderThickness = selected ? new Thickness(2) : new Thickness(1),
+            Margin = new Thickness(0, 0, 10, 10),
+            Content = tile,
+        };
+        var wallpaper_ = wallpaper;
+        button.Click += (_, _) =>
+        {
+            var current = DesktopSettingsStore.Load(_hive);
+            DesktopSettingsStore.Save(_hive, current with { Wallpaper = wallpaper_.Path });
+            Show(_shown, _heading);   // rebuild so the preview and the selected edge follow
+        };
+        return button;
+    }
+
+    private static Bitmap? Thumbnail(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            return Bitmap.DecodeToWidth(stream, 192);
+        }
+        catch (Exception e) when (e is IOException or ArgumentException or NotSupportedException or InvalidOperationException or UnauthorizedAccessException) { return null; }
     }
 
     private static string NavLabel(string category) => category switch

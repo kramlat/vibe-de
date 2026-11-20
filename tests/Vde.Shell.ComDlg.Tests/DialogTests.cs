@@ -3,7 +3,6 @@ using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Vde.Shell;
 using Vde.Components;
-using Vde.Components;
 using Vde.Shell.ComDlg;
 
 namespace Vde.Shell.ComDlg.Tests;
@@ -492,9 +491,9 @@ public class PropertySheetScreenshots
         window.Show();
         await window.Page<GeneralPage>().SizeTask;
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
-        Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window)!.Save(Path.Combine(dir, "props-general.png"));
+        Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window)!.Save(Path.Combine(dir, "props-general.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
         window.GetVisualDescendants().OfType<TabControl>().Single().SelectedIndex = 1;
-        Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window)!.Save(Path.Combine(dir, "props-permissions.png"));
+        Avalonia.Headless.HeadlessWindowExtensions.CaptureRenderedFrame(window)!.Save(Path.Combine(dir, "props-permissions.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 }
 

@@ -61,7 +61,7 @@ public sealed class ControlPanelShellFolder() : ControlPanelFolder(LoadCatalog, 
     public static Action<ControlPanelItem>? Opener { get; set; }
 
     private static ControlPanelCatalog LoadCatalog()
-        => ControlPanelCatalog.Load(null, null, Vde.Freedesktop.DesktopEntryDatabase.Load(Vde.Freedesktop.XdgDirectories.Default, Vde.Freedesktop.Locale.FromEnvironment()), ShellApp.Desktops());
+        => ControlPanelCatalog.Load(null, null, ShellData.Apps(Vde.Freedesktop.Locale.FromEnvironment()), ShellApp.Desktops());
 }
 
 public static class ShellFolderSetup

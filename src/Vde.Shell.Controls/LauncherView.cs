@@ -19,7 +19,7 @@ public enum LauncherFooterAction { Files, Settings, SignOut, Sleep, Restart, Shu
 public sealed class LauncherView : UserControl
 {
     private readonly LauncherModel _model;
-    private readonly TextBox _search = new() { Watermark = "Search apps and settings" };
+    private readonly TextBox _search = new() { PlaceholderText = "Search apps and settings" };
     private readonly StackPanel _body = new() { Spacing = 10 };
     private bool _showAll;
 

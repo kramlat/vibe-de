@@ -69,6 +69,7 @@ public static class ExplorerCommand
         using var host2 = ExplorerHost.Open();
         if (window == "chrome")
             return RunChrome(host2, error);
+        ShellApp.Host = host2;   // the app installs the registry's theme, shortcut style and elevation from it: without it no control has a template
         ShellApp.FirstWindow = () => window switch
         {
             "controlpanel" => NewControlPanel(host2),
@@ -77,6 +78,7 @@ public static class ExplorerCommand
             "taskbar" => NewTaskbar(host2),
             _ => ShellApp.NewFileManager(host2, folder),
         };
+        StartupTrace.Mark("program started");
         return ShellApp.Build().StartWithClassicDesktopLifetime([]);
     }
 
@@ -115,6 +117,7 @@ public static class ExplorerCommand
     {
         ShellApp.Host = host;
         ShellApp.FirstWindow = first;
+        StartupTrace.Mark("program started");
         return ShellApp.Build().StartWithClassicDesktopLifetime([]);
     }
 
@@ -130,7 +133,7 @@ public static class ExplorerCommand
     private static Window NewSettings(ExplorerHost host)
     {
         var xdg = XdgDirectories.Default;
-        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var apps = ShellData.Apps(Locale.FromEnvironment());
         var catalog = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
         var folders = new KnownFolders(xdg);
         var wallpapers = WallpaperCatalog.Find(xdg);
@@ -145,7 +148,7 @@ public static class ExplorerCommand
             ? new DesktopPageView(host.CurrentUser, wallpapers, BrowseForWallpaperAsync, host.LocalMachine)
             : id == DisplayPageView.PageId
                 ? new DisplayPageView(host.CurrentUser)
-                : null, user: new UserProfile(), deviceSettings: device);
+                : null, user: new UserProfile(), deviceSettings: device, wallpapers: wallpapers);
         WindowMica.Attach(settings, device);
         return settings;
     }
@@ -154,7 +157,7 @@ public static class ExplorerCommand
     private static Window NewControlPanel(ExplorerHost host)
     {
         var xdg = XdgDirectories.Default;
-        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var apps = ShellData.Apps(Locale.FromEnvironment());
         var catalog = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
         var folders = new KnownFolders(xdg);
         var wallpapers = WallpaperCatalog.Find(xdg);
@@ -215,7 +218,7 @@ public static class ExplorerCommand
             .UseHeadless(new Avalonia.Headless.AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false }).SetupWithoutStarting();
         var engine = new Vde.Shell.Theme.ThemeEngine(Vde.Shell.Theme.ThemeCatalog.Discover());
         using var binding = engine.BindTo(host.CurrentUser);
-        var apps = DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment());
+        var apps = ShellData.Apps(Locale.FromEnvironment());
         var service = new ChromeService(client, new ChromeRenderer(apps, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine)));
         engine.Changed += (_, _) => service.RedrawAll();
         void PushWindowSettings()
@@ -233,7 +236,7 @@ public static class ExplorerCommand
 
     private static Window NewTaskbar(ExplorerHost host)
     {
-        var apps = DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment());
+        var apps = ShellData.Apps(Locale.FromEnvironment());
         var model = new TaskbarModel(host.CurrentUser, apps, Windows(), entry => Launch(host, entry));
         var window = new TaskbarWindow(model, () => Launch(host, "vexplore --launcher"),
             settings: DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
@@ -261,8 +264,8 @@ public static class ExplorerCommand
     {
         var xdg = XdgDirectories.Default;
         var folders = new KnownFolders(xdg);
-        var mime = new MimeDatabase(xdg);
-        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var mime = ShellData.Mime();
+        var apps = ShellData.Apps(Locale.FromEnvironment());
         var associations = new FileAssociations(xdg, mime, apps, ShellApp.Desktops(), host.Classes);
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
         var shell = new ShellExecute(associations, mime, types: types, elevation: ShellApp.Elevation);
@@ -301,7 +304,7 @@ public static class ExplorerCommand
     private static Window NewLauncher(ExplorerHost host)
     {
         var xdg = XdgDirectories.Default;
-        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var apps = ShellData.Apps(Locale.FromEnvironment());
         var settings = ControlPanelCatalog.Load(null, host.CurrentUser, apps, ShellApp.Desktops());
         var model = new LauncherModel(host.CurrentUser, apps, ShellApp.Desktops(), settings)
         {
@@ -335,8 +338,8 @@ public static class ExplorerCommand
     internal static void Launch(ExplorerHost host, DesktopEntry entry)
     {
         var xdg = XdgDirectories.Default;
-        var mime = new MimeDatabase(xdg);
-        var associations = new FileAssociations(xdg, mime, DesktopEntryDatabase.Load(xdg, []), ShellApp.Desktops(), host.Classes);
+        var mime = ShellData.Mime();
+        var associations = new FileAssociations(xdg, mime, ShellData.Apps([]), ShellApp.Desktops(), host.Classes);
         try { new ShellExecute(associations, mime).Launch(entry); }
         catch (Exception e) when (e is FileNotFoundException or InvalidOperationException) { Console.Error.WriteLine("vexplore: " + e.Message); }
     }
@@ -344,8 +347,8 @@ public static class ExplorerCommand
     internal static void Launch(ExplorerHost host, string commandLine)
     {
         var xdg = XdgDirectories.Default;
-        var mime = new MimeDatabase(xdg);
-        var associations = new FileAssociations(xdg, mime, DesktopEntryDatabase.Load(xdg, []), ShellApp.Desktops(), host.Classes);
+        var mime = ShellData.Mime();
+        var associations = new FileAssociations(xdg, mime, ShellData.Apps([]), ShellApp.Desktops(), host.Classes);
         try { new ShellExecute(associations, mime).Run(commandLine); }
         catch (Exception e) when (e is FileNotFoundException or ArgumentException) { Console.Error.WriteLine("vexplore: " + e.Message); }
     }

@@ -17,7 +17,7 @@ public sealed class LauncherWindow : Window
     {
         bool modern = model.Layout == StartLayout.Modern;
         Width = modern ? 584 : 640; Height = 620;
-        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
+        WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         ShowInTaskbar = false;
         Topmost = true;
 

@@ -6,9 +6,6 @@ using Vde.Freedesktop;
 using Vde.Shell;
 using Vde.Components;
 using Vde.Shell.ComDlg;
-using Vde.Shell;
-using Vde.Components;
-using Vde.Shell.ComDlg;
 using Vibe.Registry;
 using VExplore.Windows;
 
@@ -55,18 +52,35 @@ public class WindowTests
     }
 
     [AvaloniaFact]
+    public void The_window_wears_the_icon_of_the_folder_it_shows_its_role_icon_or_its_own()
+    {
+        using var t = new Tree();
+        var window = new FileManagerWindow(t.Home, t.Folders, _ => { });
+        window.Show();
+        Assert.Equal(new[] { "user-home", "folder" }, window.ActiveView.FolderIconNames);
+
+        window.Navigate(Path.Combine(t.Home, "Documents"));
+        Assert.Equal(new[] { "folder-documents", "folder" }, window.ActiveView.FolderIconNames);
+
+        window.Navigate(Path.Combine(t.Home, "Documents", "sub"));
+        File.WriteAllText(Path.Combine(t.Home, "Documents", "sub", ".directory"), "[Desktop Entry]\nIcon=folder-red\n");
+        window.Reload();
+        Assert.Equal(new[] { "folder-red", "folder" }, window.ActiveView.FolderIconNames);   // a folder's own choice comes first
+    }
+
+    [AvaloniaFact]
     public void Tabs_hold_their_own_folder_and_the_window_api_follows_the_active_tab()
     {
         using var t = new Tree();
         var window = new FileManagerWindow(t.Home, t.Folders, _ => { });
         window.Show();
         window.Navigate(Path.Combine(t.Home, "Documents"));
-        Assert.Equal("Documents", window.Title);
+        Assert.Equal(Path.Combine(t.Home, "Documents"), window.Title);   // the window is named after the path
 
         window.NewTab();
         Assert.Equal(2, window.Views.Count);
         Assert.Equal(t.Home, window.CurrentFolder);            // the api speaks for the active tab
-        Assert.Equal("home", window.Title);
+        Assert.Equal(t.Home, window.Title);
         Assert.Equal(Path.Combine(t.Home, "Documents"), window.Views[0].CurrentFolder);
 
         window.Navigate(Path.Combine(t.Root, "does-not-exist"));
@@ -74,11 +88,11 @@ public class WindowTests
         Assert.DoesNotContain("cannot be opened", window.Views[0].StatusText);
 
         window.CycleTab(-1);
-        Assert.Equal("Documents", window.Title);
+        Assert.Equal(Path.Combine(t.Home, "Documents"), window.Title);
 
         window.CloseTab(window.ActiveView);                    // closing the active tab leaves the other one showing
         Assert.Equal([Path.Combine(t.Root, "does-not-exist")], window.Views.Select(v => v.CurrentFolder));
-        Assert.Equal("does-not-exist", window.Title);
+        Assert.Equal(Path.Combine(t.Root, "does-not-exist"), window.Title);
 
         var closed = false;
         window.Closed += (_, _) => closed = true;
@@ -99,7 +113,7 @@ public class WindowTests
 
         window.Open([window.Entries[0]]);                                           // a folder opens in place
         Assert.Equal(Path.Combine(t.Home, "Documents"), window.CurrentFolder);
-        Assert.Equal("Documents", window.Title);
+        Assert.Equal(Path.Combine(t.Home, "Documents"), window.Title);
         Assert.Equal(new[] { "sub", "a.txt" }, window.Entries.Select(e => e.Name));
         Assert.True(window.CanGoBack);
 
@@ -164,6 +178,37 @@ public class WindowTests
         window.Open(window.ShownItems.Single());
         Assert.Equal("printers", Assert.Single(handed).Id);                         // anything else is started by the shell
     }
+
+    [AvaloniaFact]
+    public void The_personalization_landing_previews_the_desktop_and_applies_theme_wallpapers()
+    {
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        var dir = Path.Combine(Path.GetTempPath(), "vexplore-person-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var first = Path.Combine(dir, "aurora.png");
+            var second = Path.Combine(dir, "meadow.png");
+            File.WriteAllBytes(first, TinyPng);
+            File.WriteAllBytes(second, TinyPng);
+            var catalog = ControlPanelCatalog.Load(null, hive, null, []);
+            var window = new ControlPanelWindow(catalog, hive, _ => { },
+                wallpapers: new List<WallpaperInfo> { new("Aurora", first), new("Meadow", second) });
+            window.Show();
+
+            Assert.Equal(new[] { "Appearance", "Desktop", "Start menu", "Taskbar", "Windows" }, window.ShownItems.Select(i => i.Name));
+            Assert.Equal(2, window.PersonalizationTiles.Count);
+            Assert.Null(window.SelectedPersonalizationTile);                             // no wallpaper set yet
+
+            window.PersonalizationTiles[1].RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(second, DesktopSettingsStore.Load(hive).Wallpaper);             // the tile applied the wallpaper
+            Assert.Equal(1, window.SelectedPersonalizationTile);                         // the landing rebuilt around it
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    private static readonly byte[] TinyPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
 
     [AvaloniaFact]
     public void The_display_page_selects_arranges_and_stores_displays()
@@ -291,12 +336,13 @@ public class Screenshots
         var dir = Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR");
         if (string.IsNullOrEmpty(dir)) return;
         Vde.Shell.Controls.ShellIconProvider.Default = new Vde.Shell.Controls.ShellIconProvider();
+        Vde.Shell.Controls.ShellIconProvider.Async = Environment.GetEnvironmentVariable("VDE_ASYNC") == "1";
         var xdg = XdgDirectories.Default;
         var mime = new MimeDatabase(xdg);
         var types = new FileTypes(mime, new ClassesRoot(new Hive("HKCU")), Locale.FromEnvironment());
         var window = new FileManagerWindow(new KnownFolders(xdg).Get(KnownFolder.Home), new KnownFolders(xdg), _ => { }, types) { Width = 980, Height = 560 };
         window.Show();
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "filemanager.png"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "filemanager.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 
     [AvaloniaFact]
@@ -307,7 +353,7 @@ public class Screenshots
         var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
         var window = new ControlPanelWindow(ControlPanelCatalog.Load(null, hive, null, []), hive, _ => { }) { Width = 1020, Height = 700 };
         window.Show();
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "settings.png"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "settings.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 
     [AvaloniaFact]
@@ -319,7 +365,7 @@ public class Screenshots
         var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
         var window = new ClassicControlPanelWindow(ControlPanelCatalog.Load(null, hive, null, []), hive, _ => { }) { Width = 900, Height = 600 };
         window.Show();
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "controlpanel.png"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "controlpanel.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 
     [AvaloniaFact]
@@ -340,7 +386,68 @@ public class Screenshots
         window.Show();
         window.Search("display");
         window.Open(window.ShownItems.First(i => i.PageId == "display"));
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "display.png"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "display.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+    }
+
+    [AvaloniaFact]
+    public void Registry_editor_screenshot()
+    {
+        var dir = Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        Vde.Shell.Controls.ShellIconProvider.Default = new Vde.Shell.Controls.ShellIconProvider();
+        var user = new Hive("HKCU");
+        user.SetValue(@"Software\Vde\Taskbar", "Height", RegistryValueKind.DWord, 48u);
+        user.SetValue(@"Software\Vde\Taskbar", "Color", RegistryValueKind.String, "#1d99f3");
+        user.SetValue(@"Software\Vde\Taskbar", "Sizes", RegistryValueKind.Binary, new byte[] { 0x7f, 0x00, 0x00, 0x00 });
+        user.CreateKey(@"Software\Vde\Taskbar\Launchers");
+        var window = new RegEditWindow(user, new Hive("HKLM")) { Width = 980, Height = 620 };
+        window.Show();
+        window.SelectPath(@"HKEY_CURRENT_USER\Software\Vde\Taskbar");
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "regedit.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+    }
+
+    [AvaloniaFact]
+    public void Personalization_screenshot()
+    {
+        var dir = Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        Vde.Shell.Controls.ShellIconProvider.Default = new Vde.Shell.Controls.ShellIconProvider();
+        var wallpapersDir = Path.Combine(Path.GetTempPath(), "vexplore-person-shots");
+        Directory.CreateDirectory(wallpapersDir);
+        var palettes = new (Avalonia.Media.Color A, Avalonia.Media.Color B)[]
+        {
+            (Avalonia.Media.Color.Parse("#4babff"), Avalonia.Media.Color.Parse("#205a9e")),
+            (Avalonia.Media.Color.Parse("#7ec850"), Avalonia.Media.Color.Parse("#2d6a2d")),
+            (Avalonia.Media.Color.Parse("#b06ad6"), Avalonia.Media.Color.Parse("#4a1a6e")),
+            (Avalonia.Media.Color.Parse("#f2a04d"), Avalonia.Media.Color.Parse("#8c2f39")),
+        };
+        var wallpapers = new List<WallpaperInfo>();
+        for (var i = 0; i < palettes.Length; i++)
+        {
+            var path = Path.Combine(wallpapersDir, "shot-wall-" + i + ".png");
+            using (var bmp = new Avalonia.Media.Imaging.RenderTargetBitmap(new Avalonia.PixelSize(192, 108), new Avalonia.Vector(96, 96)))
+            {
+                using (var ctx = bmp.CreateDrawingContext())
+                {
+                    var brush = new Avalonia.Media.LinearGradientBrush
+                    {
+                        StartPoint = new Avalonia.RelativePoint(0, 0, Avalonia.RelativeUnit.Relative),
+                        EndPoint = new Avalonia.RelativePoint(1, 1, Avalonia.RelativeUnit.Relative),
+                    };
+                    brush.GradientStops.Add(new Avalonia.Media.GradientStop(palettes[i].A, 0));
+                    brush.GradientStops.Add(new Avalonia.Media.GradientStop(palettes[i].B, 1));
+                    ctx.FillRectangle(brush, new Avalonia.Rect(0, 0, 192, 108));
+                }
+                using (var stream = File.Create(path)) bmp.Save(stream, new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+            }
+            wallpapers.Add(new WallpaperInfo("Theme " + (i + 1), path));
+        }
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        DesktopSettingsStore.Save(hive, new DesktopSettings { Wallpaper = wallpapers[1].Path });
+        var window = new ControlPanelWindow(ControlPanelCatalog.Load(null, hive, null, []), hive, _ => { },
+            wallpapers: wallpapers) { Width = 1020, Height = 700 };
+        window.Show();
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "personalization.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 }
 
@@ -585,7 +692,7 @@ public class DesktopWindowTests
         using var e = new Env();
         var picture = Path.Combine(e.Root, "wall.png");
         using (var bmp = new Avalonia.Media.Imaging.WriteableBitmap(new Avalonia.PixelSize(8, 8), new Avalonia.Vector(96, 96), Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Opaque))
-            bmp.Save(picture);
+            bmp.Save(picture, new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
 
         DesktopSettingsStore.Save(e.Hive, new DesktopSettings(picture, WallpaperMode.Tile, "#102030"));
         var w = e.Open(); w.Show();

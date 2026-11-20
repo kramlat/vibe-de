@@ -9,6 +9,7 @@
     <RootNamespace>VdeRegEdit</RootNamespace>
     <RollForward>Major</RollForward>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

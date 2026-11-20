@@ -69,7 +69,7 @@ public sealed class VExploreInstaller : IVdeInstaller
 public sealed class ChecksumPage
 {
     private readonly string _path;
-    private readonly TextBox _sha256 = Hash(), _sha1 = Hash(), _md5 = Hash(), _expected = new() { Watermark = "Paste a checksum to compare" };
+    private readonly TextBox _sha256 = Hash(), _sha1 = Hash(), _md5 = Hash(), _expected = new() { PlaceholderText = "Paste a checksum to compare" };
     private readonly TextBlock _status = new() { Opacity = 0.7 }, _match = new();
     private readonly ProgressBar _bar = new() { Minimum = 0, Maximum = 1, Height = 6 };
 
@@ -155,7 +155,7 @@ public sealed class ChecksumPage
 public sealed class CustomizePage
 {
     private readonly string _folder;
-    private readonly TextBox _icon = new() { Watermark = "Icon name, e.g. folder-music", MinWidth = 260 };
+    private readonly TextBox _icon = new() { PlaceholderText = "Icon name, e.g. folder-music", MinWidth = 260 };
     private readonly ShellIcon _preview = new() { IconSize = 48 };
     private readonly TextBlock _error = new() { Foreground = Brushes.IndianRed, IsVisible = false };
     private readonly string? _original;

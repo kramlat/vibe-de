@@ -19,6 +19,14 @@ public class TrayDBusTests
         return bytes;
     }
 
+    private static Task Register(DBusConnection connection, string registration)
+    {
+        using var w = connection.GetMessageWriter();
+        w.WriteMethodCallHeader("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher", "RegisterStatusNotifierItem", "s");
+        w.WriteString(registration);
+        return connection.CallMethodAsync(w.CreateMessage());
+    }
+
     private static async Task<TrayIcon?> WaitFor(Func<IReadOnlyList<TrayIcon>> icons, Func<TrayIcon, bool> match, int timeoutMs = 5000)
     {
         for (int waited = 0; waited < timeoutMs; waited += 50)
@@ -142,5 +150,109 @@ public class TrayDBusTests
 
         await menu.SendEventAsync(1, "clicked", null);
         await UntilAsync(() => menuFake.Clicks.Contains(1));
+    }
+
+    // libappindicator, Ayatana and some toolkits register only an object path: the item lives on the sender.
+    // This used to throw inside the watcher and end its connection, taking every other icon with it.
+    [Fact]
+    public async Task AnItemThatRegistersOnlyItsObjectPathIsAdoptedOnTheSendersConnection()
+    {
+        using var bus = new PrivateBus();
+        using var host = await TrayHost.StartAsync(bus.Address);
+        using var kde = FakeItem.Start(bus, "org.kde.StatusNotifierItem.firstapp", new FakeItem.Property("Id", "kde"), new("IconName", "folder"));
+        using var indicator = FakeItem.StartByPath(bus, "/org/ayatana/NotificationItem/one", new FakeItem.Property("Id", "indicator"), new("IconName", "user-trash"));
+
+        var icon = await WaitFor(() => host!.Icons, i => i.Id == "indicator");
+        Assert.NotNull(icon);
+        Assert.StartsWith(":1.", icon.Service);                                   // the sender's unique name
+        Assert.Equal("/org/ayatana/NotificationItem/one", icon.Path);
+        Assert.Equal("user-trash", icon.BestIconName);
+        Assert.NotNull(await WaitFor(() => host!.Icons, i => i.Id == "kde"));      // the watcher is alive and kept the other one
+        Assert.NotNull(host!.Item(icon));
+    }
+
+    [Fact]
+    public async Task OneApplicationMayExportSeveralIconsAndTheyStayApart()
+    {
+        using var bus = new PrivateBus();
+        using var host = await TrayHost.StartAsync(bus.Address);
+        using var one = FakeItem.StartByPath(bus, "/org/ayatana/NotificationItem/a", new FakeItem.Property("Id", "a"), new("IconName", "folder"));
+        // a second icon from the same connection
+        var two = new FakeItem(one.Connection, "") { Path = "/org/ayatana/NotificationItem/b", RegisterAs = "/org/ayatana/NotificationItem/b", Properties = [new("Id", "b"), new("IconName", "user-home")] };
+        one.Connection.AddMethodHandler(two);
+        two.RegisterToWatcher();
+
+        Assert.NotNull(await WaitFor(() => host!.Icons, i => i.Id == "a"));
+        Assert.NotNull(await WaitFor(() => host!.Icons, i => i.Id == "b"));
+        Assert.Equal(2, host!.Icons.Count);
+    }
+
+    [Fact]
+    public async Task APathRegisteredItemGoesWhenItsConnectionDoes()
+    {
+        using var bus = new PrivateBus();
+        using var host = await TrayHost.StartAsync(bus.Address);
+        var indicator = FakeItem.StartByPath(bus, "/org/ayatana/NotificationItem/gone", new FakeItem.Property("Id", "gone"), new("IconName", "folder"));
+        Assert.NotNull(await WaitFor(() => host!.Icons, i => i.Id == "gone"));
+
+        indicator.Dispose();   // the app quits: its unique name leaves the bus
+
+        await UntilAsync(() => host!.Icons.Count == 0);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not a bus name")]
+    [InlineData("/")]
+    [InlineData("//double//slash")]
+    [InlineData("org.kde.StatusNotifierItem-no-such-app")]
+    public async Task NonsenseRegistrationsAreRefusedWithoutHarmingTheWatcher(string nonsense)
+    {
+        using var bus = new PrivateBus();
+        using var host = await TrayHost.StartAsync(bus.Address);
+        using var liar = bus.Connect();
+        try { await Register(liar, nonsense).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (DBusExceptionBase) { }   // an error reply is fine; silence or a dead watcher is not
+
+        using var real = FakeItem.Start(bus, "org.kde.StatusNotifierItem.survivor", new FakeItem.Property("Id", "survivor"), new("IconName", "folder"));
+        Assert.NotNull(await WaitFor(() => host!.Icons, i => i.Id == "survivor"));
+    }
+
+    // Apps read these properties before they register (KDE and Ayatana both do). The replies were malformed,
+    // so the bus disconnected the watcher the first time one was read: the tray died on the first app.
+    [Fact]
+    public async Task TheWatcherAnswersItsPropertiesAndSurvivesBeingAsked()
+    {
+        using var bus = new PrivateBus();
+        using var host = await TrayHost.StartAsync(bus.Address);
+        using var client = bus.Connect();
+        using var item = FakeItem.Start(bus, "org.kde.StatusNotifierItem.listed", new FakeItem.Property("Id", "listed"), new("IconName", "folder"));
+        Assert.NotNull(await WaitFor(() => host!.Icons, i => i.Id == "listed"));
+
+        Assert.True((await Property(client, "IsStatusNotifierHostRegistered")).GetBool());
+        Assert.Equal(0, (await Property(client, "ProtocolVersion")).GetInt32());
+        var registered = (await Property(client, "RegisteredStatusNotifierItems")).GetArray<string>();
+        Assert.Contains("org.kde.StatusNotifierItem.listed", registered);
+
+        var all = await Task.Run(() =>
+        {
+            using var w = client.GetMessageWriter();
+            w.WriteMethodCallHeader("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.freedesktop.DBus.Properties", "GetAll", "s");
+            w.WriteString("org.kde.StatusNotifierWatcher");
+            return client.CallMethodAsync(w.CreateMessage(), (Message m, object? _) => m.GetBodyReader().ReadDictionaryOfStringToVariantValue(), null);
+        });
+        Assert.Equal(3, all.Count);
+
+        using var later = FakeItem.Start(bus, "org.kde.StatusNotifierItem.later", new FakeItem.Property("Id", "later"), new("IconName", "folder"));
+        Assert.NotNull(await WaitFor(() => host!.Icons, i => i.Id == "later"));   // still serving after all that
+    }
+
+    private static Task<VariantValue> Property(DBusConnection connection, string name)
+    {
+        using var w = connection.GetMessageWriter();
+        w.WriteMethodCallHeader("org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.freedesktop.DBus.Properties", "Get", "ss");
+        w.WriteString("org.kde.StatusNotifierWatcher");
+        w.WriteString(name);
+        return connection.CallMethodAsync(w.CreateMessage(), (Message m, object? _) => m.GetBodyReader().ReadVariantValue(), null);
     }
 }

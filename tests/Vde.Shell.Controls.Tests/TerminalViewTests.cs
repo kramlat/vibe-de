@@ -91,7 +91,7 @@ public class TerminalViewTests
 
         var frame = window.CaptureRenderedFrame()!;
         Assert.True(frame.PixelSize.Width > 100);
-        if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is { Length: > 0 } dir) frame.Save(Path.Combine(dir, "terminal.png"));
+        if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is { Length: > 0 } dir) frame.Save(Path.Combine(dir, "terminal.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 
     [AvaloniaFact]

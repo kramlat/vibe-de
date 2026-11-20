@@ -1,10 +1,11 @@
 using Avalonia;
-using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
-using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Media;
+using Avalonia.Threading;
 using Vde.Shell;
 using Vde.Shell.Controls;
 using Vibe.Registry;
@@ -32,7 +33,7 @@ public class DesktopPageTests
                 var row = Enumerable.Repeat(argb, 64).SelectMany(BitConverter.GetBytes).ToArray();
                 for (var y = 0; y < 36; y++) System.Runtime.InteropServices.Marshal.Copy(row, 0, fb.Address + y * fb.RowBytes, row.Length);
             }
-            bmp.Save(Path_(name));
+            bmp.Save(Path_(name), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
         }
         public IReadOnlyList<WallpaperInfo> Catalog => [new("Dunes", Path_("Dunes.png")), new("Ocean", Path_("Ocean.png"))];
         public void Dispose() => Directory.Delete(Dir, recursive: true);
@@ -69,11 +70,13 @@ public class DesktopPageTests
         var page = new DesktopPageView(hive, []);
         page.SetMode(WallpaperMode.Tile);
         page.SetShowIcons(false);
+        page.SetIconSize(96);
         Assert.True(page.SetColor("#336699"));
 
         var saved = DesktopSettingsStore.Load(hive);
         Assert.Equal(WallpaperMode.Tile, saved.Mode);
         Assert.False(saved.ShowIcons);
+        Assert.Equal(96, saved.IconSize);
         Assert.Equal("#336699", saved.BackgroundColor);
 
         Assert.False(page.SetColor("blue"));
@@ -127,6 +130,39 @@ public class DesktopPageTests
         page.SelectWallpaper(pics.Path_("Ocean.png"));
         var window = new Window { Content = page, Width = 560, Height = 620 };
         window.Show();
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "desktop-page.png"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "desktop-page.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+    }
+
+    [AvaloniaFact]
+    public void The_desktop_grid_follows_the_icon_size_setting_and_labels_are_outlined()
+    {
+        using var pics = new Pictures();
+        var folder = Path.Combine(pics.Dir, "Desktop");
+        Directory.CreateDirectory(folder);
+        foreach (var n in new[] { "notes.txt", "A rather long file name that has to wrap onto two lines and then be cut.png", "Folder" })
+            if (n == "Folder") Directory.CreateDirectory(Path.Combine(folder, n)); else File.WriteAllText(Path.Combine(folder, n), "x");
+        var hive = new Hive("HKCU") { Identity = RegistryIdentity.Root };
+        DesktopSettingsStore.Save(hive, new DesktopSettings(pics.Path_("Ocean.png"), WallpaperMode.Fill, "#1E1E2E", true, 64));
+        var desktop = new DesktopWindow(folder, hive, _ => { }) { Width = 1280, Height = 800 };
+        desktop.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(64, desktop.IconSize);
+        Assert.Equal(116, desktop.CellWidth);                          // 108 and the share of the 92 pixels left over
+        Assert.Equal(11, desktop.Columns);
+        Assert.Equal(Math.Floor(desktop.CellHeight), desktop.CellHeight);
+
+        DesktopSettingsStore.Save(hive, new DesktopSettings(pics.Path_("Ocean.png"), WallpaperMode.Fill, "#1E1E2E", true, 32));
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(32, desktop.IconSize);                            // changed in the settings page: the grid follows
+        Assert.True(desktop.CellWidth < 116);
+
+        if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is { Length: > 0 } dir)
+        {
+            DesktopSettingsStore.Save(hive, new DesktopSettings(pics.Path_("Dunes.png"), WallpaperMode.Fill, "#1E1E2E", true, 64));
+            Dispatcher.UIThread.RunJobs();
+            desktop.CaptureRenderedFrame()!.Save(System.IO.Path.Combine(dir, "desktop-icons.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+        }
+        desktop.Close();
     }
 }

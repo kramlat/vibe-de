@@ -23,7 +23,9 @@ public sealed class DesktopPageView : UserControl
     private readonly Border _preview = new() { Width = 320, Height = 180, CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1), HorizontalAlignment = HorizontalAlignment.Left, ClipToBounds = true };
     private readonly WrapPanel _gallery = new();
     private readonly ComboBox _mode = new() { ItemsSource = Enum.GetValues<WallpaperMode>() };
-    private readonly TextBox _color = new() { Watermark = "#RRGGBB", Width = 120, HorizontalAlignment = HorizontalAlignment.Left };
+    private static readonly (string Label, int Size)[] IconChoices = [("Small (32)", 32), ("Medium (48)", 48), ("Large (64)", 64), ("Extra large (96)", 96), ("Huge (128)", 128)];
+    private readonly ComboBox _iconSize = new() { ItemsSource = IconChoices.Select(c => c.Label).ToList() };
+    private readonly TextBox _color = new() { PlaceholderText = "#RRGGBB", Width = 120, HorizontalAlignment = HorizontalAlignment.Left };
     private readonly CheckBox _icons = new() { Content = "Show icons on the desktop" };
     private readonly TextBlock _colorError = new() { FontSize = 12, IsVisible = false };
     private bool _updating;
@@ -44,11 +46,13 @@ public sealed class DesktopPageView : UserControl
         browseButton.Click += async (_, _) => await BrowseAsync();
         panel.Children.Add(browseButton);
         panel.Children.Add(Row("Picture placement", _mode));
+        panel.Children.Add(Row("Desktop icon size", _iconSize));
         panel.Children.Add(Row("Background colour", new StackPanel { Spacing = 4, Children = { _color, _colorError } }));
         panel.Children.Add(_icons);
         Content = new ScrollViewer { Content = panel };
 
         _mode.SelectionChanged += (_, _) => { if (!_updating && _mode.SelectedItem is WallpaperMode m) Change(s => s with { Mode = m }); };
+        _iconSize.SelectionChanged += (_, _) => { if (!_updating && _iconSize.SelectedIndex is >= 0 and var i) Change(s => s with { IconSize = IconChoices[i].Size }); };
         _icons.IsCheckedChanged += (_, _) => { if (!_updating) Change(s => s with { ShowIcons = _icons.IsChecked == true }); };
         _color.TextChanged += (_, _) => { if (!_updating) SetColor(_color.Text ?? ""); };
         Reload();
@@ -62,6 +66,7 @@ public sealed class DesktopPageView : UserControl
 
     public void SelectWallpaper(string? path) => Change(s => s with { Wallpaper = path });
     public void SetMode(WallpaperMode mode) => Change(s => s with { Mode = mode });
+    public void SetIconSize(int size) => Change(s => s with { IconSize = size });
     public void SetShowIcons(bool show) => Change(s => s with { ShowIcons = show });
 
     // A colour that is not #RRGGBB is refused (and the field says so); the saved colour stays as it was.
@@ -94,6 +99,7 @@ public sealed class DesktopPageView : UserControl
         _preview.Background = WallpaperBrush.Create(settings);
         _preview.BorderBrush = ThemeTokens.Find(this, ThemeToken.Border, Brushes.Gray);
         _mode.SelectedItem = settings.Mode;
+        _iconSize.SelectedIndex = Array.FindIndex(IconChoices, c => c.Size == settings.IconSize);
         if (!_color.IsFocused) _color.Text = settings.BackgroundColor;
         _icons.IsChecked = settings.ShowIcons;
         _updating = false;

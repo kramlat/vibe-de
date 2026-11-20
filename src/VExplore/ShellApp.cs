@@ -29,6 +29,7 @@ public sealed class ShellApp : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        StartupTrace.Mark("Avalonia up");
         if (Host is { } host)
         {
             var engine = new ThemeEngine(ThemeCatalog.Discover());
@@ -41,20 +42,28 @@ public sealed class ShellApp : Application
             _poll = Shortcuts.Poll(TimeSpan.FromSeconds(3));
         }
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop && FirstWindow is { } make)
+        {
             desktop.MainWindow = make();
+            // Surfaces exist once the window is shown; the codec names the backend that won.
+            desktop.MainWindow.Opened += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(
+                () => RenderSetup.LogRenderer(desktop.MainWindow), Avalonia.Threading.DispatcherPriority.Background);
+        }
+        StartupTrace.Mark("first window created");
         base.OnFrameworkInitializationCompleted();
     }
 
-    // Wayland first with an X11 fallback: on vwm the shell runs as a native Wayland client.
-    public static AppBuilder Build() => AppBuilder.Configure<ShellApp>().UsePlatformDetect().UseWaylandWithFallback();
+    // Wayland first with an X11 fallback: on vwm the shell runs as a native Wayland client. The GPU
+    // pipelines (Vulkan, then EGL) are tried before software; RenderSetup writes what won to the log.
+    public static AppBuilder Build()
+        => AppBuilder.Configure<ShellApp>().UsePlatformDetect().UseVdeRender().UseWaylandWithFallback();
 
     // ---- what the windows need from the rest of the shell ----
 
     public static Window NewFileManager(ExplorerHost host, string? folder)
     {
         var xdg = XdgDirectories.Default;
-        var mime = new MimeDatabase(xdg);
-        var apps = DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment());
+        var mime = ShellData.Mime();
+        var apps = ShellData.Apps(Locale.FromEnvironment());
         var associations = new FileAssociations(xdg, mime, apps, Desktops(), host.Classes);
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
         var shell = new ShellExecute(associations, mime, types: types, elevation: Elevation);
@@ -71,9 +80,9 @@ public sealed class ShellApp : Application
     public static PropertySheetContext PropertyContext(ExplorerHost host, IReadOnlyList<string> paths)
     {
         var xdg = XdgDirectories.Default;
-        var mime = new MimeDatabase(xdg);
+        var mime = ShellData.Mime();
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
-        var associations = new FileAssociations(xdg, mime, DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment()), Desktops(), host.Classes);
+        var associations = new FileAssociations(xdg, mime, ShellData.Apps(Locale.FromEnvironment()), Desktops(), host.Classes);
         return new PropertySheetContext
         {
             Target = new PropertyTarget(paths, paths.Count == 1 ? types.GetMimeType(paths[0]) : ""),
@@ -82,7 +91,7 @@ public sealed class ShellApp : Application
             Handlers = host.PropertyHandlers,
             Loader = host.Loader,
             OpensWith = m => associations.GetDefault(m)?.Name,
-            ChangeOpensWith = m => _ = CommonDialogs.ChooseApplicationAsync(ActiveWindow, associations, DesktopEntryDatabase.Load(xdg, Locale.FromEnvironment()), Desktops(), m),
+            ChangeOpensWith = m => _ = CommonDialogs.ChooseApplicationAsync(ActiveWindow, associations, ShellData.Apps(Locale.FromEnvironment()), Desktops(), m),
             BuiltInProviders = [(PropertyPages.Clsid, new PropertyPages(Elevation))],   // the shell's own tabs: Permissions, Checksums, Customize
         };
     }
@@ -96,7 +105,7 @@ public sealed class ShellApp : Application
         {
             if (item.Entry is { } entry) ExplorerCommand.Launch(host, entry);
             else if (item.Command is { } command) ExplorerCommand.Launch(host, command);
-            else new ShellExecute(new FileAssociations(XdgDirectories.Default, new MimeDatabase(XdgDirectories.Default), DesktopEntryDatabase.Load(XdgDirectories.Default, Locale.FromEnvironment()), Desktops(), host.Classes), new MimeDatabase(XdgDirectories.Default)).Run("vdesettings");
+            else new ShellExecute(new FileAssociations(XdgDirectories.Default, ShellData.Mime(), ShellData.Apps(Locale.FromEnvironment()), Desktops(), host.Classes), ShellData.Mime()).Run("vdesettings");
         };
         return catalog;
     }

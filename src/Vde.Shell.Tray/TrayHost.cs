@@ -9,7 +9,11 @@ public sealed class TrayHost : IDisposable
 {
     private readonly DBusConnection _connection;
     private readonly StatusNotifierWatcherServer _watcher;
+    // by what identifies one icon: the bus name and the object path (one app may export several icons)
     private readonly Dictionary<string, StatusNotifierItemClient> _items = [];
+    // what the watcher knows each client as, to take it off its list again
+    private readonly Dictionary<StatusNotifierItemClient, string> _registrations = [];
+    private static string KeyOf(string service, string path) => service + path;
     private readonly object _gate = new();
     private readonly List<IDisposable> _watches = [];
 
@@ -23,21 +27,31 @@ public sealed class TrayHost : IDisposable
 
     // Starts on the session bus. Returns null when the session has no bus, or when another tray
     // host already owns the watcher name — one host serves every icon; a second is a mistake.
+    // Why it did not start is written to stderr (the session log): a missing tray is otherwise a mystery.
     public static async Task<TrayHost?> StartAsync(string? address = null)
     {
-        try
+        address ??= DBusAddress.Session;
+        if (string.IsNullOrEmpty(address))
         {
-            var watcher = await StatusNotifierWatcherServer.StartAsync(address ?? DBusAddress.Session!);
-            var host = new TrayHost(watcher.Connection, watcher);
-            await host.AdoptRegisteredItemsAsync();
-            return host;
-        }
-        catch (InvalidOperationException)
-        {
+            Console.Error.WriteLine("tray: no session bus (DBUS_SESSION_BUS_ADDRESS is not set): no tray icons");
             return null;
         }
-        catch (DBusExceptionBase)
+        try
         {
+            var watcher = await StatusNotifierWatcherServer.StartAsync(address);
+            var host = new TrayHost(watcher.Connection, watcher);
+            await host.AdoptRegisteredItemsAsync();
+            Console.Error.WriteLine("tray: serving org.kde.StatusNotifierWatcher");
+            return host;
+        }
+        catch (InvalidOperationException e)
+        {
+            Console.Error.WriteLine("tray: " + e.Message);   // another tray host owns the name
+            return null;
+        }
+        catch (Exception e) when (e is DBusExceptionBase or IOException or System.Net.Sockets.SocketException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine("tray: cannot use the session bus: " + e.Message);
             return null;
         }
     }
@@ -57,7 +71,7 @@ public sealed class TrayHost : IDisposable
     public StatusNotifierItemClient? Item(TrayIcon icon)
     {
         lock (_gate)
-            return _items.TryGetValue(icon.Service, out var item) ? item : null;
+            return _items.TryGetValue(KeyOf(icon.Service, icon.Path), out var item) ? item : null;
     }
 
     // A menu the item exports, or null when it has none.
@@ -71,9 +85,15 @@ public sealed class TrayHost : IDisposable
 
     public void Dispose()
     {
-        foreach (var item in _items.Values)
+        StatusNotifierItemClient[] items;
+        lock (_gate)
+        {
+            items = _items.Values.ToArray();
+            _items.Clear();
+            _registrations.Clear();
+        }
+        foreach (var item in items)
             item.Dispose();
-        _items.Clear();
         foreach (var watch in _watches)
             try { watch.Dispose(); } catch (ObjectDisposedException) { }
         _watcher.Dispose();
@@ -90,8 +110,8 @@ public sealed class TrayHost : IDisposable
                 {
                     if (!n.HasValue) return;
                     var (name, _, newOwner) = n.Value;
-                    if (newOwner.Length != 0 || !name.StartsWith("org.kde.StatusNotifierItem", StringComparison.Ordinal)) return;
-                    Drop(name);
+                    if (newOwner.Length != 0) return;
+                    Drop(name);   // the app's unique name or its well-known one: either way its icons go
                 }, null, ObserverFlags.None, null);
             _watches.Add(watch);
         }
@@ -103,30 +123,49 @@ public sealed class TrayHost : IDisposable
 
     private void Drop(string service)
     {
-        StatusNotifierItemClient? item;
+        List<(StatusNotifierItemClient Client, string Registration)> gone;
         lock (_gate)
-            if (!_items.TryGetValue(service, out item)) return;
-            else _items.Remove(service);
-        item.Dispose();
-        _watcher.UnregisterItem(service);
+        {
+            gone = _items.Values.Where(c => c.Service == service).Select(c => (c, _registrations.GetValueOrDefault(c, service))).ToList();
+            foreach (var (client, _) in gone)
+            {
+                _items.Remove(KeyOf(client.Service, client.Path));
+                _registrations.Remove(client);
+            }
+        }
+        if (gone.Count == 0) return;
+        foreach (var (client, registration) in gone)
+        {
+            client.Dispose();
+            _watcher.UnregisterItem(registration);
+        }
         Changed?.Invoke();
     }
 
-    private async void OnItemRegistered(object? sender, string service)
+    private async void OnItemRegistered(object? sender, string registration)
     {
-        // The app may still be exporting its item object; a few gentle rounds first.
-        for (int attempt = 0; attempt < 5; attempt++)
+        // An async void method must not let anything out: it would take the whole process down.
+        try
         {
-            var client = await StatusNotifierItemClient.OpenAsync(_connection, service);
-            if (client is not null)
+            // The app may still be exporting its item object; a few gentle rounds first.
+            for (int attempt = 0; attempt < 5; attempt++)
             {
-                Adopt(client, announce: false);
-                return;
+                var client = await StatusNotifierItemClient.OpenAsync(_connection, registration);
+                if (client is not null)
+                {
+                    Adopt(client, registration);
+                    return;
+                }
+                await Task.Delay(250);
             }
-            await Task.Delay(250);
+            // Never appeared: drop it again so watchers downstream do not wait on a ghost.
+            _watcher.UnregisterItem(registration);
         }
-        // Never appeared: drop it again so watchers downstream do not wait on a ghost.
-        _watcher.UnregisterItem(service);
+        catch (Exception e) when (e is DBusExceptionBase or InvalidOperationException or ArgumentException or ObjectDisposedException)
+        {
+            Console.Error.WriteLine($"tray: could not read item {registration}: {e.Message}");
+            try { _watcher.UnregisterItem(registration); } catch (ObjectDisposedException) { }
+        }
     }
 
     private Task<string[]> AdvertiseAsync()
@@ -157,21 +196,16 @@ public sealed class TrayHost : IDisposable
                 OnItemRegistered(this, name);
     }
 
-    private void Adopt(StatusNotifierItemClient client, bool announce)
+    private void Adopt(StatusNotifierItemClient client, string registration)
     {
         client.Changed += () => Changed?.Invoke();
-        client.Gone += () =>
-        {
-            client.Dispose();
-            lock (_gate)
-                _items.Remove(client.Service);
-            _watcher.UnregisterItem(client.Service);
-            Changed?.Invoke();
-        };
+        client.Gone += () => Drop(client.Service);
         lock (_gate)
         {
-            if (_items.Remove(client.Service)) { }
-            _items[client.Service] = client;
+            var key = KeyOf(client.Service, client.Path);
+            if (_items.TryGetValue(key, out var old)) { old.Dispose(); _registrations.Remove(old); }
+            _items[key] = client;
+            _registrations[client] = registration;
         }
         Changed?.Invoke();
     }

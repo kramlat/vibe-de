@@ -28,6 +28,8 @@ public sealed record TrayIcon(
     public string Category { get; init; } = "";
     public string Status { get; init; } = "Active";   // Active, Passive or NeedsAttention
     public string IconName { get; init; } = "";
+    // A folder of icons the app brings itself (libappindicator apps put theirs in a temporary one).
+    public string IconThemePath { get; init; } = "";
     public TrayPixmap? IconPixmap { get; init; }
     public string AttentionIconName { get; init; } = "";
     public TrayPixmap? AttentionIconPixmap { get; init; }

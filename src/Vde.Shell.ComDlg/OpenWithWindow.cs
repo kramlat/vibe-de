@@ -11,7 +11,7 @@ namespace Vde.Shell.ComDlg;
 public sealed class OpenWithWindow : Window
 {
     private readonly OpenWithModel _model;
-    private readonly TextBox _search = new() { Watermark = "Search applications" };
+    private readonly TextBox _search = new() { PlaceholderText = "Search applications" };
     private readonly StackPanel _list = new() { Spacing = 2 };
     private readonly CheckBox _always;
     private readonly Button _ok;

@@ -24,7 +24,7 @@ public sealed class GreeterWindow : Window
     private readonly TextBlock _date = new() { FontSize = 20, HorizontalAlignment = HorizontalAlignment.Center, Foreground = Brushes.White };
     private readonly ContentControl _center = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
     private readonly StackPanel _others = new() { Spacing = 8, VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(32) };
-    private readonly TextBox _password = new() { Width = 280, Watermark = "Password" };
+    private readonly TextBox _password = new() { Width = 280, PlaceholderText = "Password" };
     private readonly TextBlock _message = new() { TextAlignment = TextAlignment.Center, MaxWidth = 320, TextWrapping = TextWrapping.Wrap };
     private readonly ComboBox _sessions = new() { MinWidth = 200 };
     private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromSeconds(1) };
@@ -36,7 +36,7 @@ public sealed class GreeterWindow : Window
         _now = now ?? (() => DateTime.Now);
         _power = power ?? (_ => { });
         Title = "Login";
-        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
+        WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         WindowState = WindowState.FullScreen;
         Background = background ?? new LinearGradientBrush
         {
@@ -127,7 +127,7 @@ public sealed class GreeterWindow : Window
         if (_model.Stage == GreeterStage.Prompt)
         {
             _password.PasswordChar = _model.PromptSecret ? '•' : '\0';
-            _password.Watermark = _model.PromptText;
+            _password.PlaceholderText = _model.PromptText;
             var go = new Button { Content = "→", Padding = new Thickness(12, 6) };
             go.Click += async (_, _) => await Submit();
             panel.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, HorizontalAlignment = HorizontalAlignment.Center, Children = { Detach(_password), go } });
@@ -164,7 +164,7 @@ public sealed class GreeterWindow : Window
         var other = new Button { Content = "Other user…", HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 10, 0, 0), Foreground = Brushes.White };
         other.Click += async (_, _) =>
         {
-            var name = new TextBox { Width = 240, Watermark = "User name" };
+            var name = new TextBox { Width = 240, PlaceholderText = "User name" };
             var dialog = new StackPanel { Spacing = 10, Children = { new TextBlock { Text = "Log in as", FontSize = 22, HorizontalAlignment = HorizontalAlignment.Center }, name } };
             _center.Content = dialog;
             name.KeyDown += async (_, e) => { if (e.Key == Key.Enter && (name.Text ?? "").Trim() is { Length: > 0 } typed) { e.Handled = true; await _model.BeginAsync(typed); } else if (e.Key == Key.Escape) { e.Handled = true; ShowUserList(); } };

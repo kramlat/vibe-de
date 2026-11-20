@@ -35,7 +35,7 @@ public sealed class IconFixture : IDisposable
             using (var fb = bmp.Lock())
                 for (int i = 0; i < 16 * 16; i++)
                     System.Runtime.InteropServices.Marshal.WriteInt32(fb.Address, i * 4, unchecked((int)0xFF0000FF));   // opaque blue, BGRA
-            bmp.Save(Path.Combine(themeDir, "16", "blue.png"));
+            bmp.Save(Path.Combine(themeDir, "16", "blue.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
         }
 
         var env = new Dictionary<string, string> { ["HOME"] = Root, ["XDG_DATA_HOME"] = Path.Combine(Root, "data"), ["XDG_DATA_DIRS"] = Path.Combine(Root, "none") };
@@ -55,9 +55,9 @@ public class ShellIconProviderTests
         using var fx = new IconFixture();
         var provider = fx.Provider();
 
-        Assert.IsType<Bitmap>(provider.Load(["red"], 16));   // SVG, rasterized at load
-        Assert.IsType<Bitmap>(provider.Load(["blue"], 16));
-        Assert.IsType<Bitmap>(provider.Load(["no-such-icon"], 16));   // generic fallback
+        Assert.IsAssignableFrom<Bitmap>(provider.Load(["red"], 16));   // SVG, rasterized at load
+        Assert.IsAssignableFrom<Bitmap>(provider.Load(["blue"], 16));
+        Assert.IsAssignableFrom<Bitmap>(provider.Load(["no-such-icon"], 16));   // generic fallback
         Assert.Same(provider.Load(["red"], 16), provider.Load(["red"], 16));   // cached
     }
 
@@ -67,7 +67,7 @@ public class ShellIconProviderTests
         using var fx = new IconFixture();
         var provider = fx.Provider();
 
-        Assert.IsType<Bitmap>(provider.Load(["missing", "blue", "red"], 16));
+        Assert.IsAssignableFrom<Bitmap>(provider.Load(["missing", "blue", "red"], 16));
         // "broken" exists but cannot be parsed: no image, and no exception for the caller
         Assert.Null(provider.Load(["broken"], 16));
     }
@@ -209,7 +209,7 @@ public class DriveTileTests
                 TestTheme.Engine.Apply(new ThemeSelection(theme, variant));
                 var window = new Window { Width = 320, Height = 520, Content = panel };
                 window.Show();
-                window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"tiles-{theme}-{variant}.png"));
+                window.CaptureRenderedFrame()!.Save(Path.Combine(dir, $"tiles-{theme}-{variant}.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
                 window.Content = null;
                 window.Close();
             }
@@ -488,7 +488,7 @@ public class FileManagerControlTests
             var window = new Window { Width = 460, Height = 320, Content = view };
             window.Show();
             view.GetVisualDescendants().OfType<Button>().Single(b => (string?)b.Tag == "footer:Power").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
-            window.CaptureRenderedFrame()!.Save(Path.Combine(shots, "launcher-footer.png"));
+            window.CaptureRenderedFrame()!.Save(Path.Combine(shots, "launcher-footer.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
         }
         finally { Directory.Delete(dir, recursive: true); }
     }

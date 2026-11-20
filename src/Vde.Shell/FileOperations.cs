@@ -18,6 +18,41 @@ public sealed class FileOperationOptions
     public ConflictResolver? OnConflict { get; init; }
     public IProgress<FileProgress>? Progress { get; init; }
     public CancellationToken Cancel { get; init; }
+    // When set, copying stops between blocks while the gate is paused (the pause button of a transfer window).
+    public PauseGate? Pause { get; init; }
+}
+
+// Lets one thread stop another at a safe point and let it go on again. A cancel wakes a paused waiter.
+public sealed class PauseGate
+{
+    private readonly object _lock = new();
+    private bool _paused;
+
+    public bool IsPaused { get { lock (_lock) return _paused; } }
+
+    public void Pause() { lock (_lock) _paused = true; }
+
+    public void Resume()
+    {
+        lock (_lock)
+        {
+            _paused = false;
+            Monitor.PulseAll(_lock);
+        }
+    }
+
+    // Returns at once when not paused; otherwise waits for Resume, and throws if cancelled meanwhile.
+    public void Wait(CancellationToken cancel)
+    {
+        lock (_lock)
+        {
+            while (_paused)
+            {
+                cancel.ThrowIfCancellationRequested();
+                Monitor.Wait(_lock, 100);   // wakes now and then to see a cancel
+            }
+        }
+    }
 }
 
 public static class FileOperations
@@ -292,6 +327,7 @@ public static class FileOperations
 
         public void Bytes(string path, long count)
         {
+            _options.Pause?.Wait(_options.Cancel);
             _bytes += count;
             _options.Progress?.Report(new FileProgress(path, _bytes, _bytesTotal, _items, _itemsTotal));
         }

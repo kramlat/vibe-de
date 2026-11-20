@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Styling;
 using SkiaSharp;
 using Vde.Shell;
@@ -19,27 +20,93 @@ public static class WallpaperMica
     public const double Bleed = 0.20;
 
     private static (string Path, int Width, double Bleed, bool Dark, Bitmap Bitmap)? _cache;
+    private static readonly object _gate = new();
+    private static readonly Dictionary<string, List<Action>> _waiting = new(StringComparer.Ordinal);
+    private static readonly HashSet<string> _failed = new(StringComparer.Ordinal);
 
     // The washed, blurred wallpaper at `width` pixels across. Which neutral base washes over it follows the
     // application's theme variant (light: near-white, dark: near-black), the way Windows switches Mica.
     // `wallpaper` is the path from DesktopSettings; a missing or unreadable picture (the desktop then paints
     // its background colour) gives null, and callers fall back to their theme's plain surface with a scrim
-    // behind label text.
+    // behind label text. Complete but possibly slow the first time (a 4K picture is decoded and blurred): a
+    // window uses Peek and WhenReady instead, so it opens at once and gets the backdrop a moment later.
     public static Bitmap? Source(string? wallpaper, int width = 1024, double bleed = Bleed)
     {
         if (string.IsNullOrEmpty(wallpaper) || !File.Exists(wallpaper) || width <= 0)
             return null;
-        bool dark = Application.Current?.RequestedThemeVariant == ThemeVariant.Dark;
-        if (_cache is { } hit && hit.Path == wallpaper && hit.Width == width && hit.Bleed == bleed && hit.Dark == dark)
-            return hit.Bitmap;
+        return Make(wallpaper, width, bleed, IsDark());
+    }
+
+    // What is ready without the slow part: the picture already made in this process, or its copy in the disk
+    // cache (written by an earlier program). Null when it still has to be made: see WhenReady.
+    public static Bitmap? Peek(string? wallpaper, int width = 1024, double bleed = Bleed)
+    {
+        if (string.IsNullOrEmpty(wallpaper) || !File.Exists(wallpaper) || width <= 0)
+            return null;
+        bool dark = IsDark();
+        lock (_gate)
+            if (_cache is { } hit && hit.Path == wallpaper && hit.Width == width && hit.Bleed == bleed && hit.Dark == dark)
+                return hit.Bitmap;
+        if (ReadDisk(wallpaper, width, bleed, dark) is { } cached)
+        {
+            lock (_gate) _cache = (wallpaper, width, bleed, dark, cached);
+            return cached;
+        }
+        return null;
+    }
+
+    // Makes the picture on a worker thread and then calls `ready` (on that thread: post to the UI from it).
+    // Several windows asking for the same picture share one piece of work. Not called when there is no picture.
+    public static void WhenReady(string? wallpaper, Action ready, int width = 1024, double bleed = Bleed)
+    {
+        if (string.IsNullOrEmpty(wallpaper) || !File.Exists(wallpaper) || width <= 0)
+            return;
+        bool dark = IsDark();   // read here: the theme variant belongs to the UI thread
+        var key = wallpaper + "|" + width + "|" + bleed + "|" + dark;
+        lock (_gate)
+        {
+            if (_failed.Contains(key)) return;   // it could not be made before: do not try on every window move
+            if (_waiting.TryGetValue(key, out var list)) { list.Add(ready); return; }
+            _waiting[key] = [ready];
+        }
+        Task.Run(() =>
+        {
+            Bitmap? made = null;
+            try { made = Make(wallpaper, width, bleed, dark); }
+            catch (Exception e) when (e is IOException or ArgumentException or NotSupportedException or UnauthorizedAccessException) { }
+            List<Action> callbacks;
+            lock (_gate)
+            {
+                callbacks = _waiting[key];
+                _waiting.Remove(key);
+                if (made is null) _failed.Add(key);
+            }
+            if (made is not null)
+                foreach (var callback in callbacks) callback();
+        });
+    }
+
+    private static bool IsDark() => Application.Current?.RequestedThemeVariant == ThemeVariant.Dark;
+
+    private static Bitmap? Make(string wallpaper, int width, double bleed, bool dark)
+    {
+        lock (_gate)
+            if (_cache is { } hit && hit.Path == wallpaper && hit.Width == width && hit.Bleed == bleed && hit.Dark == dark)
+                return hit.Bitmap;
+        if (ReadDisk(wallpaper, width, bleed, dark) is { } cached)
+        {
+            lock (_gate) _cache = (wallpaper, width, bleed, dark, cached);
+            return cached;
+        }
         Bitmap? washed = null;
         try
         {
-            using var original = SKBitmap.Decode(wallpaper);
+            using var original = DecodeSmall(wallpaper, width);
             if (original is { Width: > 0, Height: > 0 })
             {
                 washed = Wash(original, width, bleed, dark);
-                _cache = (wallpaper, width, bleed, dark, washed);
+                lock (_gate) _cache = (wallpaper, width, bleed, dark, washed);
+                WriteDisk(wallpaper, width, bleed, dark, washed);
             }
         }
         catch (Exception e) when (e is IOException or ArgumentException or NotSupportedException)
@@ -47,6 +114,27 @@ public static class WallpaperMica
             // an unreadable image: just the colour, like the desktop does
         }
         return washed;
+    }
+
+    // The picture decoded no larger than the blur needs: a JPEG can be decoded at 1/2, 1/4 or 1/8 size, which
+    // is several times faster than decoding a 4K picture and shrinking it afterwards. Other formats decode whole.
+    private static SKBitmap? DecodeSmall(string path, int width)
+    {
+        using var codec = SKCodec.Create(path);
+        if (codec is null)
+            return null;
+        var full = codec.Info;
+        if (full.Width > width)
+        {
+            var size = codec.GetScaledDimensions((float)width / full.Width);
+            var info = new SKImageInfo(size.Width, size.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+            var small = new SKBitmap(info);
+            var result = codec.GetPixels(info, small.GetPixels());
+            if (result is SKCodecResult.Success or SKCodecResult.IncompleteInput)
+                return small;
+            small.Dispose();
+        }
+        return SKBitmap.Decode(path);
     }
 
     private static Bitmap Wash(SKBitmap original, int width, double bleed, bool dark)
@@ -75,9 +163,49 @@ public static class WallpaperMica
         var base_ = dark ? SKColor.Parse("#202020") : SKColor.Parse("#F3F3F3");
         surface.Canvas.DrawColor(base_.WithAlpha((byte)Math.Round(255 * (1 - bleed))), SKBlendMode.SrcOver);
         using var image = surface.Snapshot();
-        using var data = image.Encode(SKEncodedImageFormat.Png, 90);
-        using var png = new MemoryStream(data.ToArray());
-        return new Bitmap(png);
+        // the pixels go straight into the bitmap (no PNG encode and decode in between)
+        var bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormats.Bgra8888);
+        using (var frame = bitmap.Lock())
+            image.ReadPixels(new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul), frame.Address, frame.RowBytes);
+        return bitmap;
+    }
+
+    // ---- the disk cache: the washed picture as a PNG named by what it was made from ----
+
+    private static string CacheFile(string wallpaper, int width, double bleed, bool dark)
+    {
+        var info = new FileInfo(wallpaper);
+        var text = $"{wallpaper}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{width}|{bleed:R}|{dark}";
+        var hash = System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(text));
+        var cache = Environment.GetEnvironmentVariable("XDG_CACHE_HOME") is { Length: > 0 } xdg
+            ? xdg : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache");
+        return Path.Combine(cache, "vde", "mica", "v2", Convert.ToHexString(hash, 0, 10).ToLowerInvariant() + ".png");
+    }
+
+    private static Bitmap? ReadDisk(string wallpaper, int width, double bleed, bool dark)
+    {
+        try
+        {
+            var file = CacheFile(wallpaper, width, bleed, dark);
+            return File.Exists(file) ? new Bitmap(file) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
+    }
+
+    private static void WriteDisk(string wallpaper, int width, double bleed, bool dark, Bitmap washed)
+    {
+        try
+        {
+            var file = CacheFile(wallpaper, width, bleed, dark);
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            var temp = file + "." + Environment.ProcessId + ".tmp";
+            washed.Save(temp, new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
+            File.Move(temp, file, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException) { }
     }
 
     // A brush that shows `crop` (a rectangle of the blurred picture) stretched over the whole element.

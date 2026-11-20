@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Vde.Shell;
 using Vde.Shell.ComDlg;
 using Vde.Shell.Controls;
+using Vde.Shell.Theme;
 using Vibe.Registry;
 
 namespace VExplore.Windows;
@@ -27,6 +28,10 @@ public sealed class RegEditWindow : Window
     private readonly ListBox _tree = new();
     private readonly ListBox _values = new();
     private readonly TextBlock _status = new();
+    private readonly TextBlock _address = new();
+    private readonly Border _statusHost = new();
+    private MenuItem? _favoritesMenu;
+    private static readonly string FavoritesPath = @"Software\Vde\Regedit\Favorites";
     private RegKeyNode? _selected;
     private bool _refreshing;
 
@@ -83,12 +88,16 @@ public sealed class RegEditWindow : Window
         _tree.ContextMenu = KeyMenu();
         _values.ContextMenu = ValueMenu();
 
+        Content = BuildLayout();
+
         RebuildVisible();
         _tree.SelectedIndex = 0;   // HKEY_CURRENT_USER: its values (usually none) show at once
     }
 
     // ---- what tests and the menus reach ----
 
+    // The address line as regedit shows it: the selected key in front of its imaginary Computer\ share.
+    public string? AddressText => _address.Text;
     public IReadOnlyList<string> VisiblePaths => _visible.Select(n => n.FullPath).ToList();
     public string? SelectedPath => _selected?.FullPath;
     public IReadOnlyList<string> ShownValues => _values.Items.OfType<RegValueRow>().Select(r => r.Name).ToList();
@@ -228,6 +237,7 @@ public sealed class RegEditWindow : Window
     private void Select(RegKeyNode node)
     {
         _selected = node;
+        _address.Text = "Computer\\" + node.FullPath;   // the way regedit's address line names a key
         SyncSelection();
         ShowValues();
     }
@@ -433,6 +443,25 @@ public sealed class RegEditWindow : Window
 
     private Menu BuildMenu()
     {
+        _favoritesMenu = new MenuItem { Header = "_Favorites" };
+        RebuildFavorites();
+        return new Menu { Items = { FileMenu(), EditMenu(), ViewMenu(), _favoritesMenu, HelpMenu() } };
+    }
+
+    private MenuItem FileMenu() => new()
+    {
+        Header = "_File",
+        Items =
+        {
+            Item("Import .reg…", () => _ = ImportFileAsync()),
+            Item("Export key as .reg…", () => _ = ExportKeyAsync()),
+            new Separator(),
+            Item("Exit", () => Close()),
+        },
+    };
+
+    private MenuItem EditMenu()
+    {
         var kinds = new MenuItem { Header = "New value" };
         foreach (var kind in RegEditModel.Kinds)
         {
@@ -441,37 +470,89 @@ public sealed class RegEditWindow : Window
             item.Click += (_, _) => Run(() => NewValue(k));
             kinds.Items.Add(item);
         }
-        return new Menu
+        return new MenuItem
         {
+            Header = "_Edit",
             Items =
             {
-                new MenuItem
-                {
-                    Header = "_File",
-                    Items =
-                    {
-                        Item("Import .reg…", () => _ = ImportFileAsync()),
-                        Item("Export key as .reg…", () => _ = ExportKeyAsync()),
-                        new Separator(),
-                        Item("Refresh", () => Refresh(), new KeyGesture(Key.F5)),
-                    },
-                },
-                new MenuItem
-                {
-                    Header = "_Edit",
-                    Items =
-                    {
-                        Item("New key", () => _ = NewKeyAsync()),
-                        kinds,
-                        Item("Modify", () => ModifyValue()),
-                        new Separator(),
-                        Item("Delete key…", () => _ = DeleteKeyAsync()),
-                        Item("Delete value", () => DeleteValue()),
-                    },
-                },
+                Item("New key", () => _ = NewKeyAsync()),
+                kinds,
+                Item("Modify", () => ModifyValue()),
+                new Separator(),
+                Item("Rename key…", () => _ = RenameKeyAsync()),
+                Item("Delete key…", () => _ = DeleteKeyAsync()),
+                Item("Delete value", () => DeleteValue()),
             },
         };
     }
+
+    private MenuItem ViewMenu()
+    {
+        var toggle = new MenuItem { Header = "Status bar", IsChecked = true };
+        toggle.Click += (_, _) => { if (_statusHost is { } bar) bar.IsVisible = !bar.IsVisible; };
+        return new MenuItem
+        {
+            Header = "_View",
+            Items =
+            {
+                Item("Refresh", () => Refresh(), new KeyGesture(Key.F5)),
+                new Separator(),
+                toggle,
+            },
+        };
+    }
+
+    // The bookmarks live as values under Software\Vde\Regedit\Favorites in the user hive: the name is the
+    // wording of the menu item, its data the key path to jump to.
+    private void RebuildFavorites()
+    {
+        if (_favoritesMenu is null) return;
+        var add = new MenuItem { Header = "Add to Favorites…" };
+        add.Click += (_, _) => Run(() => _ = AddFavoriteAsync());
+        _favoritesMenu.Items.Clear();
+        _favoritesMenu.Items.Add(add);
+        try
+        {
+            if (_user.KeyExists(FavoritesPath))
+                foreach (var favorite in _user.GetValues(FavoritesPath).Where(v => v.Kind == RegistryValueKind.String))
+                {
+                    var item = new MenuItem { Header = favorite.Name };
+                    var path = (string?)favorite.Data;
+                    item.Click += (_, _) => SelectPath(path ?? "");   // a path the tree has dropped just does nothing
+                    _favoritesMenu.Items.Add(item);
+                }
+        }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private async Task AddFavoriteAsync()
+    {
+        if (_selected is not { } node) return;
+        var name = await AskAsync("Bookmark name:", node.Display, RegEditModel.NameProblem);
+        if (name is not null) Run(() => AddFavorite(name));
+    }
+
+    // Adds the selected key to the Favorites menu (the menu itself asks for the bookmark name first).
+    public void AddFavorite(string name)
+    {
+        if (_selected is not { } node)
+            throw new InvalidOperationException("No key is selected.");
+        if (RegEditModel.NameProblem(name) is { } problem)
+            throw new ArgumentException(problem);
+        _user.SetValue(FavoritesPath, name, RegistryValueKind.String, node.FullPath);
+        RebuildFavorites();
+    }
+
+    private MenuItem HelpMenu() => new()
+    {
+        Header = "_Help",
+        Items =
+        {
+            Item("About Registry Editor", () => _ = CommonDialogs.MessageBoxAsync(this,
+                "Vibe Registry Editor\n\nThe keys and values of the user and the system hive.\n\nPart of the Vibe desktop.",
+                "Registry Editor", MessageButtons.Ok, MessageIcon.Information)),
+        },
+    };
 
     private ContextMenu KeyMenu() => new()
     {
@@ -574,6 +655,71 @@ public sealed class RegEditWindow : Window
         }
     }
 
+    // ---- layout ----
+
+    // The window the way regedit lays it out: the menu bar, the address line under it, the key tree beside
+    // the values of the chosen key with Name/Type/Data headers, and the status bar along the bottom.
+    private Control BuildLayout()
+    {
+        var border = ThemeTokens.Find(this, ThemeToken.Border, Brushes.LightGray);
+
+        _statusHost.Padding = new Thickness(10, 4);
+        _statusHost.Child = _status;
+        _address.TextTrimming = TextTrimming.CharacterEllipsis;
+
+        var address = new Border
+        {
+            Background = Brushes.Transparent,
+            BorderBrush = border, BorderThickness = new Thickness(1),
+            Padding = new Thickness(8, 4), Margin = new Thickness(8, 6, 8, 2),
+            Child = _address,
+        };
+
+        var header = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("240,130,*"),
+            Margin = new Thickness(8, 6, 8, 3),
+        };
+        foreach (var (text, column) in new[] { ("Name", 0), ("Type", 1), ("Data", 2) })
+        {
+            var label = new TextBlock { [Grid.ColumnProperty] = column, Text = text };
+            header.Children.Add(label);
+        }
+        var headerRule = new Border { Height = 1, Background = border, Margin = new Thickness(8, 0, 8, 0) };
+
+        var values = new DockPanel { LastChildFill = true };
+        DockPanel.SetDock(header, Dock.Top);
+        DockPanel.SetDock(headerRule, Dock.Top);
+        values.Children.Add(header);
+        values.Children.Add(headerRule);
+        values.Children.Add(_values);
+
+        var body = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("280,4,*"),
+            Margin = new Thickness(0, 2, 0, 0),
+        };
+        body.Children.Add(_tree);
+        body.Children.Add(new GridSplitter
+        {
+            Width = 4, [Grid.ColumnProperty] = 1,
+            Background = Brushes.Transparent, ResizeBehavior = GridResizeBehavior.BasedOnAlignment,
+        });
+        body.Children.Add(values);
+        Grid.SetColumn(values, 2);
+        _values.Margin = new Thickness(8, 0, 0, 0);
+
+        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto") };
+        root.Children.Add(BuildMenu());
+        Grid.SetRow(address, 1);
+        root.Children.Add(address);
+        Grid.SetRow(body, 2);
+        root.Children.Add(body);
+        Grid.SetRow(_statusHost, 3);
+        root.Children.Add(_statusHost);
+        return root;
+    }
+
     // ---- row visuals ----
 
     private StackPanel KeyRow(RegKeyNode node)
@@ -609,7 +755,15 @@ public sealed class RegEditWindow : Window
         ColumnDefinitions = new ColumnDefinitions("240,130,*"), Margin = new Thickness(8, 2),
         Children =
         {
-            new TextBlock { Text = row.Name.Length == 0 ? "(Default)" : row.Name, VerticalAlignment = VerticalAlignment.Center },
+            new StackPanel
+            {
+                Orientation = Orientation.Horizontal, Spacing = 6,
+                Children =
+                {
+                    new ShellIcon { IconName = KindIcon(row.Kind), IconSize = 16, VerticalAlignment = VerticalAlignment.Center },
+                    new TextBlock { Text = row.Name.Length == 0 ? "(Default)" : row.Name, VerticalAlignment = VerticalAlignment.Center },
+                },
+            },
             new TextBlock
             {
                 Text = row.Type, [Grid.ColumnProperty] = 1, VerticalAlignment = VerticalAlignment.Center,
@@ -621,6 +775,23 @@ public sealed class RegEditWindow : Window
                 VerticalAlignment = VerticalAlignment.Center,
             },
         },
+    };
+
+    // The value-type icons regedit shows per row, as breeze mimetype icons, from closest match down.
+    private static string KindIcon(RegistryValueKind kind) => kind switch
+    {
+        RegistryValueKind.Binary or RegistryValueKind.DWordBigEndian
+            or RegistryValueKind.ResourceList or RegistryValueKind.FullResourceDescriptor
+            or RegistryValueKind.ResourceRequirementsList or RegistryValueKind.None => "application-octet-stream",
+        RegistryValueKind.DWord or RegistryValueKind.QWord
+            or RegistryValueKind.Int32 or RegistryValueKind.Int64
+            or RegistryValueKind.Float or RegistryValueKind.Double or RegistryValueKind.Decimal => "text-x-hex",
+        RegistryValueKind.Bool or RegistryValueKind.Guid => "text-x-generic",
+        RegistryValueKind.Date or RegistryValueKind.Time or RegistryValueKind.DateTime => "text-calendar",
+        RegistryValueKind.Json => "application-json",
+        RegistryValueKind.Xml => "application-xml",
+        RegistryValueKind.Yaml => "text-x-generic",
+        _ => "text-plain",   // strings and links
     };
 
     private static string NextName(IEnumerable<string> existing, string baseName)

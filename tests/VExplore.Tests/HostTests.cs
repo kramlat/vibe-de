@@ -1,6 +1,6 @@
+using Vibe.Registry;
 using Vde.Components;
 using Vde.Shell.Notifications;
-using Vibe.Registry;
 using VExplore;
 
 namespace VExplore.Tests;

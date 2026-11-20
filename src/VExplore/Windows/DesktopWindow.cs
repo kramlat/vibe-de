@@ -20,7 +20,13 @@ namespace VExplore.Windows;
 // on the desktop shows up at once.
 public sealed class DesktopWindow : Window
 {
-    public const double CellWidth = 96, CellHeight = 100, Margin_ = 12;
+    // The icon grid, sized the way Plasma's desktop does it (DesktopMetrics): from the icon size in the settings.
+    private DesktopMetrics _metrics = new();
+    private double ViewportWidth => Bounds.Width > 0 ? Bounds.Width : Width;
+    private double ViewportHeight => Bounds.Height > 0 ? Bounds.Height : Height;
+    public double CellWidth => _metrics.CellWidth(ViewportWidth);
+    public double CellHeight => _metrics.CellHeight(ViewportHeight);
+    public int IconSize => _metrics.Icon;
 
     private readonly string _folder;
     private readonly IHive _hive;
@@ -67,7 +73,7 @@ public sealed class DesktopWindow : Window
         _clipboard = clipboard ?? new AvaloniaFileClipboard(() => GetTopLevel(this));
 
         Title = "Desktop";
-        SystemDecorations = Avalonia.Controls.WindowDecorations.None;
+        WindowDecorations = Avalonia.Controls.WindowDecorations.None;
         ShowInTaskbar = false;
         X11WindowHints.SetType(this, X11WindowHints.Kind.Desktop);
         WindowState = WindowState.Maximized;
@@ -82,8 +88,8 @@ public sealed class DesktopWindow : Window
             var formats = new Dictionary<string, byte[]>();
             foreach (var item in e.DataTransfer.Items.Select(i => (IDataTransferItem)i))
                 foreach (var f in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
-                    if (item.Contains(DataFormat.CreateBytesPlatformFormat(f)))
-                        formats[f] = item.TryGetValue(DataFormat.CreateBytesPlatformFormat(f));
+                    if (item.Contains(DataFormat.CreateBytesPlatformFormat(f)) && item.TryGetValue(DataFormat.CreateBytesPlatformFormat(f)) is { } bytes)
+                        formats[f] = bytes;
             if (FileTransfer.FromFormats(formats) is { } t)
                 HandleDrop(t.Paths, null, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
             e.Handled = true;
@@ -104,8 +110,8 @@ public sealed class DesktopWindow : Window
 
     public IReadOnlyList<FileEntry> Entries => _entries;
     public IReadOnlyCollection<string> SelectedNames => _selected;
-    public int Columns => Math.Max(1, (int)((Bounds.Width > 0 ? Bounds.Width : Width) / CellWidth));
-    public int Rows => Math.Max(1, (int)((Bounds.Height > 0 ? Bounds.Height : Height) / CellHeight));
+    public int Columns => Math.Max(1, (int)(ViewportWidth / CellWidth));
+    public int Rows => Math.Max(1, (int)(ViewportHeight / CellHeight));
     public IReadOnlyList<string> MenuLabels => _canvas.ContextMenu!.Items.OfType<MenuItem>().Select(m => ((Grid)m.Header!).Children.OfType<TextBlock>().First().Text ?? "").ToList();
     public IReadOnlyList<string> MenuShortcuts => _canvas.ContextMenu!.Items.OfType<MenuItem>().Select(m => ((Grid)m.Header!).Children.OfType<TextBlock>().Last().Text ?? "").ToList();
     public ShortcutStyle ShortcutStyle => _shortcuts.Style;
@@ -139,6 +145,7 @@ public sealed class DesktopWindow : Window
         var settings = DesktopSettingsStore.Load(_hive, _defaults);
         Background = WallpaperBrush.Create(settings);
         _mode = settings.Mode;
+        _metrics = new DesktopMetrics(settings.IconSize);
         _canvas.Children.Clear();
         _icons.Clear();
         // the shell folders first (This Computer, as the first icon), then the files of the desktop folder
@@ -162,10 +169,11 @@ public sealed class DesktopWindow : Window
         }
     }
 
-    private static void Place(Control icon, Cell cell)
+    // Whole pixels only: an icon on a fractional position is drawn blurred (Plasma floors for the same reason).
+    private void Place(Control icon, Cell cell)
     {
-        Canvas.SetLeft(icon, Margin_ + cell.Column * CellWidth);
-        Canvas.SetTop(icon, Margin_ + cell.Row * CellHeight);
+        Canvas.SetLeft(icon, Math.Floor(cell.Column * CellWidth + _metrics.SmallSpacing));
+        Canvas.SetTop(icon, Math.Floor(cell.Row * CellHeight + _metrics.SmallSpacing));
     }
 
     // The shell folders registered for the Desktop place. Their icons are keyed "::{clsid}" (the parsing form of the CLSID),
@@ -187,34 +195,36 @@ public sealed class DesktopWindow : Window
     private Border MakeIcon(FileEntry entry)
     {
         var info = entry.IsDirectory ? null : _types?.Describe(entry.FullPath);
-        return BuildIcon(entry.Name, entry.Name, entry.IsDirectory ? (FolderIcon.Read(entry.FullPath) is { } custom ? [custom, "folder"] : ["folder"]) : info?.IconNames ?? ["text-x-generic"]);
+        return BuildIcon(entry.Name, entry.Name, entry.IsDirectory ? FolderIcon.NamesFor(entry.FullPath) : info?.IconNames ?? ["text-x-generic"], hidden: entry.IsHidden, link: entry.IsSymlink);
     }
 
-    private Border BuildIcon(string key, string text, IReadOnlyList<string> iconNames)
+    // One icon, laid out as in Plasma's FolderItemDelegate: the picture centred at the top, the name under it in
+    // white with a dark edge (it is drawn straight on the wallpaper), and a highlight frame that follows the
+    // contents and is inset by the small spacing from the cell.
+    private Border BuildIcon(string key, string text, IReadOnlyList<string> iconNames, bool hidden = false, bool link = false)
     {
-        var label = new TextBlock
+        double ss = _metrics.SmallSpacing;
+        var label = new OutlinedLabel
         {
-            Text = text, TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap, MaxHeight = 34, FontSize = 12,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            Foreground = ThemeTokens.Find(this, ThemeToken.TextPrimary, Brushes.White),
-            // the Windows label look: plain lettering that lifts off the picture on a soft shadow
-            Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, OffsetX = 0, OffsetY = 1, Opacity = 0.6 },
+            Text = text, MaxLines = _metrics.TextLines, FontSize = 13, Italic = link,
+            HorizontalAlignment = HorizontalAlignment.Stretch, Margin = new Thickness(0, ss, 0, 0),
+            Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, OffsetX = 0, OffsetY = 1, Opacity = 0.7 },
         };
         var border = new Border
         {
-            Width = CellWidth - 6, Height = CellHeight - 6, CornerRadius = new CornerRadius(4), Padding = new Thickness(2, 6),
-            Tag = key,
+            Width = _metrics.FrameWidth(CellWidth), MaxHeight = CellHeight - 2 * ss,
+            CornerRadius = new CornerRadius(5), Padding = new Thickness(ss),
+            Tag = key, Opacity = hidden ? 0.6 : 1,
             Background = _selected.Contains(key) ? ThemeTokens.Find(this, ThemeToken.SelectedFill, Brushes.Gray) : Brushes.Transparent,
             Child = new StackPanel
             {
-                Spacing = 4,
-                // the Windows icon look: the artwork itself floats on a soft shadow, the label below just lifts
+                // the artwork floats on a soft shadow (Plasma: radius 5, one pixel down, 60% black)
                 Children =
                 {
                     new ShellIcon
                     {
-                        IconNames = iconNames, IconSize = 48, HorizontalAlignment = HorizontalAlignment.Center,
-                        Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 4, OffsetX = 0, OffsetY = 1, Opacity = 0.5 },
+                        IconNames = iconNames, IconSize = _metrics.Icon, HorizontalAlignment = HorizontalAlignment.Center,
+                        Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 5, OffsetX = 0, OffsetY = 1, Opacity = 0.6 },
                     },
                     label,
                 },
@@ -291,8 +301,8 @@ public sealed class DesktopWindow : Window
         icon.ZIndex = 0;
         if (!_moved) return;
 
-        var center = new Point(Canvas.GetLeft(icon) + CellWidth / 2, Canvas.GetTop(icon) + CellHeight / 2);
-        var cell = DesktopLayout.CellAt(center.X - Margin_, center.Y - Margin_, CellWidth, CellHeight, Columns, Rows);
+        var center = new Point(Canvas.GetLeft(icon) + icon.Bounds.Width / 2, Canvas.GetTop(icon) + Math.Min(icon.Bounds.Height, CellHeight) / 2);
+        var cell = DesktopLayout.CellAt(center.X, center.Y, CellWidth, CellHeight, Columns, Rows);
         DropIcon(d.name, cell);
     }
 

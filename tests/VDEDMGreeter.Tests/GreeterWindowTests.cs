@@ -25,7 +25,7 @@ public class GreeterWindowTests
     private static GreeterWindow Make(Fake connection, IReadOnlyList<LoginUser>? users = null, Action<string>? power = null)
     {
         var model = new GreeterModel(connection, users ?? [Alice, Bob], [Vde, Plasma]);
-        var window = new GreeterWindow(model, now: () => new DateTime(2026, 10, 16, 21, 5, 0), power: power) { Width = 1000, Height = 640, WindowState = WindowState.Normal, SystemDecorations = Avalonia.Controls.WindowDecorations.Full };
+        var window = new GreeterWindow(model, now: () => new DateTime(2026, 10, 16, 21, 5, 0), power: power) { Width = 1000, Height = 640, WindowState = WindowState.Normal, WindowDecorations = Avalonia.Controls.WindowDecorations.Full };
         window.Show();
         return window;
     }
@@ -100,9 +100,9 @@ public class GreeterWindowTests
     {
         if (Environment.GetEnvironmentVariable("VDE_SCREENSHOT_DIR") is not { Length: > 0 } dir) return;
         var window = Make(new Fake(r => r is CreateSession ? new AuthMessage(AuthMessageType.Secret, "Password: ") : new ErrorResponse(ErrorType.AuthError, "no")));
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "greeter-users.png"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "greeter-users.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
         await window.Model.BeginAsync("alice");
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
-        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "greeter-password.png"));
+        window.CaptureRenderedFrame()!.Save(Path.Combine(dir, "greeter-password.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
     }
 }

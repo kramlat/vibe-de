@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>vtaskmgr</AssemblyName>
+    <RootNamespace>VTaskMgr</RootNamespace>
+    <RollForward>Major</RollForward>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Wayland" Version="12.1.6" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.6" />
+    <!-- every app shares one publish folder, so all must resolve the same D-Bus library (the notification daemon and the tray need 0.95) -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.95.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Vde.Shell.Controls\Vde.Shell.Controls.csproj" />
+    <ProjectReference Include="..\Vde.Shell.Theme\Vde.Shell.Theme.csproj" />
+    <ProjectReference Include="..\Vde.Shell\Vde.Shell.csproj" />
+    <ProjectReference Include="..\Vibe.Registry.Remote\Vibe.Registry.Remote.csproj" />
+  </ItemGroup>
+
+</Project>

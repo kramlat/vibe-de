@@ -204,7 +204,7 @@ public sealed class DisplayPageView : UserControl
     {
         var overlay = new Window
         {
-            SystemDecorations = Avalonia.Controls.WindowDecorations.None,
+            WindowDecorations = Avalonia.Controls.WindowDecorations.None,
             ShowInTaskbar = false,
             Topmost = true,
             TransparencyLevelHint = [WindowTransparencyLevel.Transparent],

@@ -14,9 +14,9 @@ namespace Vde.Compositor;
 public sealed class ChromeRenderer
 {
     private readonly DesktopEntryDatabase? _apps;
-    private readonly Window _host = new() { SystemDecorations = Avalonia.Controls.WindowDecorations.None, Background = Brushes.Transparent, Height = WindowChromeView.BarHeight, Width = 800, ShowInTaskbar = false };
+    private readonly Window _host = new() { WindowDecorations = Avalonia.Controls.WindowDecorations.None, Background = Brushes.Transparent, Height = WindowChromeView.BarHeight, Width = 800, ShowInTaskbar = false };
     private readonly WindowChromeView _view = new();
-    private readonly Window _menuHost = new() { SystemDecorations = Avalonia.Controls.WindowDecorations.None, Background = Brushes.Transparent, Width = WindowMenuView.Width_, Height = WindowMenuView.Height_, ShowInTaskbar = false };
+    private readonly Window _menuHost = new() { WindowDecorations = Avalonia.Controls.WindowDecorations.None, Background = Brushes.Transparent, Width = WindowMenuView.Width_, Height = WindowMenuView.Height_, ShowInTaskbar = false };
     private readonly WindowMenuView _menu = new();
 
     public ChromeRenderer(DesktopEntryDatabase? apps = null, DesktopSettings? micaFromWallpaper = null)

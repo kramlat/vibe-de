@@ -109,6 +109,23 @@ public sealed class IconThemeLookup
         return null;
     }
 
+    // A short text that changes when the installed icon themes do (a theme directory or its index.theme was
+    // touched): what a cache of rendered icons uses to know its pictures may be out of date. Cheap: a few stats.
+    public string Stamp(string theme = DefaultTheme)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var name in new[] { theme, "hicolor" })
+            foreach (var root in IconRoots().Select(r => System.IO.Path.Combine(r, name)))
+            {
+                if (!Directory.Exists(root)) continue;
+                sb.Append(root).Append('=').Append(Directory.GetLastWriteTimeUtc(root).Ticks);
+                var index = System.IO.Path.Combine(root, "index.theme");
+                if (File.Exists(index)) sb.Append('/').Append(File.GetLastWriteTimeUtc(index).Ticks);
+                sb.Append(';');
+            }
+        return sb.ToString();
+    }
+
     private IEnumerable<string> IconRoots()
     {
         yield return System.IO.Path.Combine(_xdg.Home, ".icons");

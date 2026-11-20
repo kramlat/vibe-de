@@ -1,5 +1,4 @@
 using Avalonia;
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -38,6 +37,7 @@ public sealed class FileManagerView : UserControl
     private readonly ShellFolderCatalog? _shell;
     private IShellFolder? _openShellFolder;
     private readonly IFileClipboard _clipboard;
+    private readonly KnownFolders _knownFolders;
     private readonly EventHandler _shortcutChanged;
 
     public FileManagerView(string startFolder, KnownFolders folders, Action<string> openFile, FileTypes? types = null,
@@ -52,6 +52,7 @@ public sealed class FileManagerView : UserControl
         _shortcuts.Changed += _shortcutChanged;
         _actions = actions ?? new FileActions(new Trash());
         _clipboard = clipboard ?? new AvaloniaFileClipboard(() => TopLevel.GetTopLevel(this));
+        _knownFolders = folders;
         Home = folders.Get(KnownFolder.Home);
         _history = new NavigationHistory(startFolder);
 
@@ -67,7 +68,7 @@ public sealed class FileManagerView : UserControl
         _forward.Click += (_, _) => Go(_history.Forward(), record: false);
         _up.Click += (_, _) => Go(_history.Up(), record: false);
         _refresh.Click += (_, _) => Reload();
-        _search.Watermark = "Search";
+        _search.PlaceholderText = "Search";
         _search.TextChanged += (_, _) => ApplyFilter();
         _address.PathRequested += (_, path) => Navigate(path);
         _places.PlaceInvoked += (_, place) =>
@@ -128,7 +129,9 @@ public sealed class FileManagerView : UserControl
         Content = root;
 
         ApplyShortcutStyle();
+        StartupTrace.Mark("folder view built");
         Reload();
+        StartupTrace.Mark("folder listed");
     }
 
     // The window and the tab header show this; the folder reports it as it navigates.
@@ -138,6 +141,9 @@ public sealed class FileManagerView : UserControl
     public string BackHint => Hint(_back);
 
     public string FolderTitle { get; private set; } = "";
+    // What the window and its tab call the folder: its full path (a shell folder's own name), and the icon it has.
+    public string FolderPath { get; private set; } = "";
+    public IReadOnlyList<string> FolderIconNames { get; private set; } = ["folder"];
 
     private static string Hint(Button b) => ToolTip.GetTip(b) as string ?? "";
 
@@ -294,14 +300,23 @@ public sealed class FileManagerView : UserControl
         if (InShell) { _status.Text = "Nothing can be pasted here."; return; }
         if (await _clipboard.GetAsync() is not { } transfer)
             return;
-        try
-        {
-            _actions.Paste(transfer, CurrentFolder, KeepBoth());
-            if (transfer.Kind == TransferKind.Cut)
-                await _clipboard.SetAsync(null);   // what was moved is not on the clipboard any more
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _status.Text = e.Message; }
+        var folder = CurrentFolder;
+        // on a worker thread, with the transfer window when it takes a while: a big copy must not freeze the folder
+        var job = await RunTransferAsync(transfer.Kind == TransferKind.Cut, transfer.Paths, folder, options => _actions.Paste(transfer, folder, options));
+        if (transfer.Kind == TransferKind.Cut && job.State == JobState.Completed)
+            await _clipboard.SetAsync(null);   // what was moved is not on the clipboard any more
+    }
+
+    // Runs a copy or move as a FileJob. Existing names are never overwritten: the copy gets "name (copy)".
+    private async Task<FileJob> RunTransferAsync(bool move, IReadOnlyList<string> sources, string target, Func<FileOperationOptions, IReadOnlyList<string>> work)
+    {
+        var job = FileJob.Start(move, sources, target, work, (_, _) => ConflictAction.KeepBoth);
+        try { await TransferWindow.ShowIfSlowAsync(job, TopLevel.GetTopLevel(this) as Window, path => Navigate(path)); }
+        finally { job.Dispose(); }
+        if (job.State == JobState.Failed && job.Error is { } error)
+            _status.Text = error.Message;
         Reload();
+        return job;
     }
 
     public void DeleteSelected(bool permanent = false)
@@ -377,8 +392,22 @@ public sealed class FileManagerView : UserControl
 
     private void OnDrop(object? sender, DragEventArgs e)
     {
-        HandleDrop(DroppedPaths(e), null, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        _ = HandleDropAsync(DroppedPaths(e), null, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
         e.Handled = true;
+    }
+
+    // HandleDrop for a drop from the user: a copy or move runs as a job with the transfer window instead of blocking.
+    public async Task HandleDropAsync(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift)
+    {
+        if (InShell && targetFolder is null) return;
+        var target = targetFolder ?? CurrentFolder;
+        var effect = DropRules.Decide(sources, target, ctrl, shift);
+        if (effect is DropEffect.None or DropEffect.Link)
+        {
+            HandleDrop(sources, targetFolder, ctrl, shift);   // nothing to wait for
+            return;
+        }
+        await RunTransferAsync(effect == DropEffect.Move, sources, target, options => _actions.Drop(sources, target, effect, options));
     }
 
     private static IReadOnlyList<string> DroppedPaths(DragEventArgs e)
@@ -386,8 +415,8 @@ public sealed class FileManagerView : UserControl
         var formats = new Dictionary<string, byte[]>();
         foreach (var item in e.DataTransfer.Items.Select(i => (IDataTransferItem)i))
             foreach (var format in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
-                if (item.Contains(DataFormat.CreateBytesPlatformFormat(format)))
-                    formats[format] = item.TryGetValue(DataFormat.CreateBytesPlatformFormat(format));
+                if (item.Contains(DataFormat.CreateBytesPlatformFormat(format)) && item.TryGetValue(DataFormat.CreateBytesPlatformFormat(format)) is { } bytes)
+                    formats[format] = bytes;
         return FileTransfer.FromFormats(formats)?.Paths ?? [];
     }
 
@@ -437,7 +466,7 @@ public sealed class FileManagerView : UserControl
         var info = _shell?.Resolve(_history.Current);
         if (info is null)
         {
-            SetTitle("Not available");
+            SetTitle("Not available", "Not available", ["dialog-warning"]);
             _unfiltered = [];
             _list.Entries = [];
             _status.Text = "This place is not available.";
@@ -448,13 +477,13 @@ public sealed class FileManagerView : UserControl
             var folder = _shell!.Open(info);
             folder.Changed += OnShellChanged;
             _openShellFolder = folder;
-            SetTitle(folder.DisplayName);
+            SetTitle(folder.DisplayName, folder.DisplayName, folder.IconNames);
             var items = folder.GetItems();
             var path = _history.Current;
             _unfiltered = items.Select(i => new FileEntry(i.Name, path + "/" + i.Id, i.IsFolder, false, false, i.Size ?? 0, i.ModifiedUtc ?? default, "")
                 { IconNames = i.IconNames, TypeText = i.TypeText, Detail = i.Detail, Tag = i }).ToList();
             ApplyFilter();
-            _search.Watermark = "Search " + FolderTitle;
+            _search.PlaceholderText = "Search " + FolderTitle;
         }
         catch (Exception e) when (e is ComponentLoadException or InvalidOperationException or IOException)
         {
@@ -557,7 +586,7 @@ public sealed class FileManagerView : UserControl
         if (_openShellFolder is not null) { _openShellFolder.Changed -= OnShellChanged; _openShellFolder = null; }
         if (AddressPath.IsShellPath(_history.Current)) { ReloadShell(); return; }
         _list.PreserveOrder = false;
-        SetTitle(Path.GetFileName(_history.Current.TrimEnd('/')) is { Length: > 0 } name ? name : "/");
+        SetTitle(Path.GetFileName(_history.Current.TrimEnd('/')) is { Length: > 0 } name ? name : "/", _history.Current, FolderIcon.NamesFor(_history.Current, _knownFolders));
         _address.Path = _history.Current;
         _places.ShowCurrent(_history.Current);
         _back.IsEnabled = _history.CanGoBack;
@@ -568,7 +597,7 @@ public sealed class FileManagerView : UserControl
         {
             _unfiltered = FolderLister.List(_history.Current, ShowHidden);
             ApplyFilter();
-            _search.Watermark = "Search " + FolderTitle;
+            _search.PlaceholderText = "Search " + FolderTitle;
             _watcher = new FolderWatcher(_history.Current, () => Avalonia.Threading.Dispatcher.UIThread.Post(Reload));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -590,10 +619,12 @@ public sealed class FileManagerView : UserControl
 
     private Window? Owner() => TopLevel.GetTopLevel(this) as Window;
 
-    private void SetTitle(string title)
+    private void SetTitle(string title, string path, IReadOnlyList<string> icons)
     {
-        var changed = FolderTitle != title;
+        var changed = FolderTitle != title || FolderPath != path || !FolderIconNames.SequenceEqual(icons);
         FolderTitle = title;
+        FolderPath = path;
+        FolderIconNames = icons;
         if (changed)
             TitleChanged?.Invoke(this, EventArgs.Empty);
     }

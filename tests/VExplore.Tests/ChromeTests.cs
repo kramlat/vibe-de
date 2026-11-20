@@ -66,7 +66,7 @@ public class ChromeTests
             using var bmp = new WriteableBitmap(new PixelSize(600, 32), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
             using (var fb = bmp.Lock())
                 System.Runtime.InteropServices.Marshal.Copy(px, 0, fb.Address, px.Length);
-            bmp.Save(Path.Combine(dir, $"vwm-titlebar-{name}.png"));
+            bmp.Save(Path.Combine(dir, $"vwm-titlebar-{name}.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
         }
     }
 
@@ -89,7 +89,7 @@ public class ChromeTests
                 using var bmp = new WriteableBitmap(new PixelSize(220, 188), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
                 using (var fb = bmp.Lock())
                     System.Runtime.InteropServices.Marshal.Copy(px, 0, fb.Address, px.Length);
-                bmp.Save(Path.Combine(dir, $"vwm-menu-{name}.png"));
+                bmp.Save(Path.Combine(dir, $"vwm-menu-{name}.png"), new Avalonia.Media.Imaging.PngBitmapEncoderOptions());
             }
     }
 }

@@ -27,7 +27,7 @@ public sealed class ClassicControlPanelWindow : Window
     private readonly Func<string, Control?>? _customPages;
     private readonly IReadOnlyDictionary<string, IReadOnlyList<SettingChoice>> _choices;
     private readonly TextBlock _breadcrumb = new() { VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBox _search = new() { Width = 220, Watermark = "Search Control Panel" };
+    private readonly TextBox _search = new() { Width = 220, PlaceholderText = "Search Control Panel" };
     private readonly ContentControl _content = new();
     private readonly TextBlock _viewByLabel = new() { Text = "Category", VerticalAlignment = VerticalAlignment.Center };
     private Button _viewBy = new();

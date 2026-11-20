@@ -23,7 +23,9 @@ internal sealed class FakeItem : IPathMethodHandler, IDisposable
 
     public string Service { get; }
     public DBusConnection Connection => _connection;
-    public string Path { get; } = DefaultPath;
+    public string Path { get; init; } = DefaultPath;
+    // What it tells the watcher: its name (KDE style) or only its object path (libappindicator style).
+    public string? RegisterAs { get; init; }
     public bool HandlesChildPaths => false;
     public (int X, int Y)? Activated => _activated;
     public (int X, int Y)? SecondaryActivated => _secondary;
@@ -42,6 +44,17 @@ internal sealed class FakeItem : IPathMethodHandler, IDisposable
         return item;
     }
 
+    // An item the way libappindicator and Ayatana make one: no well-known name, an object path of its own, and
+    // the registration carries only that path (the watcher takes the sender as the bus name).
+    public static FakeItem StartByPath(PrivateBus bus, string path, params FakeItem.Property[] properties)
+    {
+        var connection = bus.Connect();
+        var item = new FakeItem(connection, "") { Properties = properties, Path = path, RegisterAs = path };
+        connection.AddMethodHandler(item);
+        item.RegisterToWatcher();
+        return item;
+    }
+
     // Tells the watcher about itself. A missing or contested watcher is tolerated — real apps hit
     // that while the tray is starting up.
     public void RegisterToWatcher()
@@ -50,7 +63,7 @@ internal sealed class FakeItem : IPathMethodHandler, IDisposable
         {
             using var w = _connection.GetMessageWriter();
             w.WriteMethodCallHeader(Watcher, "/StatusNotifierWatcher", Watcher, "RegisterStatusNotifierItem", "s");
-            w.WriteString(Service);
+            w.WriteString(RegisterAs ?? Service);
             _connection.CallMethodAsync(w.CreateMessage()).GetAwaiter().GetResult();
         }
         catch (DBusExceptionBase) { }

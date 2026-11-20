@@ -106,6 +106,7 @@ fi
 %{_datadir}/applications/vexplore.desktop
 %{_datadir}/applications/vexplore-settings.desktop
 %{_datadir}/applications/vterminal.desktop
+%{_datadir}/applications/vtaskmgr.desktop
 %{_datadir}/dbus-1/services/org.freedesktop.Notifications.service
 %{_datadir}/polkit-1/rules.d/50-vdedm-greeter.rules
 %{_prefix}/lib/systemd/system/fhived-system.service

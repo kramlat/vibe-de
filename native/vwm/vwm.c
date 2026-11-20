@@ -83,6 +83,7 @@ struct chrome_hit {
 	uint32_t edges;   /* grips */
 };
 
+enum snap_zone { SNAP_NONE, SNAP_LEFT, SNAP_RIGHT, SNAP_MAX, SNAP_TL, SNAP_TR, SNAP_BL, SNAP_BR };
 enum layer_index { LAYER_BACKGROUND, LAYER_BOTTOM, LAYER_WINDOWS, LAYER_TOP, LAYER_OVERLAY, LAYER_COUNT };
 
 struct vwm_output {
@@ -105,6 +106,8 @@ struct vwm_view {
 	struct wlr_foreign_toplevel_handle_v1 *handle;
 	bool mapped, minimized, maximized, fullscreen;
 	struct wlr_box restore;   /* geometry before maximizing */
+	int snap;   /* enum snap_zone: where the window is docked, SNAP_NONE when free */
+	struct wlr_box snap_restore;   /* geometry before docking */
 	int x, y;
 	struct wl_listener map, unmap, commit, destroy, request_move, request_resize, request_maximize,
 		request_fullscreen, request_minimize, set_title, set_app_id;
@@ -198,6 +201,18 @@ struct vwm_server {
 	struct chrome_hit menu_hit;
 	int menu_hover;
 	bool menu_pending, menu_dirty, sticky_grab;
+	/* the Alt-Tab switcher: a snapshot of the windows, most recently used first, and the one picked */
+	struct vwm_view *sw_list[64];
+	int sw_count, sw_index;
+	bool sw_active;
+	struct wlr_scene_tree *sw_tree;
+	struct wlr_scene_rect *sw_edge[4];
+	/* Aero snap: dragging to a screen edge or corner docks the window; a preview eases to the target */
+	double press_x, press_y;
+	int snap_zone;
+	struct wlr_scene_rect *snap_preview;
+	double snap_cur[4], snap_goal[4];
+	struct wl_event_source *snap_timer;
 	struct vwm_view *last_click_view;
 	uint32_t last_click_time;
 	bool server_decorations;
@@ -307,6 +322,8 @@ static struct pixbuf *pixbuf_create(int w, int h, void *data)
 }
 
 static void menu_close(struct vwm_server *s);
+static void switcher_forget(struct vwm_server *s, struct vwm_view *v);
+static void snap_preview_hide(struct vwm_server *s);
 
 /* ---------- views ---------- */
 
@@ -818,6 +835,7 @@ void vwm_view_set_maximized(struct vwm_view *v, bool maximized)
 	if (maximized) {
 		struct wlr_box g;
 		view_geometry(v, &g);
+		v->snap = SNAP_NONE;
 		v->restore = (struct wlr_box){ v->x, v->y, g.width, g.height };
 		struct wlr_box area = usable_area(v->server);
 		view_move(v, area.x, area.y + title_h(v));
@@ -1059,12 +1077,14 @@ static void view_unmapped(struct vwm_view *v)
 		v->handle = NULL;
 	}
 	if (s->grabbed == v) {
+		snap_preview_hide(s);
 		s->mode = CURSOR_PASSTHROUGH;
 		s->grabbed = NULL;
 		s->sticky_grab = false;
 	}
 	if (s->menu_view == v)
 		menu_close(s);
+	switcher_forget(s, v);
 	if (s->focused == v) {
 		s->focused = NULL;
 		focus_next_after_loss(s);
@@ -1150,6 +1170,9 @@ static void begin_grab(struct vwm_view *v, enum cursor_mode mode, uint32_t edges
 		return;   /* only the window the user is using may start a grab */
 	s->grabbed = v;
 	s->mode = mode;
+	s->press_x = s->cursor->x;
+	s->press_y = s->cursor->y;
+	snap_preview_hide(s);
 	struct wlr_box g;
 	view_geometry(v, &g);
 	if (mode == CURSOR_MOVE) {
@@ -1160,6 +1183,7 @@ static void begin_grab(struct vwm_view *v, enum cursor_mode mode, uint32_t edges
 		s->grab_x = s->cursor->x;
 		s->grab_y = s->cursor->y;
 		s->resize_edges = edges;
+		v->snap = SNAP_NONE;   /* sized by hand: no longer docked */
 	}
 }
 
@@ -1938,10 +1962,180 @@ static struct chrome_hit *chrome_under_cursor(struct vwm_server *s, double *nx, 
 	return NULL;
 }
 
+
+/* ---- Aero snap ---- */
+/* The outer rectangle (titlebar included) a zone covers within the usable area. */
+static struct wlr_box snap_rect(struct vwm_server *s, int zone)
+{
+	struct wlr_box a = usable_area(s);
+	int hw = a.width / 2, hh = a.height / 2;
+	switch (zone) {
+	case SNAP_LEFT: return (struct wlr_box){ a.x, a.y, hw, a.height };
+	case SNAP_RIGHT: return (struct wlr_box){ a.x + hw, a.y, a.width - hw, a.height };
+	case SNAP_TL: return (struct wlr_box){ a.x, a.y, hw, hh };
+	case SNAP_TR: return (struct wlr_box){ a.x + hw, a.y, a.width - hw, hh };
+	case SNAP_BL: return (struct wlr_box){ a.x, a.y + hh, hw, a.height - hh };
+	case SNAP_BR: return (struct wlr_box){ a.x + hw, a.y + hh, a.width - hw, a.height - hh };
+	default: return a;
+	}
+}
+
+/* Which zone the pointer is pushing into: within SNAP_EDGE of an edge, corners when also near the other edge. */
+#define SNAP_EDGE 8
+#define SNAP_CORNER 80
+static int snap_zone_at(struct vwm_server *s, double px, double py)
+{
+	struct wlr_box a = usable_area(s);
+	bool l = px < a.x + SNAP_EDGE, r = px >= a.x + a.width - SNAP_EDGE;
+	bool t = py < a.y + SNAP_EDGE, b = py >= a.y + a.height - SNAP_EDGE;
+	if (!l && !r && !t && !b)
+		return SNAP_NONE;
+	bool nl = px < a.x + SNAP_CORNER, nr = px >= a.x + a.width - SNAP_CORNER;
+	bool nt = py < a.y + SNAP_CORNER, nb = py >= a.y + a.height - SNAP_CORNER;
+	if ((l && nt) || (t && nl)) return SNAP_TL;
+	if ((r && nt) || (t && nr)) return SNAP_TR;
+	if ((l && nb) || (b && nl)) return SNAP_BL;
+	if ((r && nb) || (b && nr)) return SNAP_BR;
+	if (l) return SNAP_LEFT;
+	if (r) return SNAP_RIGHT;
+	if (t) return SNAP_MAX;
+	return SNAP_NONE;
+}
+
+static int snap_tick(void *data)
+{
+	struct vwm_server *s = data;
+	if (!s->snap_preview)
+		return 0;
+	bool done = true;
+	for (int i = 0; i < 4; i++) {
+		double d = s->snap_goal[i] - s->snap_cur[i];
+		if (d > 1 || d < -1) {
+			s->snap_cur[i] += d * 0.35;
+			done = false;
+		} else
+			s->snap_cur[i] = s->snap_goal[i];
+	}
+	wlr_scene_node_set_position(&s->snap_preview->node, (int)s->snap_cur[0], (int)s->snap_cur[1]);
+	wlr_scene_rect_set_size(s->snap_preview, (int)s->snap_cur[2], (int)s->snap_cur[3]);
+	if (!done)
+		wl_event_source_timer_update(s->snap_timer, 16);
+	return 0;
+}
+
+static void snap_preview_set(struct vwm_server *s, struct vwm_view *v, int zone)
+{
+	if (zone == s->snap_zone)
+		return;
+	s->snap_zone = zone;
+	if (zone == SNAP_NONE) {
+		snap_preview_hide(s);
+		return;
+	}
+	struct wlr_box r = snap_rect(s, zone);
+	const double m = 6;   /* a margin, so the preview reads as a pane and not a screen edge */
+	if (!s->snap_preview) {
+		float tint[4] = { 0.20f * 0.35f, 0.50f * 0.35f, 0.95f * 0.35f, 0.35f };   /* premultiplied */
+		s->snap_preview = wlr_scene_rect_create(s->layers[LAYER_OVERLAY], 1, 1, tint);
+		struct wlr_box g;
+		view_geometry(v, &g);
+		s->snap_cur[0] = v->x; s->snap_cur[1] = v->y - title_h(v);   /* it grows out of the window */
+		s->snap_cur[2] = g.width; s->snap_cur[3] = g.height + title_h(v);
+		if (!s->snap_timer)
+			s->snap_timer = wl_event_loop_add_timer(wl_display_get_event_loop(s->display), snap_tick, s);
+	}
+	s->snap_goal[0] = r.x + m; s->snap_goal[1] = r.y + m;
+	s->snap_goal[2] = r.width - 2 * m; s->snap_goal[3] = r.height - 2 * m;
+	snap_tick(s);
+}
+
+static void snap_preview_hide(struct vwm_server *s)
+{
+	s->snap_zone = SNAP_NONE;
+	if (s->snap_preview) {
+		wlr_scene_node_destroy(&s->snap_preview->node);
+		s->snap_preview = NULL;
+	}
+}
+
+static void view_set_snap(struct vwm_view *v, int zone)
+{
+	if (!v->mapped || v->unmanaged || v->fullscreen)
+		return;
+	if (zone == SNAP_NONE) {
+		if (v->snap != SNAP_NONE) {
+			view_move(v, v->snap_restore.x, v->snap_restore.y);
+			view_resize(v, v->snap_restore.width, v->snap_restore.height);
+			v->snap = SNAP_NONE;
+			chrome_layout(v);
+			chrome_request(v);
+			shadow_update(v);
+		}
+		return;
+	}
+	if (zone == SNAP_MAX) {
+		if (v->snap != SNAP_NONE)
+			view_set_snap(v, SNAP_NONE);
+		vwm_view_set_maximized(v, true);
+		return;
+	}
+	if (v->maximized)
+		vwm_view_set_maximized(v, false);
+	if (v->snap == SNAP_NONE) {
+		struct wlr_box g;
+		view_geometry(v, &g);
+		v->snap_restore = (struct wlr_box){ v->x, v->y, g.width, g.height };
+	}
+	struct wlr_box r = snap_rect(v->server, zone);
+	int th = title_h(v);
+	view_move(v, r.x, r.y + th);
+	view_resize(v, r.width, r.height - th);
+	v->snap = zone;
+	chrome_layout(v);
+	chrome_request(v);
+	shadow_update(v);
+}
+
+/* The pointer is released after a move: dock the window where the preview showed. */
+static void snap_commit(struct vwm_server *s, struct vwm_view *v)
+{
+	int zone = s->snap_zone;
+	snap_preview_hide(s);
+	if (v && zone != SNAP_NONE)
+		view_set_snap(v, zone);
+}
+
+/* Dragging a docked or maximized window by its titlebar frees it: it gets its old size back, held at the same
+ * relative place under the pointer. */
+static void grab_free(struct vwm_server *s, struct vwm_view *v)
+{
+	struct wlr_box old = v->maximized ? v->restore : v->snap_restore;
+	struct wlr_box g;
+	view_geometry(v, &g);
+	double rel = g.width > 0 ? (s->cursor->x - v->x) / g.width : 0.5;
+	if (v->maximized)
+		vwm_view_set_maximized(v, false);
+	else
+		view_set_snap(v, SNAP_NONE);
+	view_geometry(v, &g);
+	int nx = (int)(s->cursor->x - rel * (old.width > 0 ? old.width : g.width));
+	view_move(v, nx, v->y);
+	s->grab_x = s->cursor->x - v->x;
+	s->grab_y = s->cursor->y - v->y;
+}
+
 static void process_motion(struct vwm_server *s, uint32_t time)
 {
 	if (s->mode == CURSOR_MOVE && s->grabbed) {
-		view_move(s->grabbed, (int)(s->cursor->x - s->grab_x), (int)(s->cursor->y - s->grab_y));
+		struct vwm_view *g = s->grabbed;
+		if ((g->maximized || g->snap != SNAP_NONE) &&
+		    (fabs(s->cursor->x - s->press_x) > 4 || fabs(s->cursor->y - s->press_y) > 4))
+			grab_free(s, g);
+		if (!g->maximized && g->snap == SNAP_NONE) {
+			view_move(g, (int)(s->cursor->x - s->grab_x), (int)(s->cursor->y - s->grab_y));
+			if (!s->sticky_grab)
+				snap_preview_set(s, g, snap_zone_at(s, s->cursor->x, s->cursor->y));
+		}
 		return;
 	}
 	if (s->mode == CURSOR_RESIZE && s->grabbed) {
@@ -2027,6 +2221,8 @@ static void on_cursor_button(struct wl_listener *l, void *data)
 		if (s->sticky_grab)
 			return;   /* Move or Size from the window menu: it ends with the next click */
 		bool was_grab = s->mode != CURSOR_PASSTHROUGH;
+		if (s->mode == CURSOR_MOVE)
+			snap_commit(s, s->grabbed);
 		s->mode = CURSOR_PASSTHROUGH;
 		s->grabbed = NULL;
 		if (s->pressed_view) {   /* a chrome button: it fires when released over the same button */
@@ -2206,6 +2402,90 @@ static void on_request_set_primary(struct wl_listener *l, void *data)
 	wlr_seat_set_primary_selection(s->seat, e->source, e->serial);
 }
 
+/* ---- Alt-Tab: hold Alt, Tab steps through the windows (Shift+Tab backwards), releasing Alt commits. While it
+ * runs a frame is drawn around the picked window, which is brought forward so it can be seen. ---- */
+static void switcher_frame(struct vwm_server *s)
+{
+	if (!s->sw_active)
+		return;
+	struct vwm_view *v = s->sw_list[s->sw_index];
+	struct wlr_box g;
+	view_geometry(v, &g);
+	int th = title_h(v), t = 4, x = v->x - t, y = v->y - th - t, w = g.width + 2 * t, h = g.height + th + 2 * t;
+	if (!s->sw_tree) {
+		float blue[4] = { 0.20f, 0.50f, 0.95f, 1.0f };
+		s->sw_tree = wlr_scene_tree_create(s->layers[LAYER_OVERLAY]);
+		for (int i = 0; i < 4; i++)
+			s->sw_edge[i] = wlr_scene_rect_create(s->sw_tree, 1, 1, blue);
+	}
+	wlr_scene_rect_set_size(s->sw_edge[0], w, t);                  wlr_scene_node_set_position(&s->sw_edge[0]->node, x, y);
+	wlr_scene_rect_set_size(s->sw_edge[1], w, t);                  wlr_scene_node_set_position(&s->sw_edge[1]->node, x, y + h - t);
+	wlr_scene_rect_set_size(s->sw_edge[2], t, h - 2 * t);          wlr_scene_node_set_position(&s->sw_edge[2]->node, x, y + t);
+	wlr_scene_rect_set_size(s->sw_edge[3], t, h - 2 * t);          wlr_scene_node_set_position(&s->sw_edge[3]->node, x + w - t, y + t);
+}
+
+static void switcher_end(struct vwm_server *s, bool commit)
+{
+	if (!s->sw_active)
+		return;
+	struct vwm_view *pick = s->sw_list[s->sw_index];
+	s->sw_active = false;
+	s->sw_count = 0;
+	if (s->sw_tree) {
+		wlr_scene_node_destroy(&s->sw_tree->node);
+		s->sw_tree = NULL;
+	}
+	if (commit) {
+		if (pick->minimized)
+			vwm_view_set_minimized(pick, false);
+		focus_view(pick);
+	}
+}
+
+static void switcher_forget(struct vwm_server *s, struct vwm_view *v)
+{
+	if (!s->sw_active)
+		return;
+	int at = -1;
+	for (int i = 0; i < s->sw_count; i++)
+		if (s->sw_list[i] == v)
+			at = i;
+	if (at < 0)
+		return;
+	if (s->sw_count <= 2) {
+		switcher_end(s, false);
+		return;
+	}
+	for (int i = at; i < s->sw_count - 1; i++)
+		s->sw_list[i] = s->sw_list[i + 1];
+	s->sw_count--;
+	if (s->sw_index > at || s->sw_index >= s->sw_count)
+		s->sw_index = (s->sw_index - 1 + s->sw_count) % s->sw_count;
+	switcher_frame(s);
+}
+
+static void switcher_step(struct vwm_server *s, int dir)
+{
+	if (!s->sw_active) {
+		struct vwm_view *v;
+		s->sw_count = 0;
+		wl_list_for_each(v, &s->views, link)
+			if (v->mapped && !v->unmanaged && s->sw_count < 64)
+				s->sw_list[s->sw_count++] = v;
+		if (s->sw_count < 2)
+			return;
+		s->sw_index = 0;
+		s->sw_active = true;
+	}
+	s->sw_index = (s->sw_index + dir + s->sw_count) % s->sw_count;
+	struct vwm_view *pick = s->sw_list[s->sw_index];
+	if (!pick->minimized)
+		wlr_scene_node_raise_to_top(&pick->tree->node);   /* a preview: the order of use changes only on release */
+	if (s->sw_tree)
+		wlr_scene_node_raise_to_top(&s->sw_tree->node);
+	switcher_frame(s);
+}
+
 /* Compositor shortcuts. Returns true when the key was ours. */
 static bool handle_shortcut(struct vwm_server *s, xkb_keysym_t sym, uint32_t mods)
 {
@@ -2230,26 +2510,40 @@ static bool handle_shortcut(struct vwm_server *s, xkb_keysym_t sym, uint32_t mod
 			vwm_view_close(s->focused);
 		return true;
 	}
-	if (alt && sym == XKB_KEY_Tab) {   /* next window: the one used least recently comes forward */
-		struct vwm_view *last = NULL, *v;
-		wl_list_for_each(v, &s->views, link)
-			if (v->mapped && !v->unmanaged && !v->minimized)
-				last = v;
-		if (last && last != s->focused)
-			focus_view(last);
+	if (alt && (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab)) {
+		bool back = sym == XKB_KEY_ISO_Left_Tab || (mods & WLR_MODIFIER_SHIFT);
+		switcher_step(s, back ? -1 : 1);
+		return true;
+	}
+	if (s->sw_active && sym == XKB_KEY_Escape) {
+		switcher_end(s, false);
 		return true;
 	}
 	if (logo && (sym == XKB_KEY_space || sym == XKB_KEY_Super_L)) {
 		spawn(s->launcher);
 		return true;
 	}
+	if (logo && (sym == XKB_KEY_Left || sym == XKB_KEY_Right) && s->focused) {
+		struct vwm_view *f = s->focused;
+		bool left = sym == XKB_KEY_Left;
+		int zone = left ? SNAP_LEFT : SNAP_RIGHT;
+		if (f->snap == (left ? SNAP_RIGHT : SNAP_LEFT) || f->maximized)
+			view_set_snap(f, SNAP_NONE), vwm_view_set_maximized(f, false);   /* the other side first undocks */
+		else
+			view_set_snap(f, zone);
+		return true;
+	}
 	if (logo && sym == XKB_KEY_Up) {
-		if (s->focused) vwm_view_set_maximized(s->focused, true);
+		if (s->focused) {
+			if (s->focused->snap != SNAP_NONE) view_set_snap(s->focused, SNAP_NONE);
+			else vwm_view_set_maximized(s->focused, true);
+		}
 		return true;
 	}
 	if (logo && sym == XKB_KEY_Down) {
 		if (s->focused) {
-			if (s->focused->maximized) vwm_view_set_maximized(s->focused, false);
+			if (s->focused->snap != SNAP_NONE) view_set_snap(s->focused, SNAP_NONE);
+			else if (s->focused->maximized) vwm_view_set_maximized(s->focused, false);
 			else vwm_view_set_minimized(s->focused, true);
 		}
 		return true;
@@ -2282,6 +2576,8 @@ static void keyboard_key(struct wl_listener *l, void *data)
 static void keyboard_modifiers(struct wl_listener *l, void *data)
 {
 	struct vwm_keyboard *k = FROM(struct vwm_keyboard, l, modifiers);
+	if (k->server->sw_active && !(wlr_keyboard_get_modifiers(k->keyboard) & WLR_MODIFIER_ALT))
+		switcher_end(k->server, true);
 	wlr_seat_set_keyboard(k->server->seat, k->keyboard);
 	wlr_seat_keyboard_notify_modifiers(k->server->seat, &k->keyboard->modifiers);
 }

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace Vde.Shell.Controls;
 
@@ -42,7 +43,11 @@ public sealed class ShellIcon : Control
         set => IconNames = value is null ? null : [value];
     }
 
-    protected override Size MeasureOverride(Size availableSize) => new(IconSize, IconSize);
+    // The size actually used: the nearest of the sizes themes are drawn at (see IconSizes), so the picture is the
+    // theme's own and never stretched by a pixel or two.
+    public int EffectiveSize => IconSizes.Snap(IconSize);
+
+    protected override Size MeasureOverride(Size availableSize) => new(EffectiveSize, EffectiveSize);
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
@@ -69,11 +74,30 @@ public sealed class ShellIcon : Control
 
     private void OnThemeChanged(object? sender, EventArgs e) => Reload();
 
+    private int _version;   // which Reload a late worker result belongs to
+
     private void Reload()
     {
         var names = IconNames;
         double scale = (VisualRoot as TopLevel)?.RenderScaling ?? 1;
-        _image = names is { Count: > 0 } ? ShellIconProvider.Default.Load(names, IconSize, scale) : null;
+        int version = ++_version;
+        var provider = ShellIconProvider.Default;
+        if (names is not { Count: > 0 })
+            _image = null;
+        else if (provider.TryGetReady(names, EffectiveSize, scale, out var ready))
+            _image = ready;   // the usual case: made earlier in this process, or in the disk cache
+        else if (ShellIconProvider.Async)
+        {
+            _image = null;    // blank for a moment; the icon appears when the worker has made it
+            provider.LoadAsync(names, EffectiveSize, scale).ContinueWith(done => Dispatcher.UIThread.Post(() =>
+            {
+                if (version != _version || !done.IsCompletedSuccessfully) return;   // the name changed meanwhile
+                _image = done.Result;
+                InvalidateVisual();
+            }));
+        }
+        else
+            _image = provider.Load(names, EffectiveSize, scale);
         InvalidateVisual();
     }
 
