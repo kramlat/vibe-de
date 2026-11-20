@@ -1,6 +1,10 @@
 # Per-machine setup that a file list cannot do: the account for the login screen, the system registry, and the
 # registration of the shell's components in it. Nothing here starts the display manager or changes how you log in.
 
+# The services that generate HKLM\SAM, \Security and \System. Optional: without them those keys are just absent.
+_registry_sockets="pamsam.socket secman.socket sysman.socket"
+_registry_services="pamsam.service secman.service sysman.service"
+
 _register() {
     # the shell's own components (property sheets, shell folders): into the system registry
     /usr/lib/vde/RegSvrVDE --system /s /i /usr/lib/vde/vexplore.dll >/dev/null 2>&1 || \
@@ -28,6 +32,9 @@ post_install() {
                                                systemctl disable <your login manager> && systemctl enable vdedm
                                                (keep a text console available: Ctrl+Alt+F2)
   Check what vdedm would do:                   vdedm --check
+  Optional registry services (HKLM\SAM, \Security, \System, for the registry editor and Wine-style programs):
+                                               systemctl enable --now pamsam.socket secman.socket sysman.socket
+                                               (see /usr/share/doc/vde/sam.md, security.md and system.md)
 
 MSG
 }
@@ -36,9 +43,14 @@ post_upgrade() {
     systemd-sysusers vdedm.conf >/dev/null 2>&1 || true
     systemd-tmpfiles --create vdedm.conf >/dev/null 2>&1 || true
     _register
+    # new binaries: a registry service that is running restarts into them (socket-activated ones start again on use)
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl try-restart $_registry_services >/dev/null 2>&1 || true
     echo "vde: your system registry (/etc/hive/System.fhive) was kept; new defaults are in /usr/share/vde/registry/system.reg"
 }
 
 pre_remove() {
+    systemctl disable --now $_registry_sockets >/dev/null 2>&1 || true
+    systemctl stop $_registry_services >/dev/null 2>&1 || true
     /usr/lib/vde/RegSvrVDE --system /s /u /usr/lib/vde/vexplore.dll >/dev/null 2>&1 || true
 }
