@@ -80,13 +80,28 @@ public sealed class WindowChromeView : Border
     private void Apply()
     {
         // Mica when the shell set a wallpaper backdrop (WallpaperMica), otherwise the theme's surface.
-        Background = _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, new SolidColorBrush(Color.Parse("#202030")));
+        var classic = ThemeTokens.IsClassic(this);
+        Background = classic ? ClassicBar(_active) : _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, new SolidColorBrush(Color.Parse("#202030")));
+        CornerRadius = classic ? new CornerRadius(0) : new CornerRadius(8, 8, 0, 0);
         var primary = ThemeTokens.Find(this, ThemeToken.TextPrimary, Brushes.White);
         var secondary = ThemeTokens.Find(this, ThemeToken.TextSecondary, Brushes.Gray);
-        _title.Foreground = _active ? primary : secondary;
+        _title.Foreground = classic ? Brushes.White : _active ? primary : secondary;
+        _title.FontWeight = classic ? FontWeight.Bold : FontWeight.Normal;
         _icon.Opacity = _active ? 1 : 0.6;
         foreach (var g in _glyphs) g.InvalidateVisual();
     }
+
+    private Color ClassicColor(string key, string fallback)
+        => this.TryFindResource(key, ActualThemeVariant, out var value) && value is Color c ? c : Color.Parse(fallback);
+
+    // The classic titlebar: navy fading to light blue when active, grey fading to light grey when not.
+    private IBrush ClassicBar(bool active) => new LinearGradientBrush
+    {
+        StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(1, 0, RelativeUnit.Relative),
+        GradientStops = active
+            ? [new GradientStop(ClassicColor("Vde.ClassicBarFrom", "#0A246A"), 0), new GradientStop(ClassicColor("Vde.ClassicBarTo", "#A6CAF0"), 1)]
+            : [new GradientStop(Color.Parse("#808080"), 0), new GradientStop(Color.Parse("#C0C0C0"), 1)],
+    };
 
     // The titlebar's Mica: a blurred, tinted sample of the wallpaper, or null for the theme's plain surface.
     // Set once by the renderer that produces the titlebar images; it survives Apply (and theme changes).
@@ -96,46 +111,19 @@ public sealed class WindowChromeView : Border
         Apply();
     }
 
-    // One button: a hover fill and a drawn symbol (no font needed, so it looks the same everywhere).
+    // One button, drawn by the same code as every other titlebar button (CaptionButton.Draw); vwm tells us where the pointer is.
     private sealed class Glyph(WindowChromeView owner, ChromeButton kind) : Control
     {
         public override void Render(DrawingContext context)
         {
             var hovered = owner._hover == kind;
-            var pressed = hovered && owner._pressed == kind;
-            var close = kind == ChromeButton.Close;
-            var bounds = new Rect(Bounds.Size);
-            IBrush ink = owner._active || hovered ? ThemeTokens.Find(owner, ThemeToken.TextPrimary, Brushes.White) : ThemeTokens.Find(owner, ThemeToken.TextSecondary, Brushes.Gray);
-            if (hovered)
+            var caption = kind switch
             {
-                var critical = ThemeTokens.Find(owner, ThemeToken.Critical, Brushes.Crimson);
-                var fill = close ? critical : ThemeTokens.Find(owner, ThemeToken.HoverFill, Brushes.Gray);
-                context.DrawRectangle(fill, null, bounds);
-                if (pressed) context.DrawRectangle(new SolidColorBrush(Colors.Black, 0.18), null, bounds);
-                if (close) ink = Brushes.White;
-            }
-            var pen = new Pen(ink, 1);
-            var c = bounds.Center;
-            switch (kind)
-            {
-                case ChromeButton.Minimize:
-                    context.DrawLine(pen, new Point(c.X - 5, c.Y + 0.5), new Point(c.X + 5, c.Y + 0.5));
-                    break;
-                case ChromeButton.Maximize when !owner._maximized:
-                    context.DrawRectangle(null, pen, new Rect(c.X - 5, c.Y - 5, 10, 10));
-                    break;
-                case ChromeButton.Maximize:   // restore: two overlapping squares
-                    context.DrawRectangle(null, pen, new Rect(c.X - 5, c.Y - 2, 7, 7));
-                    context.DrawLine(pen, new Point(c.X - 3, c.Y - 2), new Point(c.X - 3, c.Y - 5));
-                    context.DrawLine(pen, new Point(c.X - 3, c.Y - 5), new Point(c.X + 5, c.Y - 5));
-                    context.DrawLine(pen, new Point(c.X + 5, c.Y - 5), new Point(c.X + 5, c.Y + 3));
-                    context.DrawLine(pen, new Point(c.X + 5, c.Y + 3), new Point(c.X + 2, c.Y + 3));
-                    break;
-                default:
-                    context.DrawLine(pen, new Point(c.X - 5, c.Y - 5), new Point(c.X + 5, c.Y + 5));
-                    context.DrawLine(pen, new Point(c.X - 5, c.Y + 5), new Point(c.X + 5, c.Y - 5));
-                    break;
-            }
+                ChromeButton.Minimize => CaptionKind.Minimize,
+                ChromeButton.Maximize => owner._maximized ? CaptionKind.Restore : CaptionKind.Maximize,
+                _ => CaptionKind.Close,
+            };
+            CaptionButton.Draw(context, new Rect(Bounds.Size), caption, hovered, hovered && owner._pressed == kind, owner._active, owner);
         }
     }
 }

@@ -55,6 +55,14 @@ public sealed class FileManagerWindow : Window
         // titlebar, so the chrome here is the window's own, on the transparent rounded body every shell
         // window in Windows 11 mode uses.
         WindowDecorations = Avalonia.Controls.WindowDecorations.None;
+        PropertyChanged += (_, e) =>
+        {
+            if (e.Property == WindowStateProperty && _maximizeButton is { } max)   // the middle button is Restore while maximized
+            {
+                max.Kind = WindowState == WindowState.Maximized ? CaptionKind.Restore : CaptionKind.Maximize;
+                max.InvalidateVisual();
+            }
+        };
         TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
         Background = Brushes.Transparent;
 
@@ -126,9 +134,10 @@ public sealed class FileManagerWindow : Window
         plus.Click += (_, _) => NewTab(_active.View.Home);
 
         var windowButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Stretch };
-        windowButtons.Children.Add(WinButton("\u2014", "Minimize", () => WindowState = WindowState.Minimized));
-        windowButtons.Children.Add(WinButton("\u25a1", "Maximize", ToggleMaximize));
-        windowButtons.Children.Add(WinButton("\u2715", "Close", Close, danger: true));
+        windowButtons.Children.Add(Caption(CaptionKind.Minimize, "Minimize", () => WindowState = WindowState.Minimized));
+        _maximizeButton = Caption(WindowState == WindowState.Maximized ? CaptionKind.Restore : CaptionKind.Maximize, "Maximize", ToggleMaximize);
+        windowButtons.Children.Add(_maximizeButton);
+        windowButtons.Children.Add(Caption(CaptionKind.Close, "Close", Close));
 
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var tabs = new DockPanel { LastChildFill = true, Children = { _strip, plus } };   // _strip docked left, + after the tabs
@@ -158,24 +167,14 @@ public sealed class FileManagerWindow : Window
         menu.Open(this);
     }
 
-    // A chrome button with the fill only under the pointer; Close gets the danger colour, as in Explorer.
-    private Button WinButton(string glyph, string tip, Action invoke, bool danger = false)
+    // The same titlebar button every window has (CaptionButton): red under the pointer for Close.
+    private CaptionButton? _maximizeButton;
+
+    private CaptionButton Caption(CaptionKind kind, string tip, Action invoke)
     {
-        var button = new Button
-        {
-            Content = new TextBlock { Text = glyph, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center },
-            Width = 44, Height = 30, Padding = new Thickness(0),
-            Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-        };
+        var button = new CaptionButton(kind);
         ToolTip.SetTip(button, tip);
         button.Click += (_, _) => invoke();
-        button.PointerEntered += (_, _) =>
-        {
-            var fill = danger ? ThemeTokens.Find(this, ThemeToken.Critical, Brushes.IndianRed) : ThemeTokens.Find(this, ThemeToken.HoverFill, Brushes.LightGray);
-            if (fill is ISolidColorBrush solid)
-                button.Background = new SolidColorBrush(solid.Color, 0.9);
-        };
-        button.PointerExited += (_, _) => button.Background = Brushes.Transparent;
         return button;
     }
 
@@ -225,12 +224,7 @@ public sealed class FileManagerWindow : Window
         var label = new TextBlock { TextTrimming = TextTrimming.PrefixCharacterEllipsis, MaxWidth = 240, VerticalAlignment = VerticalAlignment.Center };
         var icon = new ShellIcon { IconSize = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
         DockPanel.SetDock(icon, Dock.Left);
-        var close = new Button
-        {
-            Content = new TextBlock { Text = "\u2715", FontSize = 9, VerticalAlignment = VerticalAlignment.Center },
-            Padding = new Thickness(4, 0), Background = Brushes.Transparent, BorderThickness = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
+        var close = new CaptionButton(CaptionKind.Close) { Compact = true, Width = 22, Height = 22, VerticalAlignment = VerticalAlignment.Center };   // red under the pointer, like the window's own
         var header = new Border
         {
             CornerRadius = new CornerRadius(6, 6, 0, 0),

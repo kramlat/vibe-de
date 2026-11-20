@@ -214,6 +214,9 @@ public sealed class ThemeEngine
             inner["ButtonBorderBrushPressed"] = new SolidColorBrush(dark ? Color.Parse("#666666") : Color.Parse("#C9C9C9"));
             root.ThemeDictionaries[variant] = inner;
         }
+        root["Vde.Classic"] = theme.Classic;
+        root["Vde.ClassicBarFrom"] = theme.ClassicBarFrom ?? Color.Parse("#0A246A");
+        root["Vde.ClassicBarTo"] = theme.ClassicBarTo ?? Color.Parse("#A6CAF0");
         root["ControlCornerRadius"] = new CornerRadius(theme.CornerRadius ?? 4);   // Windows 11 rounds its controls at 4
         return root;
     }

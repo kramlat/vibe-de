@@ -63,7 +63,7 @@ public enum DropEffect { None, Copy, Move, Link }
 // Ctrl+Shift would link; otherwise within one filesystem it moves and across filesystems it copies.
 public static class DropRules
 {
-    public static DropEffect Decide(IReadOnlyList<string> sources, string targetFolder, bool ctrl, bool shift, Func<string, string, bool>? sameVolume = null)
+    public static DropEffect Decide(IReadOnlyList<string> sources, string targetFolder, bool ctrl, bool shift, Func<string, string, bool>? sameVolume = null, bool alt = false)
     {
         if (!Directory.Exists(targetFolder) || sources.Count == 0)
             return DropEffect.None;
@@ -75,7 +75,7 @@ public static class DropRules
             if (Directory.Exists(s) && (target == s || target.StartsWith(s + "/", StringComparison.Ordinal)))
                 return DropEffect.None;   // a folder cannot go into itself or something below it
         }
-        if (ctrl && shift) return DropEffect.Link;
+        if (alt || (ctrl && shift)) return DropEffect.Link;   // Alt, or Ctrl+Shift, makes links
         if (ctrl) return DropEffect.Copy;
         if (shift) return DropEffect.Move;
 
@@ -151,6 +151,11 @@ public sealed class FileActions(Trash trash)
     public string Rename(string path, string newName) => FileOperations.Rename(path, newName);
 
     public string NewFolder(string parent) => FileOperations.CreateFolder(parent);
+
+    public string NewTextDocument(string parent) => FileOperations.CreateFile(parent);
+
+    // Links to the files in a folder (the "Create shortcut" of a menu).
+    public IReadOnlyList<string> CreateLinks(IReadOnlyList<string> sources, string folder) => Apply(DropEffect.Link, sources, folder, null);
 
     // To the trash, so it can be brought back. permanent skips the trash.
     public void Delete(IEnumerable<string> paths, bool permanent = false)

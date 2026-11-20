@@ -598,6 +598,47 @@ public class DesktopWindowTests
     }
 
     [AvaloniaFact]
+    public void An_icon_and_the_bare_desktop_have_different_menus_and_the_file_actions_make_shortcuts_and_documents()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+
+        Assert.Equal(new[] { "View", "Refresh", "Paste", "New", "Properties", "Desktop settings" }, w.MenuLabels);   // the desktop's own
+        w.SelectIcon("notes.txt");
+        var item = w.ItemMenu().Where(m => m is not null).Select(m => m!.Text).ToList();
+        Assert.Equal(new[] { "Open", "Cut", "Copy", "Create shortcut", "Delete", "Rename", "Properties" }, item);   // an item's
+        Assert.True(w.ItemMenu().First(m => m?.Text == "Rename")!.Enabled);
+        w.SelectIcon("todo.txt", add: true);
+        Assert.False(w.ItemMenu().First(m => m?.Text == "Rename")!.Enabled);                                       // one item only
+
+        var links = w.CreateShortcuts();
+        Assert.Equal(2, links.Count);
+        Assert.All(links, l => Assert.NotNull(new FileInfo(l).LinkTarget));
+        var doc = w.NewTextDocument()!;
+        Assert.Equal("New Text Document.txt", Path.GetFileName(doc));
+        Assert.True(File.Exists(doc));
+        Assert.Contains(w.Entries, x => x.Name == "New Text Document.txt");
+    }
+
+    [AvaloniaFact]
+    public void Dropping_on_the_desktop_copies_moves_or_links_by_the_keys_held()
+    {
+        using var e = new Env();
+        var outside = Path.Combine(e.Root, "outside.txt");
+        File.WriteAllText(outside, "o");
+        var w = e.Open(); w.Show();
+
+        var linked = w.HandleDrop([outside], null, false, false, alt: true);     // Alt makes a link
+        Assert.NotNull(new FileInfo(Assert.Single(linked)).LinkTarget);
+        var copied = w.HandleDrop([outside], null, true, false);                  // Ctrl copies
+        Assert.True(File.Exists(Assert.Single(copied)));
+        Assert.True(File.Exists(outside));
+        w.HandleDrop([outside], Path.Combine(e.Desktop, "Projects"), false, true); // Shift moves, into a folder icon
+        Assert.False(File.Exists(outside));
+        Assert.True(File.Exists(Path.Combine(e.Desktop, "Projects", "outside.txt")));
+    }
+
+    [AvaloniaFact]
     public void Moving_an_icon_to_a_free_cell_is_remembered_and_a_taken_cell_sends_it_back()
     {
         using var e = new Env();
@@ -663,7 +704,7 @@ public class DesktopWindowTests
         var made = w.NewFolder();
         Assert.EndsWith("New folder", made);
         Assert.Equal(new[] { "New folder" }, w.SelectedNames);
-        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Properties", "Desktop settings" }, w.MenuLabels);
+        Assert.Equal(new[] { "View", "Refresh", "Paste", "New", "Properties", "Desktop settings" }, w.MenuLabels);
     }
 
     [AvaloniaFact]
@@ -835,8 +876,10 @@ public class ShortcutWindowTests
         var w = new DesktopWindow(d.Desktop, new Hive("HKCU") { Identity = RegistryIdentity.Root }, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), null, Style(apple));
         w.Show();
 
-        Assert.Equal(new[] { "New folder", "Paste", "Refresh", "Properties", "Desktop settings" }, w.MenuLabels);
-        Assert.Equal(new[] { newFolder, paste, refresh, apple ? "⌘I" : "Alt+Enter", "" }, w.MenuShortcuts);
+        Assert.Equal(new[] { "View", "Refresh", "Paste", "New", "Properties", "Desktop settings" }, w.MenuLabels);
+        Assert.Equal(new[] { "", refresh, paste, "", apple ? "⌘I" : "Alt+Enter", "" }, w.MenuShortcuts);
+        var folder = w.BackgroundMenu().First(m => m?.Text == "New")!.Sub!.First(m => m!.Text == "Folder")!;   // the shortcut of a submenu entry
+        Assert.Equal(ShortcutAction.NewFolder, folder.Shortcut);
     }
 
     [AvaloniaFact]

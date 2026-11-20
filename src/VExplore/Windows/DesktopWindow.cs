@@ -49,8 +49,6 @@ public sealed class DesktopWindow : Window
     private IReadOnlyList<FileEntry> _entries = [];
     private IReadOnlyDictionary<string, Cell> _layout = new Dictionary<string, Cell>();
     private FolderWatcher? _watcher;
-    private (string name, Point grab, Point origin)? _drag;
-    private bool _moved;
 
     public DesktopWindow(string desktopFolder, IHive hive, Action<string> openFile, FileTypes? types = null,
         FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null, ShortcutStyleService? shortcuts = null,
@@ -83,18 +81,9 @@ public sealed class DesktopWindow : Window
         Focusable = true;
 
         DragDrop.SetAllowDrop(this, true);
-        AddHandler(DragDrop.DragOverEvent, (_, e) => { e.DragEffects = DragDropEffects.Move | DragDropEffects.Copy; e.Handled = true; });
-        AddHandler(DragDrop.DropEvent, (_, e) =>
-        {
-            var formats = new Dictionary<string, byte[]>();
-            foreach (var item in e.DataTransfer.Items.Select(i => (IDataTransferItem)i))
-                foreach (var f in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
-                    if (item.Contains(DataFormat.CreateBytesPlatformFormat(f)) && item.TryGetValue(DataFormat.CreateBytesPlatformFormat(f)) is { } bytes)
-                        formats[f] = bytes;
-            if (FileTransfer.FromFormats(formats) is { } t)
-                HandleDrop(t.Paths, null, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
-            e.Handled = true;
-        });
+        AddHandler(DragDrop.DragOverEvent, OnDragOver);
+        AddHandler(DragDrop.DragLeaveEvent, (_, _) => LightFolder(null));
+        AddHandler(DragDrop.DropEvent, OnDrop);
         KeyDown += OnKeyDown;
         PointerPressed += (_, e) =>
         {
@@ -244,6 +233,13 @@ public sealed class DesktopWindow : Window
         border.PointerMoved += (_, e) => OnIconMoved(border, e);
         border.PointerReleased += (_, e) => OnIconReleased(border, e);
         border.DoubleTapped += (_, _) => OpenSelected();
+        var itemMenu = new ContextMenu();   // an icon has its own menu, not the desktop's: it acts on what is selected
+        itemMenu.Opening += (_, _) =>
+        {
+            if (!_selected.Contains(key)) SelectIcon(key);
+            FileContextMenus.Fill(itemMenu, ItemMenu(), _shortcuts.Style);
+        };
+        border.ContextMenu = itemMenu;
         return border;
     }
 
@@ -279,41 +275,88 @@ public sealed class DesktopWindow : Window
             _open(path);   // folders too: the shell opens them in a file manager window
     }
 
-    // ---- moving icons ----
+    // ---- moving icons and dragging files ----
+
+    // A drag starts from an icon with a real drag and drop, so the files can be dropped on the desktop itself (the icon
+    // takes that place), on a folder icon here, or on another program's window (a file manager copies or moves them).
+    private (string name, Point grab)? _drag;
+    private PointerPressedEventArgs? _dragTrigger;
+    private string? _dragName;   // the icon being dragged from here, while the drag lasts
 
     private void OnIconPressed(string name, Border icon, PointerPressedEventArgs e)
     {
         if (!e.GetCurrentPoint(icon).Properties.IsLeftButtonPressed) return;
         if (!_selected.Contains(name) || e.KeyModifiers.HasFlag(KeyModifiers.Control))
             SelectIcon(name, e.KeyModifiers.HasFlag(KeyModifiers.Control));
-        _drag = (name, e.GetPosition(_canvas), new Point(Canvas.GetLeft(icon), Canvas.GetTop(icon)));
-        _moved = false;
-        e.Pointer.Capture(icon);
+        _drag = (name, e.GetPosition(_canvas));
+        _dragTrigger = e;
         e.Handled = true;
     }
 
-    private void OnIconMoved(Border icon, PointerEventArgs e)
+    private async void OnIconMoved(Border icon, PointerEventArgs e)
     {
-        if (_drag is not { } d || (string)icon.Tag! != d.name) return;
+        if (_drag is not { } d || (string)icon.Tag! != d.name || !e.GetCurrentPoint(icon).Properties.IsLeftButtonPressed) return;
         var now = e.GetPosition(_canvas);
-        if (!_moved && Math.Abs(now.X - d.grab.X) + Math.Abs(now.Y - d.grab.Y) < 6) return;   // a click, not a drag
-        _moved = true;
-        Canvas.SetLeft(icon, d.origin.X + now.X - d.grab.X);
-        Canvas.SetTop(icon, d.origin.Y + now.Y - d.grab.Y);
-        icon.ZIndex = 10;
+        if (Math.Abs(now.X - d.grab.X) + Math.Abs(now.Y - d.grab.Y) < 6) return;   // a click, not a drag
+        _drag = null;
+        if (_dragTrigger is not { } trigger || SelectedPaths.Count == 0) return;
+        _dragName = d.name;
+        try { await DragDrop.DoDragDropAsync(trigger, DropData.Of(SelectedPaths), DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link); }
+        finally { _dragName = null; LightFolder(null); }
     }
 
-    private void OnIconReleased(Border icon, PointerReleasedEventArgs e)
-    {
-        if (_drag is not { } d) return;
-        _drag = null;
-        e.Pointer.Capture(null);
-        icon.ZIndex = 0;
-        if (!_moved) return;
+    private void OnIconReleased(Border icon, PointerReleasedEventArgs e) => _drag = null;
 
-        var center = new Point(Canvas.GetLeft(icon) + icon.Bounds.Width / 2, Canvas.GetTop(icon) + Math.Min(icon.Bounds.Height, CellHeight) / 2);
-        var cell = DesktopLayout.CellAt(center.X, center.Y, CellWidth, CellHeight, Columns, Rows);
-        DropIcon(d.name, cell);
+    // The folder icon under a point of the desktop, if any (the one being dragged does not count).
+    private FileEntry? FolderAt(Point point)
+    {
+        var cell = DesktopLayout.CellAt(point.X, point.Y, CellWidth, CellHeight, Columns, Rows);
+        return _entries.FirstOrDefault(en => en.IsDirectory && en.Name != _dragName && !(_dragName is not null && _selected.Contains(en.Name)) && _layout.TryGetValue(en.Name, out var c) && c == cell);
+    }
+
+    private string? _lit;
+
+    // Lights the folder icon a drop would go into (and puts the last one back).
+    private void LightFolder(string? name)
+    {
+        if (_lit == name) return;
+        if (_lit is not null && _icons.TryGetValue(_lit, out var old)) old.Background = _selected.Contains(_lit) ? ThemeTokens.Find(this, ThemeToken.SelectedFill, Brushes.Gray) : Brushes.Transparent;
+        _lit = name;
+        if (name is not null && _icons.TryGetValue(name, out var icon)) icon.Background = ThemeTokens.Find(this, ThemeToken.SelectedFill, Brushes.Gray);
+    }
+
+    // A drag from here onto bare desktop moves the icon; anything else is a copy, move or link into a folder.
+    private DropEffect DecideDrop(DragEventArgs e, out string? targetFolder, out bool reposition)
+    {
+        var sources = DropData.Paths(e);
+        var folder = FolderAt(e.GetPosition(_canvas));
+        targetFolder = folder?.FullPath;
+        reposition = _dragName is not null && folder is null;
+        if (reposition) return DropEffect.Move;
+        return sources.Count == 0 ? DropEffect.None
+            : DropRules.Decide(sources, targetFolder ?? _folder, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift), alt: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        var effect = DecideDrop(e, out var target, out _);
+        LightFolder(target is not null && effect != DropEffect.None ? _entries.First(en => en.FullPath == target).Name : null);
+        e.DragEffects = DropData.Effects(effect);
+        e.Handled = true;
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        var effect = DecideDrop(e, out var target, out var reposition);
+        LightFolder(null);
+        e.Handled = true;
+        if (reposition)
+        {
+            var at = e.GetPosition(_canvas);
+            DropIcon(_dragName!, DesktopLayout.CellAt(at.X, at.Y, CellWidth, CellHeight, Columns, Rows));
+        }
+        else if (effect != DropEffect.None)
+            HandleDrop(DropData.Paths(e), target, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift), e.KeyModifiers.HasFlag(KeyModifiers.Alt));
     }
 
     // The icon was let go on this cell: onto a folder it moves the selection into it, otherwise it takes the cell.
@@ -398,10 +441,10 @@ public sealed class DesktopWindow : Window
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
     }
 
-    public IReadOnlyList<string> HandleDrop(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift)
+    public IReadOnlyList<string> HandleDrop(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift, bool alt = false)
     {
         var target = targetFolder ?? _folder;
-        var effect = DropRules.Decide(sources, target, ctrl, shift);
+        var effect = DropRules.Decide(sources, target, ctrl, shift, alt: alt);
         if (effect == DropEffect.None) return [];
         try { return _actions.Drop(sources, target, effect, new FileOperationOptions { OnConflict = (_, _) => ConflictAction.KeepBoth }); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
@@ -416,32 +459,79 @@ public sealed class DesktopWindow : Window
         if (name is not null && name != current) Rename(name);
     }
 
+    // The menu of the bare desktop, as Explorer's: view, refresh, paste, new, and the desktop's own settings.
     private ContextMenu BuildMenu()
     {
-        var s = _shortcuts.Style;
-        MenuItem Item(string text, ShortcutAction? action, Action click)
+        var menu = new ContextMenu();
+        menu.Opening += (_, _) => FileContextMenus.Fill(menu, BackgroundMenu(), _shortcuts.Style);
+        FileContextMenus.Fill(menu, BackgroundMenu(), _shortcuts.Style);
+        return menu;
+    }
+
+    private static readonly (string Label, int Size)[] ViewSizes = [("Small icons", 32), ("Medium icons", 48), ("Large icons", 64), ("Extra large icons", 96)];
+
+    public IReadOnlyList<MenuEntry?> BackgroundMenu()
+    {
+        var settings = DesktopSettingsStore.Load(_hive, _defaults);
+        void Change(Func<DesktopSettings, DesktopSettings> edit) => DesktopSettingsStore.Save(_hive, edit(DesktopSettingsStore.Load(_hive, _defaults)));
+        return
+        [
+            new("View", Sub:
+            [
+                .. ViewSizes.Select(v => (MenuEntry?)new MenuEntry(v.Label, null, () => Change(s => s with { IconSize = v.Size }), Checked: IconSizes.Snap(settings.IconSize) == IconSizes.Snap(v.Size))),
+                null,
+                new("Show desktop icons", null, () => Change(s => s with { ShowIcons = !s.ShowIcons }), Checked: settings.ShowIcons),
+            ]),
+            new("Refresh", ShortcutAction.Refresh, Reload),
+            null,
+            new("Paste", ShortcutAction.Paste, () => _ = PasteAsync()),
+            null,
+            new("New", Sub: [new("Folder", ShortcutAction.NewFolder, () => NewFolder()), new("Text document", null, () => NewTextDocument())]),
+            null,
+            new("Properties", ShortcutAction.Properties, () => ShowProperties()),
+            null,
+            new("Desktop settings", null, () => _openSettings?.Invoke()),
+        ];
+    }
+
+    // What a right click on an icon offers: the same file actions a file manager window has.
+    public IReadOnlyList<MenuEntry?> ItemMenu()
+    {
+        var onlyShellFolders = SelectedPaths.Count == 0 && _virtual.Any(v => _selected.Contains(v.Key));
+        if (onlyShellFolders)
+            return [new("Open", ShortcutAction.Open, OpenSelected)];
+        return
+        [
+            new("Open", ShortcutAction.Open, OpenSelected),
+            null,
+            new("Cut", ShortcutAction.Cut, () => _ = CutAsync()),
+            new("Copy", ShortcutAction.Copy, () => _ = CopyAsync()),
+            new("Create shortcut", null, () => CreateShortcuts()),
+            null,
+            new("Delete", ShortcutAction.Delete, () => DeleteSelected()),
+            new("Rename", ShortcutAction.Rename, () => _ = RenameWithDialogAsync(), Enabled: SelectedPaths.Count == 1),
+            null,
+            new("Properties", ShortcutAction.Properties, () => ShowProperties()),
+        ];
+    }
+
+    public IReadOnlyList<string> CreateShortcuts()
+    {
+        try { return _actions.CreateLinks(SelectedPaths, _folder); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return []; }
+        finally { Reload(); }
+    }
+
+    public string? NewTextDocument()
+    {
+        try
         {
-            var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), MinWidth = 200 };
-            header.Children.Add(new TextBlock { Text = text });
-            var hint = new TextBlock { Text = action is { } a ? ShortcutMap.Label(a, s) : "", Opacity = 0.6, Margin = new Thickness(24, 0, 0, 0) };
-            Grid.SetColumn(hint, 1);
-            header.Children.Add(hint);
-            var item = new MenuItem { Header = header };
-            item.Click += (_, _) => click();
-            return item;
+            var path = _actions.NewTextDocument(_folder);
+            Reload();
+            SelectIcon(Path.GetFileName(path));
+            return path;
         }
-        return new ContextMenu
-        {
-            Items =
-            {
-                Item("New folder", ShortcutAction.NewFolder, () => NewFolder()),
-                Item("Paste", ShortcutAction.Paste, () => _ = PasteAsync()),
-                Item("Refresh", ShortcutAction.Refresh, Reload),
-                Item("Properties", ShortcutAction.Properties, () => ShowProperties()),
-                new Separator(),
-                Item("Desktop settings", null, () => _openSettings?.Invoke()),
-            },
-        };
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)

@@ -96,6 +96,19 @@ public static class FileOperations
         }
     }
 
+    // An empty file: "New Text Document.txt", "New Text Document (2).txt", ...
+    public static string CreateFile(string parent, string baseName = "New Text Document", string extension = ".txt")
+    {
+        for (int i = 1; ; i++)
+        {
+            var path = Path.Combine(parent, (i == 1 ? baseName : $"{baseName} ({i})") + extension);
+            if (File.Exists(path) || Directory.Exists(path))
+                continue;
+            using (File.Open(path, FileMode.CreateNew)) { }
+            return path;
+        }
+    }
+
     // Permanent deletion. Use Trash.Send for the recoverable kind.
     public static void Delete(IEnumerable<string> paths)
     {

@@ -2891,3 +2891,25 @@ public class OpenWithTests
         }
     }
 }
+
+public class DropRulesAltTests
+{
+    [Fact]
+    public void Alt_or_ctrl_shift_make_a_link_ctrl_copies_and_shift_moves()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "droprules-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "a"));
+        Directory.CreateDirectory(Path.Combine(dir, "b"));
+        File.WriteAllText(Path.Combine(dir, "a", "f.txt"), "x");
+        try
+        {
+            var source = new[] { Path.Combine(dir, "a", "f.txt") };
+            var target = Path.Combine(dir, "b");
+            Assert.Equal(DropEffect.Link, DropRules.Decide(source, target, false, false, alt: true));
+            Assert.Equal(DropEffect.Link, DropRules.Decide(source, target, true, true));
+            Assert.Equal(DropEffect.Copy, DropRules.Decide(source, target, true, false));
+            Assert.Equal(DropEffect.Move, DropRules.Decide(source, target, false, true));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+}

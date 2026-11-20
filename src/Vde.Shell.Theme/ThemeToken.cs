@@ -31,6 +31,10 @@ public static class ThemeTokens
     // The resource key a token is published under in the application's resources.
     public static string Key(ThemeToken token) => "Vde." + token;
 
+    // True under a classic style (Redmond): the shell's own titlebars and caption buttons draw the old way.
+    public static bool IsClassic(Control element)
+        => element.TryFindResource("Vde.Classic", element.ActualThemeVariant, out var value) && value is true;
+
     // Looks the token up for the element's current theme variant; the fallback is for apps with no engine running.
     public static IBrush Find(Control element, ThemeToken token, IBrush fallback)
         => element.TryFindResource(Key(token), element.ActualThemeVariant, out var value) && value is IBrush brush ? brush : fallback;

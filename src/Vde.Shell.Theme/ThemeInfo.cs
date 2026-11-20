@@ -41,6 +41,12 @@ public sealed record ThemeInfo
     // How round the stock controls' corners are; null keeps the shell's Windows 11 value.
     public double? CornerRadius { get; init; }
 
+    // The classic (Windows 2000) look for chrome the shell draws itself: navy gradient titlebars, raised caption buttons.
+    public bool Classic { get; init; }
+    // The active titlebar of a classic style fades from one colour to the other (null: the Windows 2000 navy to light blue).
+    public Color? ClassicBarFrom { get; init; }
+    public Color? ClassicBarTo { get; init; }
+
     public string? Directory { get; init; }
     public bool IsBuiltIn => Directory is null;
 }

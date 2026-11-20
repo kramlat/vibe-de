@@ -60,9 +60,10 @@ public sealed class TerminalWindow : Window
         var drop = new Button { Content = "\u25be", Padding = new Thickness(6, 0), Height = BarHeight - 4, Background = Brushes.Transparent, BorderThickness = new Thickness(0), VerticalAlignment = VerticalAlignment.Center };
         drop.Click += (_, _) => ShowProfileMenu(drop);
         var windowButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Stretch };
-        windowButtons.Children.Add(WinButton("\u2014", "Minimize", () => WindowState = WindowState.Minimized));
-        windowButtons.Children.Add(WinButton("\u25a1", "Maximize", ToggleMaximize));
-        windowButtons.Children.Add(WinButton("\u2715", "Close", Close, danger: true));
+        windowButtons.Children.Add(Caption(CaptionKind.Minimize, "Minimize", () => WindowState = WindowState.Minimized));
+        _maximizeButton = Caption(WindowState == WindowState.Maximized ? CaptionKind.Restore : CaptionKind.Maximize, "Maximize", ToggleMaximize);
+        windowButtons.Children.Add(_maximizeButton);
+        windowButtons.Children.Add(Caption(CaptionKind.Close, "Close", Close));
 
         var tabs = new StackPanel { Orientation = Orientation.Horizontal, Children = { _tabStrip, plus, drop } };
         var bar = new Border { Background = Brushes.Transparent, Height = BarHeight };
@@ -90,6 +91,11 @@ public sealed class TerminalWindow : Window
         Opened += (_, _) => _body.Background = ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
         PropertyChanged += (_, e) =>
         {
+            if (e.Property == WindowStateProperty && _maximizeButton is { } max)   // the middle button is Restore while maximized
+            {
+                max.Kind = WindowState == WindowState.Maximized ? CaptionKind.Restore : CaptionKind.Maximize;
+                max.InvalidateVisual();
+            }
             if (e.Property == WindowStateProperty)
                 _body.CornerRadius = new CornerRadius(WindowState == WindowState.Normal ? 8 : 0);   // square when it fills the screen
         };
@@ -109,23 +115,14 @@ public sealed class TerminalWindow : Window
 
     private void ToggleMaximize() => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
-    // A chrome button with the fill only under the pointer; Close gets the danger colour, as in Explorer.
-    private Button WinButton(string glyph, string tip, Action invoke, bool danger = false)
+    // The same titlebar button every window has (CaptionButton): red under the pointer for Close.
+    private CaptionButton? _maximizeButton;
+
+    private CaptionButton Caption(CaptionKind kind, string tip, Action invoke)
     {
-        var button = new Button
-        {
-            Content = new TextBlock { Text = glyph, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center },
-            Width = 44, Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Stretch,
-            Background = Brushes.Transparent, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
-        };
+        var button = new CaptionButton(kind);
         ToolTip.SetTip(button, tip);
         button.Click += (_, _) => invoke();
-        button.PointerEntered += (_, _) =>
-        {
-            var fill = danger ? ThemeTokens.Find(this, ThemeToken.Critical, Brushes.IndianRed) : ThemeTokens.Find(this, ThemeToken.HoverFill, Brushes.LightGray);
-            if (fill is ISolidColorBrush solid) button.Background = new SolidColorBrush(solid.Color, 0.9);
-        };
-        button.PointerExited += (_, _) => button.Background = Brushes.Transparent;
         return button;
     }
 
@@ -207,7 +204,7 @@ public sealed class TerminalWindow : Window
         }));
 
         tab.Label = new TextBlock { Text = tab.Name, MaxWidth = 160, TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
-        var close = new Button { Content = "×", Padding = new Thickness(5, 0), Background = Brushes.Transparent, BorderThickness = new Thickness(0), Margin = new Thickness(6, 0, 0, 0) };
+        var close = new CaptionButton(CaptionKind.Close) { Compact = true, Width = 22, Height = 22, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };   // red under the pointer, like the window's own
         close.Click += (_, _) => CloseTab(tab);
         tab.Header = new Button
         {

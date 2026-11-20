@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Vde.Shell;
+using Avalonia.VisualTree;
 using Vde.Shell.Theme;
 
 namespace Vde.Shell.Controls;
@@ -155,6 +156,12 @@ public sealed class FileListView : UserControl
     public IReadOnlyList<FileEntry> SelectedEntries => _list.SelectedItems?.OfType<FileEntry>().ToList() ?? [];
 
     public void SelectAll() => _list.SelectAll();
+
+    public void ClearSelection() => _list.SelectedItems?.Clear();
+
+    // The entry a pointer event's source sits in (null over the bare background or a group heading).
+    public FileEntry? EntryUnder(object? source)
+        => (source as Visual)?.FindAncestorOfType<ListBoxItem>()?.DataContext as FileEntry;
 
     // Selects the entries with these names (for tests, and for "select the file I just created").
     public void Select(params string[] names)

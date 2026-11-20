@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Vde.Components;
@@ -88,10 +89,13 @@ public sealed class FileManagerView : UserControl
         DragDrop.SetAllowDrop(_list, true);
         _list.AddHandler(DragDrop.DragOverEvent, OnDragOver);
         _list.AddHandler(DragDrop.DropEvent, OnDrop);
+        _list.AddHandler(DragDrop.DragLeaveEvent, (_, _) => ShowDropRow(null));
         _list.InnerList.PointerPressed += (_, e) =>
         {
             _dragStart = e.GetPosition(_list);
             _dragTrigger = e;
+            if (e.GetCurrentPoint(_list).Properties.IsRightButtonPressed)
+                PrepareContextSelection(e.Source);
         };
         _list.InnerList.PointerMoved += OnPointerMoved;
 
@@ -405,11 +409,11 @@ public sealed class FileManagerView : UserControl
     }
 
     // Files dropped on this window (from here or from another one): into the current folder, or into the folder row they were dropped on.
-    public IReadOnlyList<string> HandleDrop(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift)
+    public IReadOnlyList<string> HandleDrop(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift, bool alt = false)
     {
         if (InShell && targetFolder is null) return [];
         var target = targetFolder ?? CurrentFolder;
-        var effect = DropRules.Decide(sources, target, ctrl, shift);
+        var effect = DropRules.Decide(sources, target, ctrl, shift, alt: alt);
         if (effect == DropEffect.None) return [];
         try { return _actions.Drop(sources, target, effect, KeepBoth()); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _status.Text = e.Message; return []; }
@@ -418,43 +422,54 @@ public sealed class FileManagerView : UserControl
 
     private static FileOperationOptions KeepBoth() => new() { OnConflict = (_, _) => ConflictAction.KeepBoth };
 
+    // Where a drop at this point lands: a folder row when it is over one, else the folder being shown.
+    private string? FolderUnder(object? source) => _list.EntryUnder(source) is { IsDirectory: true } row && !InShell ? row.FullPath : null;
+
     private void OnDragOver(object? sender, DragEventArgs e)
     {
         var sources = DroppedPaths(e);
-        var effect = sources.Count == 0 ? DropEffect.None : DropRules.Decide(sources, CurrentFolder, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
-        e.DragEffects = effect switch { DropEffect.Copy => DragDropEffects.Copy, DropEffect.Move => DragDropEffects.Move, DropEffect.Link => DragDropEffects.Link, _ => DragDropEffects.None };
+        var row = FolderUnder(e.Source);
+        var effect = sources.Count == 0 || (InShell && row is null) ? DropEffect.None
+            : DropRules.Decide(sources, row ?? CurrentFolder, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift), alt: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+        ShowDropRow(effect == DropEffect.None ? null : row is null ? null : e.Source);   // the folder row that will take the files is lit
+        e.DragEffects = DropData.Effects(effect);
         e.Handled = true;
     }
 
     private void OnDrop(object? sender, DragEventArgs e)
     {
-        _ = HandleDropAsync(DroppedPaths(e), null, e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift));
+        ShowDropRow(null);
+        _ = HandleDropAsync(DroppedPaths(e), FolderUnder(e.Source), e.KeyModifiers.HasFlag(KeyModifiers.Control), e.KeyModifiers.HasFlag(KeyModifiers.Shift), e.KeyModifiers.HasFlag(KeyModifiers.Alt));
         e.Handled = true;
     }
 
+    private ListBoxItem? _dropRow;
+
+    // Lights the folder row a drop would go into (and puts the last one back).
+    private void ShowDropRow(object? source)
+    {
+        var row = (source as Visual)?.FindAncestorOfType<ListBoxItem>();
+        if (ReferenceEquals(row, _dropRow)) return;
+        if (_dropRow is not null) _dropRow.Background = null;
+        _dropRow = row;
+        if (row is not null) row.Background = ThemeTokens.Find(this, ThemeToken.SelectedFill, Brushes.Gray);
+    }
+
     // HandleDrop for a drop from the user: a copy or move runs as a job with the transfer window instead of blocking.
-    public async Task HandleDropAsync(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift)
+    public async Task HandleDropAsync(IReadOnlyList<string> sources, string? targetFolder, bool ctrl, bool shift, bool alt = false)
     {
         if (InShell && targetFolder is null) return;
         var target = targetFolder ?? CurrentFolder;
-        var effect = DropRules.Decide(sources, target, ctrl, shift);
+        var effect = DropRules.Decide(sources, target, ctrl, shift, alt: alt);
         if (effect is DropEffect.None or DropEffect.Link)
         {
-            HandleDrop(sources, targetFolder, ctrl, shift);   // nothing to wait for
+            HandleDrop(sources, targetFolder, ctrl, shift, alt);   // nothing to wait for
             return;
         }
         await RunTransferAsync(effect == DropEffect.Move, sources, target, options => _actions.Drop(sources, target, effect, options));
     }
 
-    private static IReadOnlyList<string> DroppedPaths(DragEventArgs e)
-    {
-        var formats = new Dictionary<string, byte[]>();
-        foreach (var item in e.DataTransfer.Items.Select(i => (IDataTransferItem)i))
-            foreach (var format in new[] { FileTransfer.UriList, FileTransfer.GnomeCopiedFiles })
-                if (item.Contains(DataFormat.CreateBytesPlatformFormat(format)) && item.TryGetValue(DataFormat.CreateBytesPlatformFormat(format)) is { } bytes)
-                    formats[format] = bytes;
-        return FileTransfer.FromFormats(formats)?.Paths ?? [];
-    }
+    private static IReadOnlyList<string> DroppedPaths(DragEventArgs e) => DropData.Paths(e);
 
     private async void OnPointerMoved(object? sender, PointerEventArgs e)
     {
@@ -464,9 +479,7 @@ public sealed class FileManagerView : UserControl
         if (Math.Abs(now.X - start.X) + Math.Abs(now.Y - start.Y) < 12)
             return;   // a click, not a drag
         _dragStart = null;
-        var data = new DataTransfer();
-        foreach (var (format, bytes) in new FileTransfer(TransferKind.Copy, SelectedPaths).ToFormats())
-            data.Add(DataTransferItem.Create(DataFormat.CreateBytesPlatformFormat(format), bytes));
+        var data = DropData.Of(SelectedPaths);
         if (_dragTrigger is { } trigger)
             await DragDrop.DoDragDropAsync(trigger, data, DragDropEffects.Copy | DragDropEffects.Move | DragDropEffects.Link);
     }
@@ -576,17 +589,93 @@ public sealed class FileManagerView : UserControl
         Reload();
     }
 
+    // A right click on an item selects it (unless it is already part of the selection); on the bare background it
+    // selects nothing: the menu that opens is then the folder's, not an item's.
+    private void PrepareContextSelection(object? source)
+    {
+        var entry = _list.EntryUnder(source);
+        if (entry is null) _list.ClearSelection();
+        else if (!_list.SelectedEntries.Any(e => e.Name == entry.Name)) _list.Select(entry.Name);
+    }
+
     private void FillContextMenu(ContextMenu menu)
     {
-        menu.Items.Clear();
-        foreach (var action in ShellActions)
+        if (InShell)
         {
-            var entry = new MenuItem { Header = action.Label };
-            var id = action.Id;
-            entry.Click += async (_, _) => await InvokeShellActionAsync(id);
-            menu.Items.Add(entry);
+            menu.Items.Clear();
+            foreach (var action in ShellActions)
+            {
+                var entry = new MenuItem { Header = action.Label };
+                var id = action.Id;
+                entry.Click += async (_, _) => await InvokeShellActionAsync(id);
+                menu.Items.Add(entry);
+            }
+            if (menu.Items.Count == 0) menu.Items.Add(new MenuItem { Header = "No actions", IsEnabled = false });
+            return;
         }
-        if (menu.Items.Count == 0) menu.Items.Add(new MenuItem { Header = "No actions", IsEnabled = false });
+        FileContextMenus.Fill(menu, SelectedPaths.Count > 0 ? ItemMenu() : BackgroundMenu(), ShortcutStyle);
+    }
+
+    // What a right click on selected files and folders offers.
+    public IReadOnlyList<MenuEntry?> ItemMenu()
+    {
+        var single = SelectedPaths.Count == 1;
+        return
+        [
+            new("Open", ShortcutAction.Open, () => Open(_list.SelectedEntries)),
+            null,
+            new("Cut", ShortcutAction.Cut, () => _ = CutAsync()),
+            new("Copy", ShortcutAction.Copy, () => _ = CopyAsync()),
+            new("Create shortcut", null, () => CreateShortcuts()),
+            null,
+            new("Delete", ShortcutAction.Delete, () => DeleteSelected()),
+            new("Rename", ShortcutAction.Rename, () => _ = BeginRenameAsync(), Enabled: single),
+            null,
+            new("Properties", ShortcutAction.Properties, () => ShowProperties()),
+        ];
+    }
+
+    // What a right click inside the folder, away from any item, offers.
+    public IReadOnlyList<MenuEntry?> BackgroundMenu()
+    {
+        MenuEntry Sort(string text, SortKey key) => new(text, null, () => _list.Sort(key, _list.SortKey == key && !_list.SortDescending), Checked: _list.SortKey == key);
+        return
+        [
+            new("View", Sub: ViewModesMenu()),
+            new("Sort by", Sub: [Sort("Name", SortKey.Name), Sort("Date modified", SortKey.Modified), Sort("Type", SortKey.Type), Sort("Size", SortKey.Size)]),
+            new("Group by", Sub: Enum.GetValues<GroupBy>().Select(by => (MenuEntry?)new MenuEntry(by.Title(), null, () => _list.GroupBy = by, Checked: _list.GroupBy == by)).ToList()),
+            new("Refresh", ShortcutAction.Refresh, Reload),
+            null,
+            new("Paste", ShortcutAction.Paste, () => _ = PasteAsync()),
+            null,
+            new("New", Sub: [new("Folder", ShortcutAction.NewFolder, () => NewFolder()), new("Text document", null, () => NewTextDocument())]),
+            null,
+            new("Properties", ShortcutAction.Properties, () => ShowProperties()),
+        ];
+    }
+
+    private List<MenuEntry?> ViewModesMenu()
+        => Enum.GetValues<ViewMode>().Select(mode => (MenuEntry?)new MenuEntry(mode.Title(), null, () => _list.ViewMode = mode, Checked: _list.ViewMode == mode)).ToList();
+
+    public IReadOnlyList<string> CreateShortcuts()
+    {
+        if (InShell || SelectedPaths.Count == 0) return [];
+        try { return _actions.CreateLinks(SelectedPaths, CurrentFolder); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _status.Text = e.Message; return []; }
+        finally { Reload(); }
+    }
+
+    public string? NewTextDocument()
+    {
+        if (InShell) { _status.Text = "Files cannot be made here."; return null; }
+        try
+        {
+            var path = _actions.NewTextDocument(CurrentFolder);
+            Reload();
+            _list.Select(Path.GetFileName(path));
+            return path;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { _status.Text = e.Message; return null; }
     }
 
     public void Navigate(string path) => Go(path, record: true);

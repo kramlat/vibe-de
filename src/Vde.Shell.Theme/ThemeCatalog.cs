@@ -24,6 +24,7 @@ public sealed class ThemeCatalog
     public const string SimpleId = "simple";
     public const string BreezeId = "breeze";
     public const string RedmondId = "redmond";
+    public const string Redmond98Id = "redmond98";
 
     private readonly List<ThemeInfo> _themes = new();
 
@@ -48,12 +49,23 @@ public sealed class ThemeCatalog
     // Only the light variant exists, as it did then.
     public static ThemeInfo Redmond { get; } = new()
     {
-        Id = RedmondId, Name = "Redmond", Base = ThemeBase.Simple, Variant = VariantPreference.Light, Comment = "The classic Windows look",
-        Accent = Color.Parse("#0A246A"), CornerRadius = 0,
+        Id = RedmondId, Name = "Redmond", Base = ThemeBase.Simple, Variant = VariantPreference.Light, Comment = "The classic Windows look of 2000 and Me",
+        Accent = Color.Parse("#0A246A"), CornerRadius = 0, Classic = true,
         LightTokens = Tokens("#0A246A", "#000000", "#404040", "#D4D0C8", "#808080", "#33000000", "#660A246A", "#808080", "#C00000"),
         DarkTokens = Tokens("#0A246A", "#000000", "#404040", "#D4D0C8", "#808080", "#33000000", "#660A246A", "#808080", "#C00000"),
         LightPalette = Palette("#D4D0C8", "#000000", "#808080", "#404040", "#000000", "#FFFFFF", "#D4D0C8", "#E4E0D8", "#808080", "#0A246A", "#FFFFFF"),
         DarkPalette = Palette("#D4D0C8", "#000000", "#808080", "#404040", "#000000", "#FFFFFF", "#D4D0C8", "#E4E0D8", "#808080", "#0A246A", "#FFFFFF"),
+    };
+
+    // The Windows 95/98 variant: the lighter grey face and the blue titlebar that fades from navy to sky blue.
+    public static ThemeInfo Redmond98 { get; } = Redmond with
+    {
+        Id = Redmond98Id, Name = "Redmond 98", Comment = "The classic Windows look of 95 and 98",
+        Accent = Color.Parse("#000080"), ClassicBarFrom = Color.Parse("#000080"), ClassicBarTo = Color.Parse("#1084D0"),
+        LightTokens = Tokens("#000080", "#000000", "#404040", "#C0C0C0", "#808080", "#33000000", "#66000080", "#808080", "#C00000"),
+        DarkTokens = Tokens("#000080", "#000000", "#404040", "#C0C0C0", "#808080", "#33000000", "#66000080", "#808080", "#C00000"),
+        LightPalette = Palette("#C0C0C0", "#000000", "#808080", "#404040", "#000000", "#FFFFFF", "#C0C0C0", "#DFDFDF", "#808080", "#000080", "#FFFFFF"),
+        DarkPalette = Palette("#C0C0C0", "#000000", "#808080", "#404040", "#000000", "#FFFFFF", "#C0C0C0", "#DFDFDF", "#808080", "#000080", "#FFFFFF"),
     };
 
     // accent, text, text2, surface, border, hover, selected, track, critical
@@ -85,6 +97,7 @@ public sealed class ThemeCatalog
         catalog._themes.Add(Simple);
         catalog._themes.Add(Breeze);
         catalog._themes.Add(Redmond);
+        catalog._themes.Add(Redmond98);
 
         foreach (var dataDir in xdg.DataSearchPath)
         {
