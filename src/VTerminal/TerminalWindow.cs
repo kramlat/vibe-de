@@ -35,6 +35,9 @@ public sealed class TerminalWindow : Window
     private readonly List<Tab> _tabs = new();
     private Tab? _current;
     private readonly string _startDirectory;
+    private readonly Border _body;
+    private const int BarHeight = 36;
+    private const int EdgeWidth = 5;
 
     public TerminalWindow(IHive hive, IReadOnlyList<ShellProfile> profiles, string startDirectory, bool hold = false)
     {
@@ -46,19 +49,51 @@ public sealed class TerminalWindow : Window
         Title = "Terminal";
         Width = 980; Height = 600;
 
-        var plus = new Button { Content = "+", Padding = new Thickness(10, 2), Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+        // Tabs live in the titlebar, as in Windows Terminal: the window draws its own chrome (so vwm adds none) on
+        // a transparent rounded body, with the resize edges laid over everything.
+        WindowDecorations = WindowDecorations.None;
+        TransparencyLevelHint = [WindowTransparencyLevel.Transparent];
+        Background = Brushes.Transparent;
+
+        var plus = new Button { Content = "+", Padding = new Thickness(10, 0), Height = BarHeight - 4, Background = Brushes.Transparent, BorderThickness = new Thickness(0), VerticalAlignment = VerticalAlignment.Center };
         plus.Click += (_, _) => NewTab(DefaultProfile());
-        var drop = new Button { Content = "▾", Padding = new Thickness(6, 2), Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+        var drop = new Button { Content = "\u25be", Padding = new Thickness(6, 0), Height = BarHeight - 4, Background = Brushes.Transparent, BorderThickness = new Thickness(0), VerticalAlignment = VerticalAlignment.Center };
         drop.Click += (_, _) => ShowProfileMenu(drop);
-        var strip = new DockPanel { LastChildFill = false };
-        strip.Children.Add(_tabStrip);
-        var addButtons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0), Children = { plus, drop } };
-        strip.Children.Add(addButtons);
-        var root = new DockPanel();
-        DockPanel.SetDock(strip, Dock.Top);
-        root.Children.Add(strip);
-        root.Children.Add(_content);
-        Content = root;
+        var windowButtons = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Stretch };
+        windowButtons.Children.Add(WinButton("\u2014", "Minimize", () => WindowState = WindowState.Minimized));
+        windowButtons.Children.Add(WinButton("\u25a1", "Maximize", ToggleMaximize));
+        windowButtons.Children.Add(WinButton("\u2715", "Close", Close, danger: true));
+
+        var tabs = new StackPanel { Orientation = Orientation.Horizontal, Children = { _tabStrip, plus, drop } };
+        var bar = new Border { Background = Brushes.Transparent, Height = BarHeight };
+        var barGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto") };
+        barGrid.Children.Add(tabs);
+        Grid.SetColumn(windowButtons, 2);
+        barGrid.Children.Add(windowButtons);
+        bar.Child = barGrid;
+        // the bar's empty space drags the window; a tab or button handles its own press first
+        bar.PointerPressed += (_, e) =>
+        {
+            var point = e.GetCurrentPoint(this);
+            if (!point.Properties.IsLeftButtonPressed) return;
+            if (e.ClickCount == 2) ToggleMaximize();
+            else if (WindowState != WindowState.Maximized) BeginMoveDrag(e);
+            e.Handled = true;
+        };
+
+        var grid = new Grid { RowDefinitions = new RowDefinitions(BarHeight + ",*") };
+        Grid.SetRow(_content, 1);
+        grid.Children.Add(bar);
+        grid.Children.Add(_content);
+        foreach (var edge in Edges()) grid.Children.Add(edge);
+        _body = new Border { CornerRadius = new CornerRadius(8), ClipToBounds = true, Background = Brushes.Black, Child = grid };
+        Opened += (_, _) => _body.Background = ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
+        PropertyChanged += (_, e) =>
+        {
+            if (e.Property == WindowStateProperty)
+                _body.CornerRadius = new CornerRadius(WindowState == WindowState.Normal ? 8 : 0);   // square when it fills the screen
+        };
+        Content = _body;
 
         KeyDown += OnWindowKey;
         _hive.Changed += (_, c) => { if (c.IsUnder(BuiltInPages.TerminalKey)) Dispatcher.UIThread.Post(ApplySettings); };
@@ -71,6 +106,59 @@ public sealed class TerminalWindow : Window
     public TerminalView? CurrentView => _current?.View;
     public TerminalSession? CurrentSession => _current?.Session;
     public IReadOnlyList<string> TabNames => _tabs.Select(t => t.Label.Text ?? "").ToList();
+
+    private void ToggleMaximize() => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+
+    // A chrome button with the fill only under the pointer; Close gets the danger colour, as in Explorer.
+    private Button WinButton(string glyph, string tip, Action invoke, bool danger = false)
+    {
+        var button = new Button
+        {
+            Content = new TextBlock { Text = glyph, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center },
+            Width = 44, Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Stretch,
+            Background = Brushes.Transparent, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(0),
+        };
+        ToolTip.SetTip(button, tip);
+        button.Click += (_, _) => invoke();
+        button.PointerEntered += (_, _) =>
+        {
+            var fill = danger ? ThemeTokens.Find(this, ThemeToken.Critical, Brushes.IndianRed) : ThemeTokens.Find(this, ThemeToken.HoverFill, Brushes.LightGray);
+            if (fill is ISolidColorBrush solid) button.Background = new SolidColorBrush(solid.Color, 0.9);
+        };
+        button.PointerExited += (_, _) => button.Background = Brushes.Transparent;
+        return button;
+    }
+
+    // Invisible strips along the window edges that start the compositor's resize grip (a window that draws its
+    // own chrome gets none from vwm).
+    private IEnumerable<Border> Edges()
+    {
+        foreach (var (edge, cursor) in new[]
+        {
+            (WindowEdge.North, StandardCursorType.SizeNorthSouth), (WindowEdge.South, StandardCursorType.SizeNorthSouth),
+            (WindowEdge.West, StandardCursorType.SizeWestEast), (WindowEdge.East, StandardCursorType.SizeWestEast),
+        })
+        {
+            var horizontal = edge is WindowEdge.West or WindowEdge.East;
+            var border = new Border
+            {
+                Width = horizontal ? EdgeWidth : double.NaN,
+                Height = horizontal ? double.NaN : EdgeWidth,
+                HorizontalAlignment = edge switch { WindowEdge.West => HorizontalAlignment.Left, WindowEdge.East => HorizontalAlignment.Right, _ => HorizontalAlignment.Stretch },
+                VerticalAlignment = edge switch { WindowEdge.North => VerticalAlignment.Top, WindowEdge.South => VerticalAlignment.Bottom, _ => VerticalAlignment.Stretch },
+                Background = Brushes.Transparent,
+                Cursor = new Cursor(cursor),
+            };
+            Grid.SetRowSpan(border, 2);
+            border.PointerPressed += (_, e) =>
+            {
+                if (WindowState == WindowState.Maximized) return;
+                BeginResizeDrag(edge, e);
+                e.Handled = true;
+            };
+            yield return border;
+        }
+    }
 
     // ---- profiles ----
 
@@ -124,7 +212,7 @@ public sealed class TerminalWindow : Window
         tab.Header = new Button
         {
             Content = new StackPanel { Orientation = Orientation.Horizontal, Children = { tab.Label, close } },
-            Padding = new Thickness(10, 4), BorderThickness = new Thickness(0),
+            Padding = new Thickness(10, 0), Height = BarHeight - 4, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6, 6, 0, 0),
         };
         tab.Header.Click += (_, _) => Select(tab);
         _tabs.Add(tab);

@@ -369,6 +369,37 @@ public class FileManagerControlTests
     }
 
     [AvaloniaFact]
+    public void The_file_list_shows_every_view_grouped_and_headings_are_never_selected()
+    {
+        var list = new FileListView { Entries = [E("b.txt"), E("a.txt"), E("dir", true), E("c.png")] };
+        var window = new Window { Width = 700, Height = 400, Content = list };
+        window.Show();
+        foreach (var mode in Enum.GetValues<ViewMode>())
+        {
+            list.ViewMode = mode;
+            list.GroupBy = GroupBy.Type;
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            Assert.Equal(["File folder", "PNG file", "TXT file"], list.GroupTitles);
+            list.SelectAll();
+            Assert.Equal(4, list.SelectedEntries.Count);
+            Assert.DoesNotContain(list.InnerList.SelectedItems!.Cast<object>(), x => x is not FileEntry);
+            list.GroupBy = GroupBy.None;
+            Assert.Empty(list.GroupTitles);
+        }
+    }
+
+    [AvaloniaFact]
+    public void A_drive_entry_shows_its_fullness_bar_in_tiles()
+    {
+        var drive = new FileEntry("Root", "/", true, false, false, 100, default, "") { IconNames = ["drive-harddisk"], Usage = 0.4, Detail = "60 GB free of 100 GB" };
+        var list = new FileListView { Entries = [drive], ViewMode = ViewMode.Tiles };
+        var window = new Window { Width = 700, Height = 300, Content = list };
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.NotEmpty(list.GetVisualDescendants().OfType<UsageBar>());
+    }
+
+    [AvaloniaFact]
     public void The_address_bar_shows_segments_navigates_on_click_and_parses_typed_text()
     {
         var bar = new AddressBar { Home = "/home/deck", Path = "/home/deck/Music" };

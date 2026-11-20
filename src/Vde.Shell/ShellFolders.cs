@@ -38,8 +38,40 @@ public sealed class ShellFolderCatalog
     // A folder built into the shell: always there, needs no registration.
     public void AddBuiltIn(string clsid, string parsingName, string name, ShellFolderAttributes attributes, IShellFolder folder,
         IReadOnlyList<string>? namespaces = null, int order = 100)
-        => _builtIns[ComponentInfo.NormalizeGuid(clsid) ?? throw new ArgumentException("Not a GUID.", nameof(clsid))]
+    {
+        if (folder is IShellFolderSite site) site.Site = this;
+        _builtIns[ComponentInfo.NormalizeGuid(clsid) ?? throw new ArgumentException("Not a GUID.", nameof(clsid))]
             = (new ShellFolderInfo(ComponentInfo.NormalizeGuid(clsid)!, parsingName, name, attributes, true, null) { Namespaces = namespaces ?? [], Order = order }, folder);
+    }
+
+    // What a namespace holds, opened: the folders registered for the place ("Computer", "Network", "ControlPanel",
+    // "Desktop", "Sidebar"), in their order, minus the ones the user hid. A folder that stands for a directory that
+    // does not exist here (no Music folder) is left out; one that cannot be loaded is too (the sidebar lists it, it
+    // explains itself when opened).
+    public IReadOnlyList<(ShellFolderInfo Info, IShellFolder Folder)> Items(string root)
+    {
+        var items = new List<(ShellFolderInfo, IShellFolder)>();
+        foreach (var info in Namespace(root))
+        {
+            try
+            {
+                var folder = Open(info);
+                if (folder is IFileSystemFolder { FileSystemPath: { } path } && !Directory.Exists(path)) continue;
+                items.Add((info, folder));
+            }
+            catch (ComponentLoadException) { }
+        }
+        return items;
+    }
+
+    // The directory a shell folder stands for, when it is one (Music, Documents...): the file manager opens that
+    // directory itself, so the real file operations, watching and sorting apply. Null for a virtual folder.
+    public string? DirectoryOf(string shellPath)
+    {
+        if (Resolve(shellPath) is not { } info) return null;
+        try { return Open(info) is IFileSystemFolder { FileSystemPath: { } path } && Directory.Exists(path) ? path : null; }
+        catch (ComponentLoadException) { return null; }
+    }
 
     public IReadOnlyList<ShellFolderInfo> All()
     {
@@ -83,7 +115,9 @@ public sealed class ShellFolderCatalog
         if (_builtIns.TryGetValue(info.Clsid, out var builtIn))
             return builtIn.folder;
         var registration = info.Registration ?? throw new ComponentLoadException($"{info.Name} has no component to load.");
-        return _loader.Get<IShellFolder>(registration);
+        var loaded = _loader.Get<IShellFolder>(registration);
+        if (loaded is IShellFolderSite site && site.Site is null) site.Site = this;
+        return loaded;
     }
 
     private ShellFolderInfo? Read(string clsid)
@@ -104,8 +138,23 @@ public sealed class ShellFolderCatalog
 
 // ---- the folders the shell itself provides ----
 
-public abstract class ShellFolderBase : IShellFolder
+// A shell folder that stands for a real directory (Documents, Music...). Its items are the directory's files, and
+// the file manager opens the directory itself instead of the virtual listing.
+public interface IFileSystemFolder
 {
+    string? FileSystemPath { get; }
+}
+
+// A shell folder that lists other shell folders (This Computer, Network, Control Panel) is handed the catalog it
+// lives in, so what it lists is whatever is registered for its namespace.
+public interface IShellFolderSite
+{
+    ShellFolderCatalog? Site { get; set; }
+}
+
+public abstract class ShellFolderBase : IShellFolder, IShellFolderSite
+{
+    public ShellFolderCatalog? Site { get; set; }
     public abstract string DisplayName { get; }
     public abstract IReadOnlyList<string> IconNames { get; }
     public abstract IReadOnlyList<ShellItem> GetItems();
@@ -113,6 +162,12 @@ public abstract class ShellFolderBase : IShellFolder
     public virtual Task InvokeAsync(string actionId, ShellItem? item, CancellationToken cancel) => Task.CompletedTask;
     public event EventHandler? Changed;
     protected void RaiseChanged() => Changed?.Invoke(this, EventArgs.Empty);
+}
+
+// The headings This Computer's items sit under, in the order they are shown: the folders first, as in Windows.
+public static class ComputerGroups
+{
+    public const string Folders = "Folders", Drives = "Devices and drives", Network = "Network locations";
 }
 
 // "This Computer": the user's folders and the mounted drives.
@@ -124,23 +179,37 @@ public class ComputerFolder(KnownFolders? folders = null, Computer? computer = n
     public override string DisplayName => "This Computer";
     public override IReadOnlyList<string> IconNames => ["computer", "drive-harddisk"];
 
+    // The folders registered for the "Computer" namespace come first (the user's own folders), then the drives.
     public override IReadOnlyList<ShellItem> GetItems()
     {
         var items = new List<ShellItem>();
-        foreach (var (folder, name, icon) in new[] { (KnownFolder.Desktop, "Desktop", "user-desktop"), (KnownFolder.Documents, "Documents", "folder-documents"), (KnownFolder.Downloads, "Downloads", "folder-download"),
-                     (KnownFolder.Music, "Music", "folder-music"), (KnownFolder.Pictures, "Pictures", "folder-pictures"), (KnownFolder.Videos, "Videos", "folder-videos") })
-            if (Directory.Exists(_folders.Get(folder)))
-                items.Add(new ShellItem("folder:" + name, name, true, [icon, "folder"]) { TypeText = "Folder", FileSystemPath = _folders.Get(folder) });
-
+        if (Site is not null)
+            foreach (var (info, folder) in Site.Items("Computer"))
+                items.Add(NamespaceItems.Of(info, folder, ComputerGroups.Folders));
         foreach (var v in _computer.GetVolumes())
             items.Add(new ShellItem("drive:" + v.Device + "|" + v.MountPoint, v.Label, true, v.Names())
             {
                 TypeText = v.Kind switch { VolumeKind.Removable => "Removable disk", VolumeKind.Optical => "Optical drive", VolumeKind.Network => "Network drive", _ => "Local disk" },
                 Detail = v.TotalBytes > 0 ? $"{ByteFormat.Format(v.FreeBytes)} free of {ByteFormat.Format(v.TotalBytes)}" : v.MountPoint,
                 Size = v.TotalBytes > 0 ? v.TotalBytes : null,
+                Usage = v.TotalBytes > 0 ? 1.0 - (double)v.FreeBytes / v.TotalBytes : null,
+                Group = v.Kind == VolumeKind.Network ? ComputerGroups.Network : ComputerGroups.Drives,
                 FileSystemPath = v.MountPoint,
             });
         return items;
+    }
+}
+
+public static class NamespaceItems
+{
+    // A shell folder as an item of another: a directory-backed one opens that directory; any other opens as the shell folder.
+    public static ShellItem Of(ShellFolderInfo info, IShellFolder folder, string group)
+    {
+        var path = (folder as IFileSystemFolder)?.FileSystemPath;
+        return new ShellItem("folder:" + info.ParsingName, info.Name, true, folder.IconNames)
+        {
+            TypeText = path is null ? "System folder" : "Folder", Group = group, FileSystemPath = path, ChildFolder = path is null ? info.Path : null,
+        };
     }
 }
 
@@ -152,11 +221,19 @@ public class NetworkFolder(Computer? computer = null) : ShellFolderBase
     public override string DisplayName => "Network";
     public override IReadOnlyList<string> IconNames => ["network-workgroup", "folder-remote"];
 
+    // The folders registered for the "Network" namespace, then the mounted shares.
     public override IReadOnlyList<ShellItem> GetItems()
-        => _computer.GetNetworkShares().Select(s => new ShellItem("share:" + s.Url, s.Name, true, s.Names())
+    {
+        var items = new List<ShellItem>();
+        if (Site is not null)
+            foreach (var (info, folder) in Site.Items("Network"))
+                items.Add(NamespaceItems.Of(info, folder, ComputerGroups.Network));
+        items.AddRange(_computer.GetNetworkShares().Select(s => new ShellItem("share:" + s.Url, s.Name, true, s.Names())
         {
-            TypeText = "Network share", Detail = s.Url, FileSystemPath = s.MountPoint,
-        }).ToList();
+            TypeText = "Network share", Detail = s.Url, Group = ComputerGroups.Network, FileSystemPath = s.MountPoint,
+        }));
+        return items;
+    }
 }
 
 // "Trash": what was deleted, with Restore and Delete permanently per item and Empty Trash for all of it.
@@ -195,19 +272,22 @@ public class TrashFolder(Trash? trash = null) : ShellFolderBase
     }
 }
 
-// "Documents": the user's documents folder, presented as a shell folder (its items are the real files and folders).
-public class DocumentsFolder(KnownFolders? folders = null) : ShellFolderBase
+// One of the user's own folders (Documents, Music, Pictures...) as a shell folder. It stands for the real directory:
+// the file manager opens that directory, and the items here are its files and folders, for whatever else lists it.
+public class KnownFolderShellFolder(KnownFolder which, string name, string icon, KnownFolders? folders = null) : ShellFolderBase, IFileSystemFolder
 {
-    private readonly string _path = (folders ?? new KnownFolders()).Get(KnownFolder.Documents);
+    private readonly KnownFolders _folders = folders ?? new KnownFolders();
 
-    public override string DisplayName => "Documents";
-    public override IReadOnlyList<string> IconNames => ["folder-documents", "folder"];
+    public override string DisplayName => name;
+    public override IReadOnlyList<string> IconNames => [icon, "folder"];
+    public string? FileSystemPath => _folders.Get(which);
 
     public override IReadOnlyList<ShellItem> GetItems()
     {
-        if (!Directory.Exists(_path)) return [];
+        var path = FileSystemPath;
+        if (path is null || !Directory.Exists(path)) return [];
         var items = new List<ShellItem>();
-        foreach (var entry in new DirectoryInfo(_path).EnumerateFileSystemInfos().OrderBy(e => e is not DirectoryInfo).ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase))
+        foreach (var entry in new DirectoryInfo(path).EnumerateFileSystemInfos().OrderBy(e => e is not DirectoryInfo).ThenBy(e => e.Name, StringComparer.CurrentCultureIgnoreCase))
         {
             if (entry.Name.StartsWith('.')) continue;
             var dir = entry is DirectoryInfo;
@@ -223,18 +303,33 @@ public class DocumentsFolder(KnownFolders? folders = null) : ShellFolderBase
     }
 }
 
+public class HomeFolder(KnownFolders? folders = null) : KnownFolderShellFolder(KnownFolder.Home, "Home", "user-home", folders);
+public class DesktopFolder(KnownFolders? folders = null) : KnownFolderShellFolder(KnownFolder.Desktop, "Desktop", "user-desktop", folders);
+public class DocumentsFolder(KnownFolders? folders = null) : KnownFolderShellFolder(KnownFolder.Documents, "Documents", "folder-documents", folders);
+public class DownloadsFolder(KnownFolders? folders = null) : KnownFolderShellFolder(KnownFolder.Downloads, "Downloads", "folder-download", folders);
+public class MusicFolder(KnownFolders? folders = null) : KnownFolderShellFolder(KnownFolder.Music, "Music", "folder-music", folders);
+public class PicturesFolder(KnownFolders? folders = null) : KnownFolderShellFolder(KnownFolder.Pictures, "Pictures", "folder-pictures", folders);
+public class VideosFolder(KnownFolders? folders = null) : KnownFolderShellFolder(KnownFolder.Videos, "Videos", "folder-videos", folders);
+
 // "Control Panel": the settings pages and applets; opening one runs it.
 public class ControlPanelFolder(Func<ControlPanelCatalog> catalog, Action<ControlPanelItem> open) : ShellFolderBase
 {
     public override string DisplayName => "Control Panel";
     public override IReadOnlyList<string> IconNames => ["preferences-system", "applications-system"];
 
+    // The applets and settings pages, then whatever is registered for the "ControlPanel" namespace.
     public override IReadOnlyList<ShellItem> GetItems()
-        => catalog().Items.OrderBy(i => Array.IndexOf(ControlPanelCategories.All, i.Category)).ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase)
+    {
+        var items = catalog().Items.OrderBy(i => Array.IndexOf(ControlPanelCategories.All, i.Category)).ThenBy(i => i.Name, StringComparer.CurrentCultureIgnoreCase)
             .Select(i => new ShellItem("cp:" + i.Id, i.Name, false, [i.Icon, "preferences-system"])
             {
                 TypeText = i.Category, Detail = i.Description, DefaultAction = "open",
             }).ToList();
+        if (Site is not null)
+            foreach (var (info, folder) in Site.Items("ControlPanel"))
+                items.Add(NamespaceItems.Of(info, folder, "Control Panel"));
+        return items;
+    }
 
     public override IReadOnlyList<ShellAction> GetActions(ShellItem? item) => item is null ? [] : [new ShellAction("open", "Open")];
 

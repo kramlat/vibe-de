@@ -21,13 +21,16 @@ public static class Places
                 places.Add(new Place(name, [icon, "folder"], PlaceKind.Folder, path));
         }
 
-        Add("Home", "user-home", KnownFolder.Home);
-        Add("Desktop", "user-desktop", KnownFolder.Desktop);
-        Add("Documents", "folder-documents", KnownFolder.Documents);
-        Add("Downloads", "folder-download", KnownFolder.Downloads);
-        Add("Music", "folder-music", KnownFolder.Music);
-        Add("Pictures", "folder-pictures", KnownFolder.Pictures);
-        Add("Videos", "folder-videos", KnownFolder.Videos);
+        if (shell is null)
+        {
+            Add("Home", "user-home", KnownFolder.Home);
+            Add("Desktop", "user-desktop", KnownFolder.Desktop);
+            Add("Documents", "folder-documents", KnownFolder.Documents);
+            Add("Downloads", "folder-download", KnownFolder.Downloads);
+            Add("Music", "folder-music", KnownFolder.Music);
+            Add("Pictures", "folder-pictures", KnownFolder.Pictures);
+            Add("Videos", "folder-videos", KnownFolder.Videos);
+        }
 
         if (shell is null)
         {
@@ -37,10 +40,21 @@ public static class Places
             return places;
         }
 
+        // Everything else is whatever is registered for the sidebar: the user's folders (Home, Documents, Music...) are
+        // shell folders standing for directories, so they are plain folder places; the rest open as shell folders.
         foreach (var info in shell.Namespace("Sidebar"))
         {
             IReadOnlyList<string> icons;
-            try { icons = shell.Open(info).IconNames; }
+            try
+            {
+                var folder = shell.Open(info);
+                if (folder is IFileSystemFolder { FileSystemPath: { } dir })
+                {
+                    if (Directory.Exists(dir)) places.Add(new Place(info.Name, folder.IconNames, PlaceKind.Folder, dir));
+                    continue;
+                }
+                icons = folder.IconNames;
+            }
             catch (ComponentLoadException) { icons = []; }   // untrusted or broken: still listed, with a plain icon, and it explains itself when opened
             places.Add(new Place(info.Name, icons.Count > 0 ? icons : ["folder"], PlaceKind.ShellFolder, info.Path));
         }

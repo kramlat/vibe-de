@@ -6,6 +6,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
+using Vde.Freedesktop;
 using Vde.Shell;
 using Vde.Shell.ComDlg;
 using Vde.Shell.Controls;
@@ -126,7 +127,8 @@ public sealed class DesktopWindow : Window
         _watcher = null;
         try
         {
-            _entries = FolderLister.Sort(FolderLister.List(_folder), SortKey.Name);
+            _entries = FolderLister.Sort(FolderLister.List(_folder), SortKey.Name)
+                .Where(e => e.IsDirectory || FileLook.Launcher(e.FullPath, []) is not { Hidden: true }).ToList();   // Hidden=true launchers are deleted ones: no desktop shows them
             _watcher = new FolderWatcher(_folder, () => Avalonia.Threading.Dispatcher.UIThread.Post(Reload));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -192,10 +194,18 @@ public sealed class DesktopWindow : Window
         return list;
     }
 
+    // The picture and name come the way GNOME and KDE choose them (FileLook): a launcher's own Icon= and Name=, a cached
+    // thumbnail, then the file type's icon. The type's icons stay the fallback after a thumbnail.
     private Border MakeIcon(FileEntry entry)
     {
-        var info = entry.IsDirectory ? null : _types?.Describe(entry.FullPath);
-        return BuildIcon(entry.Name, entry.Name, entry.IsDirectory ? FolderIcon.NamesFor(entry.FullPath) : info?.IconNames ?? ["text-x-generic"], hidden: entry.IsHidden, link: entry.IsSymlink);
+        if (!entry.IsDirectory && FileLook.Launcher(entry.FullPath, Locale.FromEnvironment()) is { } launcher)
+            return BuildIcon(entry.Name, launcher.Name ?? Path.GetFileNameWithoutExtension(entry.Name), launcher.IconNames!, hidden: entry.IsHidden, link: entry.IsSymlink);
+        if (entry.IsDirectory)
+            return BuildIcon(entry.Name, entry.Name, FolderIcon.NamesFor(entry.FullPath), hidden: entry.IsHidden, link: entry.IsSymlink);
+        var names = (_types?.Describe(entry.FullPath).IconNames ?? ["text-x-generic"]).ToList();
+        if (FileLook.Thumbnail(entry.FullPath) is { } thumb)
+            names.Insert(0, thumb);
+        return BuildIcon(entry.Name, entry.Name, names, hidden: entry.IsHidden, link: entry.IsSymlink);
     }
 
     // One icon, laid out as in Plasma's FolderItemDelegate: the picture centred at the top, the name under it in

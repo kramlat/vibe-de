@@ -42,7 +42,7 @@ public class ShellFolderTests
         foreach (var name in new[] { "Computer", "Network", "Trash", "Documents", "ControlPanel" })
             Assert.NotNull(catalog.Resolve("shell:" + name));
         Assert.Equal(ShellFolderIds.Trash, catalog.Resolve("::" + ShellFolderIds.Trash)!.Clsid, ignoreCase: true);
-        Assert.Equal(new[] { "Documents", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));   // Control Panel is not in the sidebar
+        Assert.Equal(new[] { "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));   // Control Panel is not in the sidebar
         Assert.Null(catalog.Resolve("shell:Nowhere"));
     }
 
@@ -121,8 +121,18 @@ public class ShellFolderTests
         Assert.NotNull(trash);
         Assert.False(trash!.IsBuiltIn);
         Assert.Contains("Sidebar", trash.Namespaces);
-        Assert.Equal(new[] { "Documents", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));
+        Assert.Equal(new[] { "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));
         Assert.Equal("Trash", catalog.Open(trash).DisplayName);   // loaded through the apartment-aware loader
+        foreach (var (clsid, parsing, name, _) in ShellFolderIds.All)   // every shell folder is in the registry, whole
+        {
+            var info = catalog.Resolve("shell:" + parsing);
+            Assert.NotNull(info);
+            Assert.False(info!.IsBuiltIn);
+            Assert.Equal(name, info.Name);
+            Assert.Equal(ShellFolderIds.Places(clsid).Order(), info.Namespaces.Order());
+            Assert.Equal(name, catalog.Open(info).DisplayName);
+        }
+        Assert.Equal(new[] { "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos" }, catalog.Namespace("Computer").Select(i => i.Name));
         Assert.Equal(new[] { "This Computer", "Network", "Trash" }, catalog.Namespace("Desktop").Select(i => i.Name));   // registered for the desktop: their icons
     }
 
@@ -134,14 +144,38 @@ public class ShellFolderTests
         var window = new FileManagerWindow(Path.Combine(e.Root, "home"), e.Folders, _ => { }, shellFolders: catalog);
         window.Show();
 
-        window.Navigate("shell:Documents");
-        Assert.True(window.InShell);
+        window.Navigate("shell:Documents");   // a folder standing for a directory opens the directory itself
+        Assert.False(window.InShell);
+        Assert.Equal(Path.Combine(Path.Combine(e.Root, "home"), "Documents"), window.CurrentFolder);
         Assert.Equal(new[] { "sub", "a.txt" }, window.Entries.Select(x => x.Name));
 
         window.Navigate("shell:Computer");
-        Assert.Contains(window.Entries, x => x.Name == "Documents");
+        Assert.Contains(window.Entries, x => x.Name == "Documents" && x.Group == ComputerGroups.Folders);   // listed from the Computer namespace
 
         window.Navigate(Path.Combine(e.Root, "home"));
         Assert.False(window.InShell);
+    }
+
+    [AvaloniaFact]
+    public void This_computer_starts_as_tiles_grouped_by_type_with_the_folders_first_and_other_folders_are_medium_icons()
+    {
+        using var e = new Env();
+        var catalog = Catalog(e, new Hive("HKCU"), new Hive("HKLM"));
+        var home = Path.Combine(e.Root, "home");
+        var window = new FileManagerWindow(home, e.Folders, _ => { }, shellFolders: catalog);
+        window.Show();
+        Assert.Equal(Vde.Shell.ViewMode.MediumIcons, window.ActiveView.ViewMode);
+
+        window.Navigate("shell:Computer");
+        Assert.Equal(Vde.Shell.ViewMode.Tiles, window.ActiveView.ViewMode);
+        Assert.Equal(Vde.Shell.GroupBy.Type, window.ActiveView.GroupBy);
+        Assert.Equal(Vde.Shell.ComputerGroups.Folders, window.ActiveView.GroupTitles[0]);   // the folders before the drives
+        Assert.Equal(Vde.Shell.ComputerGroups.Folders, window.ActiveView.Entries[0].Group);
+
+        window.ActiveView.ViewMode = Vde.Shell.ViewMode.LargeIcons;   // the user's choice is kept for this place
+        window.Navigate(home);
+        Assert.Equal(Vde.Shell.ViewMode.MediumIcons, window.ActiveView.ViewMode);
+        window.Navigate("shell:Computer");
+        Assert.Equal(Vde.Shell.ViewMode.LargeIcons, window.ActiveView.ViewMode);
     }
 }

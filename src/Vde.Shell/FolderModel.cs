@@ -13,6 +13,8 @@ public sealed record FileEntry(
     public string? TypeText { get; init; }
     public string? Detail { get; init; }
     public object? Tag { get; init; }
+    public string? Group { get; init; }     // heading for "group by type" (a shell folder says it itself)
+    public double? Usage { get; init; }     // 0..1 fullness of a drive; views draw a bar
 }
 
 public enum SortKey { Name, Size, Modified, Type }

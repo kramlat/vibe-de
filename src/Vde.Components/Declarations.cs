@@ -103,6 +103,8 @@ public sealed record ShellItem(string Id, string Name, bool IsFolder, IReadOnlyL
     public DateTime? ModifiedUtc { get; init; }
     public string? FileSystemPath { get; init; }
     public string? ChildFolder { get; init; }
+    public string? Group { get; init; }               // the heading it sits under when a view groups by type ("Folders", "Devices and drives")
+    public double? Usage { get; init; }               // 0..1 fullness, for a drive: views draw a bar under it
     public string? DefaultAction { get; init; }       // run by double-click when there is no path or child folder ("open")
 }
 

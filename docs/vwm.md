@@ -36,6 +36,8 @@ vwm cannot link Avalonia, so the shell draws and vwm composites:
 4. vwm shows them above the window and does all hit-testing itself, so the geometry is a contract:
    `native/vwm/vwm.h` ↔ `WindowChromeView` / `WindowMenuView`.
 
+A client that asks for client-side decorations over xdg-decoration (Chromium and its variants such as Edge, Electron apps such as VS Code, and VDE's own tabbed windows, the terminal and Explorer) is believed: it draws and manages its own frame and vwm adds no titlebar. Clients that ask for server-side, or say nothing, get the bar above.
+
 Until a shell connects, windows get a plain bar that still moves, resizes and works. A shell that connects late
 is asked to draw everything again.
 

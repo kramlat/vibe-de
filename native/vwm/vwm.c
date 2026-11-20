@@ -62,7 +62,6 @@
 #include <wlr/xwayland/xwayland.h>
 #include <xkbcommon/xkbcommon.h>
 
-#define DECORATION_MODE(s) ((s)->no_chrome ? WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE : WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)
 
 enum cursor_mode { CURSOR_PASSTHROUGH, CURSOR_MOVE, CURSOR_RESIZE };
 
@@ -1131,6 +1130,8 @@ static void view_committed(struct vwm_view *v)
 static void xdg_map(struct wl_listener *l, void *data) { view_mapped(FROM(struct vwm_view, l, map)); }
 static void xdg_unmap(struct wl_listener *l, void *data) { view_unmapped(FROM(struct vwm_view, l, unmap)); }
 
+static void decoration_apply(struct vwm_view *v);
+
 static void xdg_commit(struct wl_listener *l, void *data)
 {
 	struct vwm_view *v = FROM(struct vwm_view, l, commit);
@@ -1140,7 +1141,7 @@ static void xdg_commit(struct wl_listener *l, void *data)
 			WLR_XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN | WLR_XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE);
 		wlr_xdg_toplevel_set_size(v->xdg, 0, 0);   /* let the client pick */
 		if (v->decoration)
-			wlr_xdg_toplevel_decoration_v1_set_mode(v->decoration, DECORATION_MODE(v->server));
+			decoration_apply(v);
 	}
 }
 
@@ -1298,6 +1299,33 @@ static void on_new_xdg_popup(struct wl_listener *l, void *data)
 
 /* Who draws the titlebar. Server-side: vwm composites the image the shell renders with the Avalonia theme
  * (docs/vwm.md). `-d` leaves every client drawing its own. */
+/* A client that says it draws its own titlebar (Chromium and its variants: Edge, Chrome, Brave...; Electron apps
+ * such as VS Code; our own tabbed windows) is believed: it manages its window frame, and vwm adds nothing. Every
+ * other client gets the server-side bar. */
+static enum wlr_xdg_toplevel_decoration_v1_mode decoration_mode_for(struct vwm_view *v)
+{
+	if (v->server->no_chrome || (v->decoration && v->decoration->requested_mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE))
+		return WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
+	return WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+}
+
+static void decoration_apply(struct vwm_view *v)
+{
+	if (!v->decoration)
+		return;
+	enum wlr_xdg_toplevel_decoration_v1_mode mode = decoration_mode_for(v);
+	bool was = v->decorated;
+	v->decorated = mode == WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+	if (v->xdg->base->initialized)
+		wlr_xdg_toplevel_decoration_v1_set_mode(v->decoration, mode);
+	if (v->mapped && was != v->decorated) {   /* the client changed its mind while it was showing */
+		if (v->decorated)
+			view_enable_chrome(v);
+		chrome_layout(v);
+		chrome_request(v);
+	}
+}
+
 static void decoration_destroyed(struct wl_listener *l, void *data)
 {
 	struct vwm_view *v = FROM(struct vwm_view, l, decoration_destroy);
@@ -1309,9 +1337,7 @@ static void decoration_destroyed(struct wl_listener *l, void *data)
 
 static void decoration_request_mode(struct wl_listener *l, void *data)
 {
-	struct vwm_view *v = FROM(struct vwm_view, l, decoration_mode);
-	if (v->decoration && v->xdg->base->initialized)
-		wlr_xdg_toplevel_decoration_v1_set_mode(v->decoration, DECORATION_MODE(v->server));
+	decoration_apply(FROM(struct vwm_view, l, decoration_mode));
 }
 
 static void on_new_decoration(struct wl_listener *l, void *data)
@@ -1322,13 +1348,11 @@ static void on_new_decoration(struct wl_listener *l, void *data)
 	if (!v)
 		return;
 	v->decoration = d;
-	v->decorated = !v->server->no_chrome;
 	v->decoration_destroy.notify = decoration_destroyed;
 	wl_signal_add(&d->events.destroy, &v->decoration_destroy);
 	v->decoration_mode.notify = decoration_request_mode;
 	wl_signal_add(&d->events.request_mode, &v->decoration_mode);
-	if (d->toplevel->base->initialized)
-		wlr_xdg_toplevel_decoration_v1_set_mode(d, DECORATION_MODE(v->server));   /* otherwise the first commit does it */
+	decoration_apply(v);   /* before the first commit the mode itself is set by xdg_commit */
 }
 
 /* ---------- XWayland ---------- */

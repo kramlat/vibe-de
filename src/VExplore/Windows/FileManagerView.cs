@@ -80,6 +80,7 @@ public sealed class FileManagerView : UserControl
         };
         _list.ItemsInvoked += (_, items) => Open(items);
         _list.SortChanged += (_, _) => Reload();
+        _list.ViewChanged += (_, _) => RememberView();
         _list.SelectionChanged += (_, _) => UpdateStatus();
         var menu = new ContextMenu();
         menu.Opening += (_, _) => FillContextMenu(menu);
@@ -162,6 +163,9 @@ public sealed class FileManagerView : UserControl
     public bool CanGoBack => _history.CanGoBack;
     public bool CanGoForward => _history.CanGoForward;
     public IReadOnlyList<FileEntry> Entries => _list.Entries;
+    public ViewMode ViewMode { get => _list.ViewMode; set => _list.ViewMode = value; }
+    public GroupBy GroupBy { get => _list.GroupBy; set => _list.GroupBy = value; }
+    public IReadOnlyList<string> GroupTitles => _list.GroupTitles;
     public string StatusText => _status.Text ?? "";
     public bool ShowHidden { get => _hidden; set { _hidden = value; Reload(); } }
     public string SearchText
@@ -213,12 +217,44 @@ public sealed class FileManagerView : UserControl
         bar.Children.Add(FoldButton("Sort", sort));
 
         var view = new ContextMenu();
+        var modeItems = new List<(MenuItem Item, ViewMode Mode)>();
+        foreach (var mode in Enum.GetValues<ViewMode>())
+        {
+            var item = new MenuItem { Header = mode.Title(), ToggleType = MenuItemToggleType.Radio, GroupName = "view" };
+            var captured = mode;
+            item.Click += (_, _) => _list.ViewMode = captured;
+            modeItems.Add((item, mode));
+            view.Items.Add(item);
+        }
+        view.Items.Add(new Separator());
+        var groupItems = new List<(MenuItem Item, GroupBy By)>();
+        var group = new MenuItem { Header = "Group by" };
+        foreach (var by in Enum.GetValues<GroupBy>())
+        {
+            var item = new MenuItem { Header = by.Title(), ToggleType = MenuItemToggleType.Radio, GroupName = "group" };
+            var captured = by;
+            item.Click += (_, _) => _list.GroupBy = captured;
+            groupItems.Add((item, by));
+            group.Items.Add(item);
+        }
+        view.Items.Add(group);
+        var previews = new MenuItem { Header = "Folder previews", ToggleType = MenuItemToggleType.CheckBox };
+        previews.Click += (_, _) => _list.FolderPreviews = !_list.FolderPreviews;
+        view.Items.Add(previews);
+        view.Items.Add(new Separator());
         var hidden = new MenuItem { Header = "Hidden items" };
         hidden.Click += (_, _) => ShowHidden = !ShowHidden;
         var refresh = new MenuItem { Header = "Refresh" };
         refresh.Click += (_, _) => Reload();
         view.Items.Add(hidden);
         view.Items.Add(refresh);
+        view.Opening += (_, _) =>
+        {
+            foreach (var (item, mode) in modeItems) item.IsChecked = mode == _list.ViewMode;
+            foreach (var (item, by) in groupItems) item.IsChecked = by == _list.GroupBy;
+            previews.IsChecked = _list.FolderPreviews;
+            hidden.IsChecked = ShowHidden;
+        };
         bar.Children.Add(FoldButton("View", view));
         return bar;
     }
@@ -481,7 +517,7 @@ public sealed class FileManagerView : UserControl
             var items = folder.GetItems();
             var path = _history.Current;
             _unfiltered = items.Select(i => new FileEntry(i.Name, path + "/" + i.Id, i.IsFolder, false, false, i.Size ?? 0, i.ModifiedUtc ?? default, "")
-                { IconNames = i.IconNames, TypeText = i.TypeText, Detail = i.Detail, Tag = i }).ToList();
+                { IconNames = i.IconNames, TypeText = i.TypeText, Detail = i.Detail, Tag = i, Group = i.Group, Usage = i.Usage }).ToList();
             ApplyFilter();
             _search.PlaceholderText = "Search " + FolderTitle;
         }
@@ -561,6 +597,10 @@ public sealed class FileManagerView : UserControl
 
     private void Go(string path, bool record)
     {
+        // a shell folder that stands for a directory (shell:Music) is that directory, as in Windows: the real file
+        // operations, watching and sorting apply, and the address bar shows where it is
+        if (record && AddressPath.IsShellPath(path) && _shell?.DirectoryOf(path) is { } directory)
+            path = directory;
         if (record)
             _history.Navigate(path);
         Reload();
@@ -579,8 +619,33 @@ public sealed class FileManagerView : UserControl
             _openFile(item.FullPath);
     }
 
+    // A folder keeps the view the user last gave it; one never changed starts as ViewModes.DefaultFor says (This
+    // Computer: tiles grouped by type).
+    private readonly Dictionary<string, (ViewMode Mode, GroupBy Group, bool Previews)> _viewBag = new(StringComparer.Ordinal);
+    private string? _viewPath;
+    private bool _applyingView;
+
+    private void ApplyViewFor(string path)
+    {
+        if (_viewPath == path) return;
+        _viewPath = path;
+        var (mode, group) = ViewModes.DefaultFor(path);
+        var previews = _list.FolderPreviews;
+        if (_viewBag.TryGetValue(path, out var kept)) (mode, group, previews) = kept;
+        _applyingView = true;
+        try { _list.ViewMode = mode; _list.GroupBy = group; _list.FolderPreviews = previews; }
+        finally { _applyingView = false; }
+    }
+
+    private void RememberView()
+    {
+        if (!_applyingView && _viewPath is not null)
+            _viewBag[_viewPath] = (_list.ViewMode, _list.GroupBy, _list.FolderPreviews);
+    }
+
     public void Reload()
     {
+        ApplyViewFor(_history.Current);
         _watcher?.Dispose();
         _watcher = null;
         if (_openShellFolder is not null) { _openShellFolder.Changed -= OnShellChanged; _openShellFolder = null; }
