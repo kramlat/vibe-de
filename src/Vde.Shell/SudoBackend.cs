@@ -88,6 +88,23 @@ public sealed class SudoBackend : IElevationBackend
         return null;
     }
 
+    // Root and a user sudo lets in without a password (NOPASSWD, or credentials it already holds) are only asked to agree.
+    public bool NeedsPassword(RegistryIdentity identity)
+    {
+        if (identity.IsRoot)
+            return false;
+        if (_rootPassword)
+            return true;
+        try
+        {
+            return _executor.RunAsync([_sudo, "-n", "true"], null, TimeSpan.FromSeconds(5), CancellationToken.None).GetAwaiter().GetResult().ExitCode != 0;
+        }
+        catch (Exception e) when (e is IOException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return true;
+        }
+    }
+
     // Root needs no elevation; members of the usual administrator groups may; so may anyone sudo lets in without
     // a password. Rules in sudoers that name a single user are not visible from here: such a user is rejected.
     public bool CanElevate(RegistryIdentity identity)
@@ -109,11 +126,15 @@ public sealed class SudoBackend : IElevationBackend
 
     public async Task<ElevationOutcome> RunAsync(IReadOnlyList<string> commandLine, ReadOnlyMemory<char> password, CancellationToken cancel)
     {
-        // 1. check the password; -k ignores any authentication cached earlier, so it is always really asked for
-        var check = await _executor.RunAsync(
-            [_sudo, "-k", "-S", "-p", "", "-v"], new string(password.Span) + "\n", TimeSpan.FromSeconds(15), cancel);
-        if (check.ExitCode != 0)
-            return Classify(check.StandardError);
+        // 1. check the password; -k ignores any authentication cached earlier, so it is always really asked for.
+        //    With no password (NOPASSWD: the user only agreed) there is nothing to check.
+        if (!password.IsEmpty)
+        {
+            var check = await _executor.RunAsync(
+                [_sudo, "-k", "-S", "-p", "", "-v"], new string(password.Span) + "\n", TimeSpan.FromSeconds(15), cancel);
+            if (check.ExitCode != 0)
+                return Classify(check.StandardError);
+        }
 
         // 2. run the command on that authentication, without asking again
         var run = await _executor.RunAsync([_sudo, "-n", "--", .. commandLine], null, TimeSpan.FromMilliseconds(600), cancel);

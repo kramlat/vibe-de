@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Vibe Desktop Environment (X11)
+Comment=The VDE session on an X11 server: vwm runs full screen inside it
+Exec=start-vde-x11
+TryExec=start-vde-x11
+Type=Application
+DesktopNames=VDE

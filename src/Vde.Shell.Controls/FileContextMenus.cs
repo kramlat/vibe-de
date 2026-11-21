@@ -1,12 +1,12 @@
 using Avalonia.Controls;
 using Vde.Shell;
 
-namespace VExplore.Windows;
+namespace Vde.Shell.Controls;
 
 // One entry of a context menu: its text, the shortcut action whose key is shown beside it, what it does, and
 // optionally a submenu or a check mark. A null entry in a list is a separator.
 public sealed record MenuEntry(string Text, ShortcutAction? Shortcut = null, Action? Click = null, bool Enabled = true,
-    IReadOnlyList<MenuEntry?>? Sub = null, bool? Checked = null);
+    IReadOnlyList<MenuEntry?>? Sub = null, bool? Checked = null, string? ShortcutText = null);
 
 // Fills the context menus of file windows (the desktop and file manager windows) the same way: a menu for the
 // items that are selected, and a different one for the empty background of the folder or desktop, as in Explorer.
@@ -41,7 +41,7 @@ public static class FileContextMenus
     {
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), MinWidth = 200 };
         header.Children.Add(new TextBlock { Text = entry.Text });
-        var hint = new TextBlock { Text = entry.Shortcut is { } a ? ShortcutMap.Label(a, style) : "", Opacity = 0.6, Margin = new Avalonia.Thickness(24, 0, 0, 0) };
+        var hint = new TextBlock { Text = entry.ShortcutText ?? (entry.Shortcut is { } a ? ShortcutMap.Label(a, style) : ""), Opacity = 0.6, Margin = new Avalonia.Thickness(24, 0, 0, 0) };
         Grid.SetColumn(hint, 1);
         header.Children.Add(hint);
         var item = new MenuItem { Header = header, IsEnabled = entry.Enabled };

@@ -81,11 +81,12 @@ public sealed class WindowChromeView : Border
     {
         // Mica when the shell set a wallpaper backdrop (WallpaperMica), otherwise the theme's surface.
         var classic = ThemeTokens.IsClassic(this);
-        Background = classic ? ClassicBar(_active) : _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, new SolidColorBrush(Color.Parse("#202030")));
+        var onAccent = ThemeTokens.OnAccentBar(this, _active);
+        Background = classic ? ClassicBar(_active) : onAccent ? ThemeTokens.Find(this, ThemeToken.Accent, Brushes.DodgerBlue) : _mica ?? ThemeTokens.Find(this, ThemeToken.Surface, new SolidColorBrush(Color.Parse("#202030")));
         CornerRadius = classic ? new CornerRadius(0) : new CornerRadius(8, 8, 0, 0);
         var primary = ThemeTokens.Find(this, ThemeToken.TextPrimary, Brushes.White);
         var secondary = ThemeTokens.Find(this, ThemeToken.TextSecondary, Brushes.Gray);
-        _title.Foreground = classic ? Brushes.White : _active ? primary : secondary;
+        _title.Foreground = classic ? Brushes.White : onAccent ? new SolidColorBrush(ThemeTokens.InkOn(ThemeTokens.AccentColor(this))) : _active ? primary : secondary;
         _title.FontWeight = classic ? FontWeight.Bold : FontWeight.Normal;
         _icon.Opacity = _active ? 1 : 0.6;
         foreach (var g in _glyphs) g.InvalidateVisual();

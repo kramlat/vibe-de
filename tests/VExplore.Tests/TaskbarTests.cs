@@ -163,6 +163,33 @@ public class TaskbarTests
         Assert.Equal(new[] { "kate.desktop" }, f.Launched);
     }
 
+    [AvaloniaFact]
+    public void The_search_task_view_and_keyboard_buttons_follow_their_settings_and_reach_the_shell()
+    {
+        using var f = new Fx();
+        using var model = f.Model();
+        var window = new TaskbarWindow(model, () => { });
+        window.Show();
+        var search = 0; var taskView = 0; var keyboard = 0;
+        window.View.SearchInvoked += (_, _) => search++;
+        window.View.TaskViewInvoked += (_, _) => taskView++;
+        window.View.TouchKeyboardInvoked += (_, _) => keyboard++;
+
+        // by default Search and Task view are on, the corner's keyboard icon is off
+        Assert.True(window.View.SearchButton.IsVisible && window.View.SearchButton.GetVisualParent() is not null);
+        Assert.True(window.View.TaskViewButton.GetVisualParent() is not null);
+        Assert.Null(window.View.TouchKeyboardButton.GetVisualParent());
+
+        model.ShowTouchKeyboard = true; model.ShowSearch = false;
+        window.View.Rebuild();
+        Assert.Null(window.View.SearchButton.GetVisualParent());
+        Assert.NotNull(window.View.TouchKeyboardButton.GetVisualParent());
+
+        window.View.TaskViewButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        window.View.TouchKeyboardButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal((0, 1, 1), (search, taskView, keyboard));
+    }
+
     [AvaloniaTheory]
     [InlineData(StartLayout.Modern, 584)]   // wide enough for the six-across pinned tile grid
     [InlineData(StartLayout.Classic, 640)]
@@ -198,7 +225,7 @@ public class TaskbarTests
         Assert.True(layout.Write("Classic"));
         Assert.Equal(StartLayout.Classic, new LauncherModel(f.Hive, f.Apps, []).Layout);
 
-        var edge = new SettingBinding(f.Hive, BuiltInPages.Find("taskbar")!.Settings[0]);
+        var edge = new SettingBinding(f.Hive, BuiltInPages.Find("taskbar")!.Settings.Single(s => s.Id == "edge"));
         Assert.True(edge.Write("Left"));
         using var model = f.Model();
         Assert.Equal(TaskbarEdge.Left, model.Edge);

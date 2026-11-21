@@ -44,6 +44,7 @@ public static class ComponentCategories
 {
     public const string LauncherSearchProvider = "{6C0E5A7B-4D0A-4F63-9B2E-5A5C1F6D0001}";
     public const string ShellFolder = "{6C0E5A7B-4D0A-4F63-9B2E-5A5C1F6D0002}";
+    public const string Widget = "{6C0E5A7B-4D0A-4F63-9B2E-5A5C1F6D0003}";
 }
 
 public sealed record SearchHit(string Title, string Subtitle = "", string Icon = "", string? ActivationId = null);
@@ -57,6 +58,22 @@ public interface ILauncherSearchProvider
 
     // The user picked one of this provider's hits.
     Task ActivateAsync(SearchHit hit, CancellationToken cancel);
+}
+
+// ---- widgets: what the community adds to the widgets panel ----
+
+// A widget is a small live card in the widgets panel. Register a class that implements this in ComponentCategories.Widget
+// (apartment-threaded: it lives on the UI thread). The user must allow each widget (Settings > Widgets) and the registration
+// must be trusted, as with launcher search providers; nothing is loaded otherwise. A widget is the community's own small program
+// of the kind the Windows 7 gadgets were: it draws its card and keeps it up to date. It is not a place for advertising: the panel
+// shows only what the widget draws, and a widget that does not behave is simply not allowed.
+public interface IWidgetProvider
+{
+    string Title { get; }
+    IReadOnlyList<string> IconNames { get; }   // freedesktop icon names, best first
+
+    // The card's content: an Avalonia Control (typed as object so this assembly needs no UI dependency), made on the UI thread.
+    object CreateContent();
 }
 
 // ---- property sheets: what a component implements to add a tab to a file's Properties window ----

@@ -37,6 +37,8 @@ public sealed class DesktopWindow : Window
     private readonly IHive? _defaults;   // the machine-wide desktop settings (the default wallpaper)
     private readonly Action<string> _open;
     private readonly Action? _openSettings;
+    private readonly Action<string>? _openPage;       // a Settings page by id ("display", "themes")
+    private readonly Action<string>? _openTerminal;   // a terminal in a folder
     private readonly FileActions _actions;
     private readonly IFileClipboard _clipboard;
     private readonly FileTypes? _types;
@@ -53,8 +55,10 @@ public sealed class DesktopWindow : Window
     public DesktopWindow(string desktopFolder, IHive hive, Action<string> openFile, FileTypes? types = null,
         FileActions? actions = null, IFileClipboard? clipboard = null, Action? openSettings = null, ShortcutStyleService? shortcuts = null,
         Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, IHive? systemDefaults = null,
-        ShellFolderCatalog? shellFolders = null, Action<string>? openShellFolder = null)
+        ShellFolderCatalog? shellFolders = null, Action<string>? openShellFolder = null, Action<string>? openPage = null, Action<string>? openTerminal = null)
     {
+        _openPage = openPage;
+        _openTerminal = openTerminal;
         _shellFolders = shellFolders;
         _openShellFolder = openShellFolder;
         _properties = properties;
@@ -77,6 +81,9 @@ public sealed class DesktopWindow : Window
         X11WindowHints.SetType(this, X11WindowHints.Kind.Desktop);
         WindowState = WindowState.Maximized;
         Width = 1280; Height = 720;
+        // An empty Canvas is not hit-tested: a right click on the bare wallpaper would miss the canvas and its menu. Transparent is
+        // invisible (the wallpaper is the window's) but makes the whole desktop answer the pointer.
+        _canvas.Background = Brushes.Transparent;
         Content = _canvas;
         Focusable = true;
 
@@ -470,10 +477,12 @@ public sealed class DesktopWindow : Window
 
     private static readonly (string Label, int Size)[] ViewSizes = [("Small icons", 32), ("Medium icons", 48), ("Large icons", 64), ("Extra large icons", 96)];
 
+    // What a right click on the bare wallpaper offers, as in Windows 11: the short menu, with "Show more options" for the full one.
     public IReadOnlyList<MenuEntry?> BackgroundMenu()
     {
         var settings = DesktopSettingsStore.Load(_hive, _defaults);
         void Change(Func<DesktopSettings, DesktopSettings> edit) => DesktopSettingsStore.Save(_hive, edit(DesktopSettingsStore.Load(_hive, _defaults)));
+        var wallpapers = WallpaperCatalog.Find(Vde.Freedesktop.XdgDirectories.Default);
         return
         [
             new("View", Sub:
@@ -482,16 +491,63 @@ public sealed class DesktopWindow : Window
                 null,
                 new("Show desktop icons", null, () => Change(s => s with { ShowIcons = !s.ShowIcons }), Checked: settings.ShowIcons),
             ]),
+            new("Sort by", Sub:
+            [
+                new("Name", null, () => SortIcons(SortKey.Name)),
+                new("Size", null, () => SortIcons(SortKey.Size)),
+                new("Item type", null, () => SortIcons(SortKey.Type)),
+                new("Date modified", null, () => SortIcons(SortKey.Modified)),
+            ]),
             new("Refresh", ShortcutAction.Refresh, Reload),
             null,
-            new("Paste", ShortcutAction.Paste, () => _ = PasteAsync()),
-            null,
+            new("Next desktop background", null, NextBackground, Enabled: wallpapers.Count > 1),
             new("New", Sub: [new("Folder", ShortcutAction.NewFolder, () => NewFolder()), new("Text document", null, () => NewTextDocument())]),
             null,
-            new("Properties", ShortcutAction.Properties, () => ShowProperties()),
+            new("Display settings", null, () => (_openPage ?? (_ => _openSettings?.Invoke()))("display")),
+            new("Personalize", null, () => (_openPage ?? (_ => _openSettings?.Invoke()))("themes")),
             null,
-            new("Desktop settings", null, () => _openSettings?.Invoke()),
+            new("Open in Terminal", null, () => _openTerminal?.Invoke(_folder), Enabled: _openTerminal is not null),
+            null,
+            new("Show more options", null, ShowMoreOptions, ShortcutText: "Shift+F10"),
         ];
+    }
+
+    // The full menu: what the short one leaves out (paste, properties, the desktop's settings).
+    public IReadOnlyList<MenuEntry?> MoreOptionsMenu() =>
+    [
+        new("Paste", ShortcutAction.Paste, () => _ = PasteAsync()),
+        null,
+        new("Properties", ShortcutAction.Properties, () => ShowProperties()),
+        null,
+        new("Desktop settings", null, () => _openSettings?.Invoke()),
+    ];
+
+    private void ShowMoreOptions()
+    {
+        var menu = new ContextMenu();
+        FileContextMenus.Fill(menu, MoreOptionsMenu(), _shortcuts.Style);
+        menu.Open(_canvas);
+    }
+
+    // Sort by: the icons are laid out again from the top left in that order (folders first, This Computer and the like before them).
+    public void SortIcons(SortKey key)
+    {
+        var order = _virtual.Select(v => v.Key).Concat(FolderLister.Sort(_entries, key).Select(e => e.Name)).ToList();
+        var cells = DesktopLayout.Arrange(order, new Dictionary<string, Cell>(), Columns, Rows);
+        foreach (var (name, cell) in cells)
+            DesktopSettingsStore.SetPosition(_hive, name, cell);
+        Rebuild();
+    }
+
+    // The next picture of the installed wallpapers, round to the first.
+    public void NextBackground()
+    {
+        var wallpapers = WallpaperCatalog.Find(Vde.Freedesktop.XdgDirectories.Default);
+        if (wallpapers.Count == 0) return;
+        var current = DesktopSettingsStore.Load(_hive, _defaults).Wallpaper;
+        var index = wallpapers.ToList().FindIndex(w => string.Equals(w.Path, current, StringComparison.Ordinal));
+        var next = wallpapers[(index + 1) % wallpapers.Count];
+        DesktopSettingsStore.Save(_hive, DesktopSettingsStore.Load(_hive, _defaults) with { Wallpaper = next.Path });
     }
 
     // What a right click on an icon offers: the same file actions a file manager window has.
@@ -536,6 +592,7 @@ public sealed class DesktopWindow : Window
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (e.Key == Key.F10 && e.KeyModifiers == KeyModifiers.Shift) { e.Handled = true; ShowMoreOptions(); return; }   // "Show more options"
         if (_shortcuts.ActionFor(ShortcutInput.From(e)) is not { } action) return;
         e.Handled = true;
         switch (action)

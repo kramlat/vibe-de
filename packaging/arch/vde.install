@@ -26,7 +26,7 @@ post_install() {
   VDE is installed. It does not change how you log in.
 
   Try it first, inside your current desktop:   vde-session      (vwm opens as a window)
-  To use it as a login session:                pick "Vibe Desktop Environment" in your login manager,
+  To use it as a login session:                pick "Vibe Desktop Environment" (Wayland) or "... (X11)" in your login manager,
                                                or run start-vde from a text console.
   To use its own login screen (vdedm):         read /usr/share/doc/vde/dm.md first, then
                                                systemctl disable <your login manager> && systemctl enable vdedm

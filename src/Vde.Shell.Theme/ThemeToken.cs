@@ -35,6 +35,24 @@ public static class ThemeTokens
     public static bool IsClassic(Control element)
         => element.TryFindResource("Vde.Classic", element.ActualThemeVariant, out var value) && value is true;
 
+    // The Colors page's "Show accent color on title bars and window borders": the active window's titlebar and
+    // border take the accent. Never under a classic style, which has its own gradient bar.
+    public static bool AccentOnTitleBars(Control element)
+        => element.TryFindResource("Vde.AccentOnTitleBars", element.ActualThemeVariant, out var value) && value is true;
+
+    public static bool OnAccentBar(Control element, bool active) => active && !IsClassic(element) && AccentOnTitleBars(element);
+
+    // Black or white, whichever reads better on the colour (WCAG relative luminance).
+    public static Color InkOn(Color background)
+    {
+        static double Lin(byte v) { var c = v / 255.0; return c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4); }
+        var luminance = 0.2126 * Lin(background.R) + 0.7152 * Lin(background.G) + 0.0722 * Lin(background.B);
+        return luminance > 0.4 ? Colors.Black : Colors.White;
+    }
+
+    public static Color AccentColor(Control element)
+        => (Find(element, ThemeToken.Accent, Brushes.DodgerBlue) as ISolidColorBrush)?.Color ?? Colors.DodgerBlue;
+
     // Looks the token up for the element's current theme variant; the fallback is for apps with no engine running.
     public static IBrush Find(Control element, ThemeToken token, IBrush fallback)
         => element.TryFindResource(Key(token), element.ActualThemeVariant, out var value) && value is IBrush brush ? brush : fallback;

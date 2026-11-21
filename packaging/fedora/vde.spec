@@ -31,6 +31,11 @@ BuildRequires:  pkgconfig(libseat)
 BuildRequires:  pkgconfig(libudev)
 BuildRequires:  pkgconfig(xcb)
 BuildRequires:  pkgconfig(xcb-composite)
+BuildRequires:  pkgconfig(xcb-damage)
+BuildRequires:  pkgconfig(wayland-client)
+BuildRequires:  pkgconfig(cairo)
+BuildRequires:  pkgconfig(pangocairo)
+BuildRequires:  pkgconfig(libsystemd)
 BuildRequires:  pkgconfig(xcb-render)
 BuildRequires:  pkgconfig(xcb-xfixes)
 BuildRequires:  pkgconfig(xcb-icccm)
@@ -103,6 +108,8 @@ fi
 %{_datadir}/icons/hicolor/scalable/places/start-here-vde.svg
 %{_datadir}/icons/hicolor/symbolic/places/start-here-vde-symbolic.svg
 %{_datadir}/wayland-sessions/vde.desktop
+%{_datadir}/xsessions/vde-x11.desktop
+%{_bindir}/start-vde-x11
 %{_datadir}/applications/vexplore.desktop
 %{_datadir}/applications/vexplore-settings.desktop
 %{_datadir}/applications/vterminal.desktop
@@ -121,6 +128,7 @@ fi
 %{_prefix}/lib/systemd/user/fhived.service
 %{_prefix}/lib/systemd/user/fhived.socket
 %{_prefix}/lib/systemd/user/vdenotify.service
+%{_prefix}/lib/systemd/user/dosdevman.service
 %{_prefix}/lib/sysusers.d/vdedm.conf
 %{_prefix}/lib/tmpfiles.d/vdedm.conf
 %config(noreplace) %{_sysconfdir}/pam.d/vdedm

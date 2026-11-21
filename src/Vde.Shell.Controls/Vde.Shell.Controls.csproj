@@ -20,6 +20,7 @@
     <ProjectReference Include="..\Vde.Shell\Vde.Shell.csproj" />
     <ProjectReference Include="..\Vde.Terminal\Vde.Terminal.csproj" />
     <ProjectReference Include="..\Vde.Shell.Theme\Vde.Shell.Theme.csproj" />
+    <ProjectReference Include="..\Vde.Shell.Notifications\Vde.Shell.Notifications.csproj" />
   </ItemGroup>
 
 </Project>

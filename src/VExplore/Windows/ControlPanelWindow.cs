@@ -119,7 +119,8 @@ public sealed class ControlPanelWindow : Window
         ?? (_pageView is DisplayPageView ? DisplayPageView.PageId : null)
         ?? (_pageView is ThemesPageView ? ThemesPageView.PageId : null)
         ?? (_pageView is ColorsPageView ? ColorsPageView.PageId : null)
-        ?? (_pageView is LockScreenPageView ? LockScreenPageView.PageId : null);
+        ?? (_pageView is LockScreenPageView ? LockScreenPageView.PageId : null)
+        ?? (_pageView is FontsPageView ? FontsPageView.PageId : null);
     public SettingsPageView? Page => _pageView as SettingsPageView;
     // The breadcrumb of an open page ("Display" with category "System"), for hosts and tests.
     public string PageName => _pageHeadName.Text ?? "";

@@ -20,6 +20,7 @@ public static class ShellFolderIds
     public const string Music = "{7B2F6C1E-5D0A-4F3B-9E48-1C0D2A6B7018}";
     public const string Pictures = "{7B2F6C1E-5D0A-4F3B-9E48-1C0D2A6B7019}";
     public const string Videos = "{7B2F6C1E-5D0A-4F3B-9E48-1C0D2A6B701A}";
+    public const string QuickAccess = "{7B2F6C1E-5D0A-4F3B-9E48-1C0D2A6B701B}";
 
     // The namespaces a folder lists others in. "Sidebar" is the file manager's places, "Desktop" the icons on the
     // desktop, "Computer" what This Computer shows first, and "Network" and "ControlPanel" what those folders add to
@@ -27,14 +28,15 @@ public static class ShellFolderIds
     public static string[] Places(string clsid) => clsid switch
     {
         Computer or Network or Trash => ["Sidebar", "Desktop"],
-        Home => ["Sidebar"],
-        Documents or Desktop or Downloads or Music or Pictures or Videos => ["Sidebar", "Computer"],
+        Home or QuickAccess => ["Sidebar"],
+        Documents or Desktop or Downloads or Music or Pictures or Videos => ["Sidebar", "QuickAccess"],   // the user's places live in Quick access
         _ => [],
     };
 
     // clsid, parsing name ("shell:Computer"), display name, order (the sidebar's, and This Computer's)
     public static readonly (string Clsid, string Parsing, string Name, int Order)[] All =
     [
+        (QuickAccess, "QuickAccess", "Quick access", 0),
         (Home, "Home", "Home", 1),
         (Desktop, "Desktop", "Desktop", 2),
         (Documents, "Documents", "Documents", 3),
@@ -49,12 +51,16 @@ public static class ShellFolderIds
     ];
 }
 
+[VdeComponent(ShellFolderIds.QuickAccess, ProgId = "VExplore.QuickAccess", Description = "Quick access", ThreadingModel = ThreadingModel.Apartment,
+    Categories = [ComponentCategories.ShellFolder])]
+public sealed class QuickAccessShellFolder() : QuickAccessFolder();
+
 [VdeComponent(ShellFolderIds.Computer, ProgId = "VExplore.Computer", Description = "This Computer", ThreadingModel = ThreadingModel.Apartment,
     Categories = [ComponentCategories.ShellFolder])]
 public sealed class ComputerShellFolder : ComputerFolder
 {
     public ComputerShellFolder() : base() { }   // a registered component is created through its parameterless constructor
-    public ComputerShellFolder(KnownFolders? folders) : base(folders) { }
+    public ComputerShellFolder(KnownFolders? folders, DosDevices? dos = null) : base(folders, dos: dos) { }
 }
 
 [VdeComponent(ShellFolderIds.Network, ProgId = "VExplore.Network", Description = "Network", ThreadingModel = ThreadingModel.Apartment,
@@ -65,7 +71,7 @@ public sealed class NetworkShellFolder() : NetworkFolder();
     Categories = [ComponentCategories.ShellFolder])]
 public sealed class TrashShellFolder() : TrashFolder();
 
-// The user's own folders: shell folders that stand for their directories, listed in the sidebar and in This Computer.
+// The user's own folders: shell folders that stand for their directories, listed in the sidebar and in Quick access.
 [VdeComponent(ShellFolderIds.Home, ProgId = "VExplore.Home", Description = "Home", ThreadingModel = ThreadingModel.Apartment,
     Categories = [ComponentCategories.ShellFolder])]
 public sealed class HomeShellFolder : HomeFolder
@@ -138,13 +144,14 @@ public static class ShellFolderSetup
     public const ShellFolderAttributes Attributes = ShellFolderAttributes.Folder | ShellFolderAttributes.BrowseInPlace;
 
     // The shell's folders added to a catalog as built-ins: found by name, listed in the sidebar, no registration needed.
-    public static void AddBuiltIns(ShellFolderCatalog catalog, KnownFolders? folders = null)
+    public static void AddBuiltIns(ShellFolderCatalog catalog, KnownFolders? folders = null, DosDevices? dos = null)
     {
         void Add(string clsid, IShellFolder folder)
         {
             var (_, parsing, name, order) = ShellFolderIds.All.First(f => f.Clsid == clsid);
             catalog.AddBuiltIn(clsid, parsing, name, Attributes, folder, ShellFolderIds.Places(clsid), order);
         }
+        Add(ShellFolderIds.QuickAccess, new QuickAccessShellFolder());
         Add(ShellFolderIds.Home, new HomeShellFolder(folders));
         Add(ShellFolderIds.Desktop, new DesktopShellFolder(folders));
         Add(ShellFolderIds.Documents, new DocumentsShellFolder(folders));
@@ -152,7 +159,7 @@ public static class ShellFolderSetup
         Add(ShellFolderIds.Music, new MusicShellFolder(folders));
         Add(ShellFolderIds.Pictures, new PicturesShellFolder(folders));
         Add(ShellFolderIds.Videos, new VideosShellFolder(folders));
-        Add(ShellFolderIds.Computer, new ComputerShellFolder(folders));
+        Add(ShellFolderIds.Computer, new ComputerShellFolder(folders, dos));
         Add(ShellFolderIds.Network, new NetworkShellFolder());
         Add(ShellFolderIds.Trash, new TrashShellFolder());
         Add(ShellFolderIds.ControlPanel, new ControlPanelShellFolder());

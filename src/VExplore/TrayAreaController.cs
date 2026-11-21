@@ -6,6 +6,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using System.Runtime.InteropServices;
+using Vde.Shell;
 using Vde.Shell.Controls;
 using Vde.Shell.Tray;
 using TrayIcon = Vde.Shell.Tray.TrayIcon;
@@ -20,12 +21,21 @@ public sealed class TrayAreaController : IDisposable
 {
     private readonly TaskbarView _taskbar;
     private readonly Action _changed;
+    private readonly Vibe.Registry.IHive? _hive;
     private TrayHost? _host;
 
-    public TrayAreaController(TaskbarView taskbar, Action changed)
+    // hive: where the user's corner/overflow choices live (Personalization > Taskbar); null shows every icon in the corner.
+    public TrayAreaController(TaskbarView taskbar, Action changed, Vibe.Registry.IHive? hive = null)
     {
         _taskbar = taskbar;
         _changed = changed;
+        _hive = hive;
+        if (hive is not null)
+            hive.Changed += (_, c) =>
+            {
+                if (c.IsUnder(TrayPreferences.KeyPath) && _host is { } host)
+                    Dispatcher.UIThread.Post(() => { if (ReferenceEquals(host, _host)) { Populate(host); _changed(); } });
+            };
     }
 
     public async Task StartAsync()
@@ -49,8 +59,30 @@ public sealed class TrayAreaController : IDisposable
     private void Populate(TrayHost host)
     {
         _taskbar.TrayArea.Children.Clear();
-        foreach (var icon in host.Icons.Where(i => i.Status != "Passive"))   // an app that sets Passive is asking not to be shown
-            _taskbar.TrayArea.Children.Add(MakeButton(host, icon));
+        var icons = host.Icons.Where(i => i.Status != "Passive").ToList();   // an app that sets Passive is asking not to be shown
+        var overflow = new List<TrayIcon>();
+        foreach (var icon in icons)
+        {
+            var key = TrayPreferences.KeyFor(icon.Id.Length > 0 ? icon.Id : icon.Service);
+            if (_hive is null) { _taskbar.TrayArea.Children.Add(MakeButton(host, icon)); continue; }
+            TrayPreferences.Remember(_hive, key, icon.DisplayName, icon.BestIconName);   // so the settings window can list it
+            if (TrayPreferences.InCorner(_hive, key)) _taskbar.TrayArea.Children.Add(MakeButton(host, icon));
+            else overflow.Add(icon);
+        }
+        if (overflow.Count > 0)
+        {
+            // the icons the user moved out of the corner wait behind a chevron
+            var panel = new WrapPanel { MaxWidth = 4 * 28, Orientation = Avalonia.Layout.Orientation.Horizontal };
+            foreach (var icon in overflow) panel.Children.Add(MakeButton(host, icon));
+            var chevron = new Button
+            {
+                Content = new TextBlock { Text = "\u2303", FontSize = 14, HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center },
+                Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = Brushes.Transparent, Width = 22, Height = 24,
+                Tag = "TrayOverflow", Flyout = new Flyout { Content = panel, Placement = PlacementMode.Top },
+            };
+            ToolTip.SetTip(chevron, "Show hidden icons");
+            _taskbar.TrayArea.Children.Insert(0, chevron);
+        }
     }
 
     private Button MakeButton(TrayHost host, TrayIcon icon)

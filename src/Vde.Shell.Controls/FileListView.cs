@@ -159,6 +159,16 @@ public sealed class FileListView : UserControl
 
     public void ClearSelection() => _list.SelectedItems?.Clear();
 
+    // Select what is not selected and nothing of what is.
+    public void InvertSelection()
+    {
+        var chosen = SelectedEntries.ToHashSet();
+        var all = _list.Items.OfType<FileEntry>().ToList();
+        _list.SelectedItems?.Clear();
+        foreach (var entry in all.Where(e => !chosen.Contains(e)))
+            _list.SelectedItems?.Add(entry);
+    }
+
     // The entry a pointer event's source sits in (null over the bare background or a group heading).
     public FileEntry? EntryUnder(object? source)
         => (source as Visual)?.FindAncestorOfType<ListBoxItem>()?.DataContext as FileEntry;
@@ -195,7 +205,7 @@ public sealed class FileListView : UserControl
 
     private void RequestSort(SortKey key) => Sort(key, key == SortKey && !SortDescending);   // the same heading again flips the direction
 
-    private void InvokeSelected()
+    public void InvokeSelected()
     {
         var selected = SelectedEntries;
         if (selected.Count > 0)

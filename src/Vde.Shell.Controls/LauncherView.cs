@@ -14,7 +14,7 @@ namespace Vde.Shell.Controls;
 // The start menu: a search box on top; below it the pinned apps and recent ones, or the alphabetical list of
 // everything; typing replaces all of that with search results. All of it is local (see LauncherModel).
 // What the footer's buttons ask the shell to do (the footer itself does none of it).
-public enum LauncherFooterAction { Files, Settings, SignOut, Sleep, Restart, ShutDown }
+public enum LauncherFooterAction { Files, Settings, SignOut, Sleep, Restart, ShutDown, Documents, Downloads, Music, Pictures, Videos, Network, Home }
 
 public sealed class LauncherView : UserControl
 {
@@ -188,8 +188,9 @@ public sealed class LauncherView : UserControl
         who.Click += (_, _) => InvokeFooter(LauncherFooterAction.Settings);   // the account's settings live there
 
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2, HorizontalAlignment = HorizontalAlignment.Right };
-        buttons.Children.Add(FooterButton("Files", "Files", ["system-file-manager", "folder"], LauncherFooterAction.Files));
-        buttons.Children.Add(FooterButton("Settings", "Settings", ["preferences-system", "configure"], LauncherFooterAction.Settings));
+        foreach (var folder in _model.StartFolders)
+            if (Enum.TryParse<LauncherFooterAction>(folder.Id, out var action))
+                buttons.Children.Add(FooterButton(folder.Id, folder.Label, folder.IconNames, action));
         var power = FooterButton("Power", "Power", ["system-shutdown"], null);
         power.Click += (_, _) => _powerChoices.IsVisible = !_powerChoices.IsVisible;
         buttons.Children.Add(power);

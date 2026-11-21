@@ -157,3 +157,107 @@ public class CaptionButtonTests
         Assert.Equal(1, clicks);
     }
 }
+
+public class TabReorderTests
+{
+    [AvaloniaFact]
+    public void Dragging_a_tab_past_its_neighbours_midpoints_moves_it_and_reports_each_move()
+    {
+        var strip = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
+        var tabs = new[] { "a", "b", "c" }.Select(n => new Border { Width = 100, Height = 20, Tag = n }).ToList();
+        foreach (var t in tabs) strip.Children.Add(t);
+        var window = new Window { Content = strip, Width = 400, Height = 100 };
+        window.Show();
+
+        var moves = new List<(int, int)>();
+        TabReorder.Move(strip, tabs[0], 160, (f, t) => moves.Add((f, t)));   // past b's midpoint (150), not c's (250)
+        Assert.Equal(new[] { "b", "a", "c" }, strip.Children.Select(c => (string)((Control)c).Tag!));
+        Assert.Equal([(0, 1)], moves);
+
+        TabReorder.Move(strip, tabs[0], 10, (f, t) => moves.Add((f, t)));    // back to the start
+        Assert.Same(tabs[0], strip.Children[0]);
+        Assert.Equal(2, moves.Count);
+    }
+}
+
+public class NotificationCenterViewTests
+{
+    private sealed class Clock : Vde.Shell.Notifications.IScheduler
+    {
+        public DateTime Now = new(2026, 11, 20, 11, 0, 0, DateTimeKind.Utc);
+        public IDisposable After(TimeSpan delay, Action action) => new Nop();
+        private sealed class Nop : IDisposable { public void Dispose() { } }
+    }
+
+    [AvaloniaFact]
+    public void The_view_shows_one_card_per_app_collapsed_expands_and_clears()
+    {
+        var clock = new Clock();
+        var service = new Vde.Shell.Notifications.NotificationService(clock, () => clock.Now);
+        var model = new Vde.Shell.Notifications.NotificationCenterModel(service);
+        var view = new NotificationCenterView(model, () => clock.Now.ToLocalTime());
+        var window = new Window { Content = view };
+        window.Show();
+        Assert.True(view.IsEmpty);
+        Assert.False(view.ClearButton.IsEnabled);
+
+        service.Notify(new("WhatsApp", "Hello", ExpireTimeoutMs: 0, Body: "Can you help?"));
+        service.Notify(new("WhatsApp", "Again", ExpireTimeoutMs: 0));
+        service.Notify(new("Teams", "Lunch?", ExpireTimeoutMs: 0));
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.Equal(2, view.Cards.Count);
+        Assert.True(view.ClearButton.IsEnabled);
+
+        model.ToggleExpanded("WhatsApp");
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.Equal(2, view.Cards.Count);   // still one card per app, now holding both notifications
+
+        view.ClearButton.Focus();
+        model.ClearAll();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.True(view.IsEmpty);
+        Assert.Empty(view.Cards);
+    }
+
+    [AvaloniaFact]
+    public void The_do_not_disturb_button_follows_and_drives_the_setting()
+    {
+        var clock = new Clock();
+        var service = new Vde.Shell.Notifications.NotificationService(clock, () => clock.Now);
+        var model = new Vde.Shell.Notifications.NotificationCenterModel(service);
+        var view = new NotificationCenterView(model);
+        new Window { Content = view }.Show();
+        view.DoNotDisturbButton.IsChecked = true;
+        Assert.True(service.Settings.DoNotDisturb);
+        model.DoNotDisturb = false;
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.False(view.DoNotDisturbButton.IsChecked);
+    }
+}
+
+public class TitleBarAccentTests
+{
+    [AvaloniaTheory]
+    [InlineData(true, true, true)]     // option on, active window: accent
+    [InlineData(true, false, false)]   // option on, inactive window: plain
+    [InlineData(false, true, false)]   // option off: plain
+    public void The_chrome_titlebar_takes_the_accent_only_when_the_option_is_on_and_the_window_is_active(bool option, bool active, bool accented)
+    {
+        var accent = Avalonia.Media.Color.Parse("#E81123");
+        TestTheme.Engine.Apply(new Vde.Shell.Theme.ThemeSelection(Accent: accent, AccentOnTitleBars: option));
+        var host = new Avalonia.Controls.Window { Content = new WindowChromeView { Active = active } };
+        host.Show();
+        var view = (WindowChromeView)host.Content!;
+
+        var fill = (view.Background as Avalonia.Media.ISolidColorBrush)?.Color;
+        Assert.Equal(accented, fill == accent);
+    }
+
+    [Theory]
+    [InlineData("#FFFFFF", "#000000")]
+    [InlineData("#000000", "#FFFFFF")]
+    [InlineData("#0078D7", "#FFFFFF")]
+    [InlineData("#FFB900", "#000000")]   // yellow needs dark text
+    public void Text_on_an_accent_bar_is_black_or_white_whichever_reads(string accent, string ink)
+        => Assert.Equal(Avalonia.Media.Color.Parse(ink), Vde.Shell.Theme.ThemeTokens.InkOn(Avalonia.Media.Color.Parse(accent)));
+}

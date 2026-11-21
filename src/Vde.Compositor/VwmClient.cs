@@ -21,10 +21,14 @@ public sealed class VwmClient : IWindowSource, IDisposable
     // role claims made on behalf of this process's windows: pid of the owning process → the role it asked
     // for and the window ids already claimed for it (cleared when the connection drops so it re-claims)
     private readonly Dictionary<uint, (string Role, HashSet<uint> Claimed)> _claims = new();
+    // flyouts (the Start menu) placed on behalf of a window: (pid, window title) → where, and the ids already placed
+    private readonly Dictionary<(uint Pid, string Title), (int X, int Y, HashSet<uint> Placed)> _popups = new();
     private Socket? _socket;
     private CancellationTokenSource? _stop;
 
     public event EventHandler? Changed;
+    // The Start key was pressed alone (or Super+Space): the shell that called HandleStart opens or closes the Start menu.
+    public event EventHandler? StartRequested;
     // vwm asks for a titlebar image. Raised on the reading thread.
     public event EventHandler<ChromeRequest>? ChromeRequested;
     public event EventHandler<MenuRequest>? MenuRequested;
@@ -72,17 +76,67 @@ public sealed class VwmClient : IWindowSource, IDisposable
     public void Maximize(string id) => Send("maximize", id);
     public void Unmaximize(string id) => Send("unmaximize", id);
 
+    // Task view: vwm shows its window switcher and keeps it up until a window is picked (again closes it).
+    public void TaskView()
+    {
+        if (_socket is not { } socket) return;
+        try { lock (_lock) socket.Send(Encoding.ASCII.GetBytes("taskview\n")); }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    // Registers this connection as the one that opens and closes the Start menu; without one, vwm runs its launcher program.
+    public void HandleStart()
+    {
+        if (_socket is not { } socket) return;
+        try { lock (_lock) socket.Send(Encoding.ASCII.GetBytes("handle-start\n")); }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    // Asks vwm to show the next window of process `pid` titled `title` as a flyout at x,y (screen pixels): no frame,
+    // not in the taskbar, focused. Call it before showing the window; it applies once per showing.
+    public void AnnouncePopup(uint pid, string title, int x, int y)
+    {
+        var placeNow = new List<uint>();
+        lock (_lock)
+        {
+            var placed = new HashSet<uint>();
+            _popups[(pid, title)] = (x, y, placed);
+            foreach (var w in _windows.Values.Where(w => w.Pid == pid && w.Title == title))
+                if (uint.TryParse(w.Id, out var wid) && placed.Add(wid))
+                    placeNow.Add(wid);
+        }
+        foreach (var id in placeNow)
+            SendPopup(id, x, y);
+    }
+
+    private void SendPopup(uint id, int x, int y)
+    {
+        if (_socket is not { } socket) return;
+        try { lock (_lock) socket.Send(Encoding.ASCII.GetBytes($"popup {id} {x} {y}\n")); }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
+
     // Names a kind of window this shell (or the process `pid`) owns: "desktop", "top", "bottom", "left" or
     // "right". Claims are applied when vwm reports a window of that pid, and re-applied if it re-appears.
     public void AnnounceRole(uint pid, string role)
     {
-        if (role is not ("desktop" or "top" or "bottom" or "left" or "right"))
+        // "top-auto" and the like: a taskbar that hides itself, so vwm does not reserve its edge
+        if (role is not ("desktop" or "top" or "bottom" or "left" or "right" or "top-auto" or "bottom-auto" or "left-auto" or "right-auto"))
             return;
         List<uint> claimNow = new();
         lock (_lock)
         {
             if (!_claims.TryGetValue(pid, out var claim))
                 _claims[pid] = claim = (role, new HashSet<uint>());
+            else if (claim.Role != role)
+            {
+                // a new role for the same windows (the taskbar's edge or auto-hide changed): say it again to the claimed ones
+                claimNow.AddRange(claim.Claimed);
+                _claims[pid] = claim = (role, claim.Claimed);
+            }
             // a window of that pid may already be listed: claim it right away
             foreach (var w in _windows.Values.Where(w => w.Pid == pid))
                 if (uint.TryParse(w.Id, out var wid) && claim.Claimed.Add(wid))
@@ -115,6 +169,15 @@ public sealed class VwmClient : IWindowSource, IDisposable
 
     // The drawn window menu (WindowMenuView's size).
     public void SendMenu(uint id, int width, int height, ReadOnlySpan<byte> bgra) => SendImage("menu", id, width, height, bgra);
+
+    // The 1px window border vwm draws: 0xRRGGBB for the focused window and for the others.
+    public void SetBorderColors(uint focused, uint other)
+    {
+        if (_socket is not { } socket) return;
+        try { lock (_lock) socket.Send(Encoding.ASCII.GetBytes($"border {focused:x6} {other:x6}\n")); }
+        catch (SocketException) { }
+        catch (ObjectDisposedException) { }
+    }
 
     // What double-clicking a titlebar does: maximize (default), minimize, close or none.
     public void SetTitlebarDoubleClick(string action)
@@ -198,6 +261,12 @@ public sealed class VwmClient : IWindowSource, IDisposable
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             string? claimRole = null;
+            (int X, int Y)? popupAt = null;
+            if (root.GetProperty("event").GetString() == "start")
+            {
+                StartRequested?.Invoke(this, EventArgs.Empty);
+                return;
+            }
             lock (_lock)
             {
                 var ev = root.GetProperty("event").GetString();
@@ -220,6 +289,7 @@ public sealed class VwmClient : IWindowSource, IDisposable
                     _order.Remove(id);
                     // forget the claim for that id so the pid's next window is claimed again
                     foreach (var claim in _claims.Values) claim.Claimed.Remove(id);
+                    foreach (var popup in _popups.Values) popup.Placed.Remove(id);
                     WindowClosed?.Invoke(this, id);
                 }
                 else if (ev == "window")
@@ -229,12 +299,17 @@ public sealed class VwmClient : IWindowSource, IDisposable
                         Bool(root, "active"), Bool(root, "minimized"), pid);
                     if (!_windows.ContainsKey(id)) _order.Add(id);
                     _windows[id] = info;
-                    if (pid != 0 && _claims.TryGetValue(pid, out var claim) && claim.Claimed.Add(id))
+                    if (pid != 0 && _popups.TryGetValue((pid, info.Title), out var popup))
+                    {
+                        if (popup.Placed.Add(id)) popupAt = (popup.X, popup.Y);   // a flyout waiting to be placed
+                    }
+                    else if (pid != 0 && _claims.TryGetValue(pid, out var claim) && claim.Claimed.Add(id))
                         claimRole = claim.Role;   // a role claim waiting on this process's window
                 }
                 else return;
             }
             if (claimRole is { } role) SendRole(role, root.GetProperty("id").GetUInt32());
+            if (popupAt is { } at) SendPopup(root.GetProperty("id").GetUInt32(), at.X, at.Y);
             Changed?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)

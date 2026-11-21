@@ -89,6 +89,7 @@ public sealed class TerminalWindow : Window
         foreach (var edge in Edges()) grid.Children.Add(edge);
         _body = new Border { CornerRadius = new CornerRadius(8), ClipToBounds = true, Background = Brushes.Black, Child = grid };
         Opened += (_, _) => _body.Background = ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Black);
+        TitleBarAccent.Attach(this, bar, _body);
         PropertyChanged += (_, e) =>
         {
             if (e.Property == WindowStateProperty && _maximizeButton is { } max)   // the middle button is Restore while maximized
@@ -212,6 +213,7 @@ public sealed class TerminalWindow : Window
             Padding = new Thickness(10, 0), Height = BarHeight - 4, BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(6, 6, 0, 0),
         };
         tab.Header.Click += (_, _) => Select(tab);
+        TabReorder.Attach(_tabStrip, tab.Header, (from, to) => { _tabs.RemoveAt(from); _tabs.Insert(to, tab); });
         _tabs.Add(tab);
         _tabStrip.Children.Add(tab.Header);
         Select(tab);

@@ -89,9 +89,11 @@ public static class ExplorerCommand
     public static int RunSettings(string[] args, TextWriter output, TextWriter error)
     {
         if (args.Any(a => a is "-h" or "--help")) { output.Write(SettingsUsageText); return 0; }
-        if (args.Length != 0) { error.Write(SettingsUsageText); return 2; }
+        // vdesettings [--page <id>]: opens on that page ("widgets", "taskbar"...)
+        string? page = args.Length == 2 && args[0] == "--page" ? args[1] : null;
+        if (args.Length != 0 && page is null) { error.Write(SettingsUsageText); return 2; }
         using var host = ExplorerHost.Open();
-        return RunFirstWindow(host, () => NewSettings(host));
+        return RunFirstWindow(host, () => NewSettings(host, page));
     }
 
     // vderegedit: the registry editor as its own program.
@@ -105,7 +107,7 @@ public static class ExplorerCommand
 
     public const string SettingsUsageText = """
         Vibe Settings: display, appearance, desktop, taskbar, windows and more.
-        usage: vdesettings
+        usage: vdesettings [--page <id>]
 
         """;
 
@@ -133,7 +135,7 @@ public static class ExplorerCommand
         return 0;
     }
 
-    private static Window NewSettings(ExplorerHost host)
+    private static Window NewSettings(ExplorerHost host, string? page = null)
     {
         var xdg = XdgDirectories.Default;
         var apps = ShellData.Apps(Locale.FromEnvironment());
@@ -149,6 +151,8 @@ public static class ExplorerCommand
                 Launch(host, command);
         }, customPages: id => CustomPage(host, wallpapers, id), user: new UserProfile(), deviceSettings: device, wallpapers: wallpapers);
         WindowMica.Attach(settings, device);
+        if (page is not null && catalog.Items.FirstOrDefault(i => string.Equals(i.PageId, page, StringComparison.OrdinalIgnoreCase)) is { } target)
+            settings.Opened += (_, _) => settings.Open(target);
         return settings;
     }
 
@@ -165,8 +169,29 @@ public static class ExplorerCommand
         LockScreenPageView.PageId => new LockScreenPageView(host.CurrentUser, wallpapers, StatusApps(), BrowseForWallpaperAsync, host.LocalMachine),
         ThemesPageView.PageId => new ThemesPageView(host.CurrentUser, Vde.Shell.Theme.ThemeCatalog.Discover(), host.LocalMachine),
         ColorsPageView.PageId => new ColorsPageView(host.CurrentUser, host.LocalMachine),
+        FontsPageView.PageId => new FontsPageView(host.CurrentUser, InstallFontsAsync),
         _ => null,
     };
+
+    // Fonts dropped on the Fonts page: into this user's folder, or for everyone through the password prompt (sudo).
+    private static async Task<string> InstallFontsAsync(IReadOnlyList<string> paths, bool local)
+    {
+        var fonts = paths.Where(FontInstaller.IsFont).ToList();
+        if (fonts.Count == 0)
+            return FontsPageView.FontInstallText(new FontInstallResult([], paths));
+        if (local)
+        {
+            var dir = FontInstaller.LocalDirectory();
+            var result = FontInstaller.InstallInto(paths, dir);
+            FontInstaller.RefreshCache(dir);
+            return FontsPageView.FontInstallText(result);
+        }
+        if (ShellApp.Elevation is not { } elevation)
+            return "Installing for all users needs elevation, which is not set up here.";
+        await ElevationRunner.RunAsync(elevation, new ElevationRequest("Install fonts for all users", "install", fonts[0], FontInstaller.SystemCommand(fonts),
+            "installing a font for every user writes to " + FontInstaller.SystemDirectory));
+        return FontsPageView.FontInstallText(new FontInstallResult(fonts, paths.Except(fonts).ToList())) + " For all users.";
+    }
 
     // The classic Control Panel: the catalog of items shown the Windows 7 way, category links first.
     private static Window NewControlPanel(ExplorerHost host)
@@ -230,8 +255,11 @@ public static class ExplorerCommand
         var engine = new Vde.Shell.Theme.ThemeEngine(Vde.Shell.Theme.ThemeCatalog.Discover());
         using var binding = engine.BindTo(host.CurrentUser);
         var apps = ShellData.Apps(Locale.FromEnvironment());
-        var service = new ChromeService(client, new ChromeRenderer(apps, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine)));
-        engine.Changed += (_, _) => service.RedrawAll();
+        var renderer = new ChromeRenderer(apps, DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
+        var service = new ChromeService(client, renderer);
+        void PushBorder() { var (focused, other) = renderer.BorderColors(); client.SetBorderColors(focused, other); }
+        engine.Changed += (_, _) => { service.RedrawAll(); PushBorder(); };
+        PushBorder();
         void PushWindowSettings()
         {
             var value = host.CurrentUser.GetValue(BuiltInPages.WindowsKey, "TitlebarDoubleClick") is { Kind: Vibe.Registry.RegistryValueKind.String, Data: string s } ? s : "Maximize";
@@ -249,28 +277,71 @@ public static class ExplorerCommand
     {
         var apps = ShellData.Apps(Locale.FromEnvironment());
         var model = new TaskbarModel(host.CurrentUser, apps, Windows(), entry => Launch(host, entry));
-        var window = new TaskbarWindow(model, () => Launch(host, "vexplore --launcher"),
+        StartMenuController? startMenu = null;
+        var window = new TaskbarWindow(model, () => { if (startMenu is not null) startMenu.Toggle(); else Launch(host, "vexplore --launcher"); },
             settings: DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));
         // Tell vwm this window is the taskbar: under Wayland there are no X11 struts, the role does it.
-        var role = ClaimRole(model.Edge switch
-        {
-            TaskbarEdge.Top => "top",
-            TaskbarEdge.Left => "left",
-            TaskbarEdge.Right => "right",
-            _ => "bottom",
-        });
+        var role = ClaimRole(TaskbarRole(model));
         window.Closed += (_, _) => role.Dispose();
+        // Start is a popup of this process: the button, the Start key and Super+Space toggle it (see StartMenuController).
+        startMenu = new StartMenuController(() => NewLauncher(host), window, model, role);
+        window.View.SearchInvoked += (_, _) => startMenu.Toggle();   // Start opens ready to search
+        window.View.TaskViewInvoked += (_, _) => role.TaskView();
+        var widgets = new WidgetsController(() => NewWidgetsPanel(host), window, model, role);
+        window.View.WidgetsInvoked += (_, _) => widgets.Toggle();
+        window.View.ShowDesktopInvoked += (_, _) => model.ToggleShowDesktop();
+        window.KeepVisible = () => startMenu.IsOpen || widgets.IsOpen;   // an auto-hiding bar stays while Start is open
+        // the edge or auto-hide changed: vwm needs to hear the new role (an auto-hiding bar reserves no space)
+        void AnnounceEdge() => role.AnnounceRole((uint)Environment.ProcessId, TaskbarRole(model));
+        model.Changed += (_, _) => AnnounceEdge();
+        window.View.TouchKeyboardInvoked += (_, _) => OnScreenKeyboard.Toggle();
         window.FollowAppearance(host.CurrentUser);
         // The tray: the shell becomes the session's StatusNotifierWatcher host and fills the slot.
         window.Opened += async (_, _) =>
         {
-            var tray = new TrayAreaController(window.View, () => window.Dock());
+            var tray = new TrayAreaController(window.View, () => window.Dock(), host.CurrentUser);
             window.Closed += (_, _) => tray.Dispose();
             try { await tray.StartAsync(); }
             catch { /* a session without a bus just runs trayless */ }
         };
         return window;
     }
+
+    // VDE's widgets panel: our cards plus the community's (components and apps that offer a widget), each only when the user allowed it.
+    private static WidgetsPanelView NewWidgetsPanel(ExplorerHost host)
+    {
+        var shell = new ShellExecute(new FileAssociations(XdgDirectories.Default, ShellData.Mime(), ShellData.Apps([]), ShellApp.Desktops(), host.Classes), ShellData.Mime());
+        return new WidgetsPanelView(host.CurrentUser,
+            url => { try { shell.Open(url); } catch (Exception e) when (e is FileNotFoundException or InvalidOperationException or NoAssociationException) { } },
+            file => { try { shell.Open(file); } catch (Exception e) when (e is FileNotFoundException or InvalidOperationException or NoAssociationException) { } },
+            () => { try { shell.Run("vdesettings --page widgets"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } },
+            community: () => CommunityWidgets(host));
+    }
+
+    // The widgets the community made that the user allowed: components (trusted registrations) and apps with a D-Bus widget. Noted in the
+    // registry as it goes so Settings can list them to be allowed.
+    private static IReadOnlyList<CommunityWidget> CommunityWidgets(ExplorerHost host)
+    {
+        var providers = new WidgetProviders(host.Classes, host.CurrentUser);
+        var apps = ShellData.Apps(Locale.FromEnvironment()).Entries
+            .Where(e => e.WidgetBusName is { } bus && Vde.Shell.Tray.WidgetAppClient.IsValid(bus, e.WidgetPath)).ToList();
+        providers.Remember(apps.Select(a => (a.Id, a.Name)));
+        var list = new List<CommunityWidget>();
+        foreach (var (id, widget) in providers.Load(host.Loader))
+            list.Add(new CommunityWidget(WidgetProviders.KeyOf(id), widget.Title, widget.IconNames, () => (Avalonia.Controls.Control)widget.CreateContent()));
+        foreach (var app in apps.Where(a => providers.IsAllowed(a.Id)))
+            list.Add(new CommunityWidget(WidgetProviders.KeyOf(app.Id), app.Name, app.Icon is { Length: > 0 } icon ? [icon] : ["applications-utilities"], () => new AppWidgetView(app.WidgetBusName!, app.WidgetPath)));
+        return list;
+    }
+
+    // What vwm is told the taskbar is: its edge, and "-auto" when it hides itself (then it reserves no space).
+    private static string TaskbarRole(TaskbarModel model) => model.Edge switch
+    {
+        TaskbarEdge.Top => "top",
+        TaskbarEdge.Left => "left",
+        TaskbarEdge.Right => "right",
+        _ => "bottom",
+    } + (model.AutoHide ? "-auto" : "");
 
     private static Window NewDesktop(ExplorerHost host)
     {
@@ -295,7 +366,9 @@ public static class ExplorerCommand
                 Console.Error.WriteLine("vexplore: " + e.Message);
             }
         }, types, openSettings: () => { try { shell.Run("vdesettings"); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } }, shortcuts: ShellApp.Shortcuts, properties: paths => ShellApp.PropertyContext(host, paths), systemDefaults: host.LocalMachine, shellFolders: ShellApp.ShellFolders(host),
-            openShellFolder: path => { try { shell.Run("vexplore --files " + ExecLineQuote(path)); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } });
+            openShellFolder: path => { try { shell.Run("vexplore --files " + ExecLineQuote(path)); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } },
+            openPage: page => { try { shell.Run("vdesettings --page " + page); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } },
+            openTerminal: dir => { try { shell.Run("vterminal --working-directory " + ExecLineQuote(dir)); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } });
         window.Closed += (_, _) => role.Dispose();
         return window;
     }
@@ -313,7 +386,7 @@ public static class ExplorerCommand
 
     private static string ExecLineQuote(string path) => "\"" + path.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
 
-    private static Window NewLauncher(ExplorerHost host)
+    private static LauncherWindow NewLauncher(ExplorerHost host)
     {
         var xdg = XdgDirectories.Default;
         var apps = ShellData.Apps(Locale.FromEnvironment());
@@ -338,6 +411,9 @@ public static class ExplorerCommand
         {
             LauncherFooterAction.Files => "vexplore --files " + ExecLineQuote(home),
             LauncherFooterAction.Settings => "vdesettings",
+            LauncherFooterAction.Documents or LauncherFooterAction.Downloads or LauncherFooterAction.Music or LauncherFooterAction.Pictures
+                or LauncherFooterAction.Videos or LauncherFooterAction.Network or LauncherFooterAction.Home
+                => StartFolders.Location(action.ToString()) is { } place ? "vexplore --files " + ExecLineQuote(place) : null,
             LauncherFooterAction.SignOut => "vde-session --logout",
             LauncherFooterAction.Sleep => "systemctl suspend",
             LauncherFooterAction.Restart => "systemctl reboot",

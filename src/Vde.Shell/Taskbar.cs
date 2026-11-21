@@ -80,6 +80,33 @@ public sealed class TaskbarModel : IDisposable
         set => _hive.SetValue(KeyPath, "Alignment", RegistryValueKind.String, value.ToString());
     }
 
+    // Taskbar items and corner icons (Personalization > Taskbar): each button can be shown or hidden.
+    public bool ShowSearch { get => RegistryBool.Get(_hive, KeyPath, "ShowSearch") ?? true; set => RegistryBool.Set(_hive, KeyPath, "ShowSearch", value); }
+    public bool ShowTaskView { get => RegistryBool.Get(_hive, KeyPath, "ShowTaskView") ?? true; set => RegistryBool.Set(_hive, KeyPath, "ShowTaskView", value); }
+    public bool ShowWidgets { get => RegistryBool.Get(_hive, KeyPath, "ShowWidgets") ?? true; set => RegistryBool.Set(_hive, KeyPath, "ShowWidgets", value); }
+    public bool ShowTouchKeyboard { get => RegistryBool.Get(_hive, KeyPath, "ShowTouchKeyboard") ?? false; set => RegistryBool.Set(_hive, KeyPath, "ShowTouchKeyboard", value); }
+
+    // Behaviors: the bar hides until the pointer reaches its edge; the far corner shows the desktop.
+    public bool AutoHide { get => RegistryBool.Get(_hive, KeyPath, "AutoHide") ?? false; set => RegistryBool.Set(_hive, KeyPath, "AutoHide", value); }
+    public bool ShowDesktopCorner { get => RegistryBool.Get(_hive, KeyPath, "ShowDesktopCorner") ?? true; set => RegistryBool.Set(_hive, KeyPath, "ShowDesktopCorner", value); }
+
+    private List<string> _hiddenForDesktop = [];
+
+    // Show desktop: minimizes every window; pressed again, brings back the ones it hid. Returns true when it hid them.
+    public bool ToggleShowDesktop()
+    {
+        var open = _windows.Windows.Where(w => !w.IsMinimized).ToList();
+        if (open.Count > 0)
+        {
+            _hiddenForDesktop = open.Select(w => w.Id).ToList();
+            foreach (var w in open) _windows.Minimize(w.Id);
+            return true;
+        }
+        foreach (var id in _hiddenForDesktop) _windows.Activate(id);
+        _hiddenForDesktop = [];
+        return false;
+    }
+
     public bool IsVertical => Edge is TaskbarEdge.Left or TaskbarEdge.Right;
 
     public IReadOnlyList<string> PinnedIds
@@ -164,4 +191,49 @@ public sealed class TaskbarModel : IDisposable
     }
 
     private void OnWindowsChanged(object? sender, EventArgs e) => Changed?.Invoke(this, EventArgs.Empty);
+}
+
+public readonly record struct PixelBox(int X, int Y, int Width, int Height)
+{
+    public int Right => X + Width;
+    public int Bottom => Y + Height;
+}
+
+// Where the Start menu opens: against the taskbar, with a small gap, on the side of the screen the Start button is.
+// Pure arithmetic in screen pixels, so it can be tested and the compositor told the result.
+public static class StartMenuPlacement
+{
+    public const int Gap = 12;
+
+    // `taskbar` is the space the taskbar takes along its edge, `menu` the window's size.
+    public static (int X, int Y) Compute(PixelBox screen, TaskbarEdge edge, TaskbarAlignment alignment, int taskbar, int menuWidth, int menuHeight)
+    {
+        int x, y;
+        if (edge is TaskbarEdge.Bottom or TaskbarEdge.Top)
+        {
+            x = alignment == TaskbarAlignment.Center ? screen.X + (screen.Width - menuWidth) / 2 : screen.X + Gap;
+            y = edge == TaskbarEdge.Bottom ? screen.Bottom - taskbar - Gap - menuHeight : screen.Y + taskbar + Gap;
+        }
+        else
+        {
+            x = edge == TaskbarEdge.Left ? screen.X + taskbar + Gap : screen.Right - taskbar - Gap - menuWidth;
+            y = alignment == TaskbarAlignment.Center ? screen.Y + (screen.Height - menuHeight) / 2 : screen.Y + Gap;
+        }
+        x = Math.Clamp(x, screen.X, Math.Max(screen.X, screen.Right - menuWidth));
+        y = Math.Clamp(y, screen.Y, Math.Max(screen.Y, screen.Bottom - menuHeight));
+        return (x, y);
+    }
+}
+
+// Where the widgets panel opens: at the screen's left, from the top down to the taskbar (beside the bar when it is on a side).
+public static class WidgetsPlacement
+{
+    public static (int X, int Y, int Height) Compute(PixelBox screen, TaskbarEdge edge, int taskbar, int width)
+    {
+        var gap = StartMenuPlacement.Gap;
+        var x = edge switch { TaskbarEdge.Left => screen.X + taskbar + gap, TaskbarEdge.Right => screen.Right - taskbar - gap - width, _ => screen.X + gap };
+        var y = edge == TaskbarEdge.Top ? screen.Y + taskbar + gap : screen.Y + gap;
+        var height = edge is TaskbarEdge.Top or TaskbarEdge.Bottom ? screen.Height - taskbar - 2 * gap : screen.Height - 2 * gap;
+        return (Math.Max(screen.X, x), y, Math.Max(200, height));
+    }
 }

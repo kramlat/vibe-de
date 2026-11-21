@@ -27,10 +27,11 @@ public static class ViewModes
         GroupBy.None => "None", GroupBy.Name => "Name", GroupBy.Type => "Type", GroupBy.Size => "Size", _ => "Date modified",
     };
 
-    // What a folder starts as when the user has not chosen: This Computer is tiles grouped by type (folders, then
-    // drives), the way Windows shows This PC; everything else is the plain details table.
+    // What a folder starts as when the user has not chosen: Quick access and This Computer are tiles grouped by type (folders,
+    // then drives), the way Windows shows them; everything else is the plain details table.
     public static (ViewMode Mode, GroupBy Group) DefaultFor(string path)
-        => string.Equals(path, "shell:Computer", StringComparison.OrdinalIgnoreCase) ? (ViewMode.Tiles, GroupBy.Type) : (ViewMode.MediumIcons, GroupBy.None);
+        => path.Equals("shell:Computer", StringComparison.OrdinalIgnoreCase) || path.Equals("shell:QuickAccess", StringComparison.OrdinalIgnoreCase)
+            ? (ViewMode.Tiles, GroupBy.Type) : (ViewMode.MediumIcons, GroupBy.None);
 }
 
 public sealed record FileGroup(string Title, IReadOnlyList<FileEntry> Items);

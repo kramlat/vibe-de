@@ -166,7 +166,7 @@ public class WindowTests
         var window = new ControlPanelWindow(catalog, hive, handed.Add);
         window.Show();
 
-        Assert.Equal(new[] { "Colors", "Desktop", "Lock screen", "Screen saver", "Start menu", "Taskbar", "Themes", "Windows" }, window.ShownItems.Select(i => i.Name));          // the first category is selected
+        Assert.Equal(new[] { "Colors", "Desktop", "File Explorer options", "Fonts", "Lock screen", "Screen saver", "Start folders", "Start menu", "Taskbar", "Themes", "Widgets", "Windows" }, window.ShownItems.Select(i => i.Name));          // the first category is selected
         window.Search("titlebar");
         Assert.Equal("Windows", window.ShownItems[0].Name);
 
@@ -196,7 +196,7 @@ public class WindowTests
                 wallpapers: new List<WallpaperInfo> { new("Aurora", first), new("Meadow", second) });
             window.Show();
 
-            Assert.Equal(new[] { "Colors", "Desktop", "Lock screen", "Screen saver", "Start menu", "Taskbar", "Themes", "Windows" }, window.ShownItems.Select(i => i.Name));
+            Assert.Equal(new[] { "Colors", "Desktop", "File Explorer options", "Fonts", "Lock screen", "Screen saver", "Start folders", "Start menu", "Taskbar", "Themes", "Widgets", "Windows" }, window.ShownItems.Select(i => i.Name));
             Assert.Equal(2, window.PersonalizationTiles.Count);
             Assert.Null(window.SelectedPersonalizationTile);                             // no wallpaper set yet
 
@@ -256,7 +256,7 @@ public class WindowTests
         var window = new ClassicControlPanelWindow(catalog, hive, handed.Add);
         window.Show();
 
-        Assert.Equal(new[] { "Colors", "Desktop", "Lock screen", "Display", "Notifications", "Screen timeout", "Keyboard", "Printers", "Terminal" },  // home: up to three sub-links per category
+        Assert.Equal(new[] { "Colors", "Desktop", "File Explorer options", "Display", "Notifications", "Screen timeout", "Keyboard", "Printers", "Terminal" },  // home: up to three sub-links per category
             window.ShownItems.Select(i => i.Name));
         window.Open(window.ShownItems.First(i => i.PageId == "power"));
         Assert.Equal("power", window.OpenPageId);                              // our own page shows inside the window
@@ -598,12 +598,46 @@ public class DesktopWindowTests
     }
 
     [AvaloniaFact]
+    public void A_right_click_on_the_bare_wallpaper_reaches_the_desktop_menu()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+        w.UpdateLayout();
+
+        // empty space far from every icon: something that carries the menu must be under the pointer, not just the window
+        var canvas = w.GetVisualDescendants().OfType<Avalonia.Controls.Canvas>().First();
+        var point = new Avalonia.Point(canvas.Bounds.Width - 40, canvas.Bounds.Height - 40);
+        Assert.True(canvas.Bounds.Width > 100, "the canvas fills the window");
+        w.CaptureRenderedFrame();   // headless hit testing works on a rendered frame
+        var hit = w.GetVisualsAt(point).FirstOrDefault();
+        Assert.Same(canvas, hit);
+        Assert.NotNull(canvas.ContextMenu);
+        Assert.NotNull(canvas.Background);   // a Canvas with no background is skipped by hit testing: that was the bug
+    }
+
+    [AvaloniaFact]
+    public void Show_more_options_and_sort_by_do_what_they_say()
+    {
+        using var e = new Env();
+        var w = e.Open(); w.Show();
+
+        Assert.Equal(new[] { "Paste", "Properties", "Desktop settings" }, w.MoreOptionsMenu().Where(m => m is not null).Select(m => m!.Text));
+        Assert.Equal("Shift+F10", w.BackgroundMenu().Last()!.ShortcutText);
+
+        w.SortIcons(SortKey.Name);
+        var byName = w.Entries.Select(x => x.Name).Select(n => w.CellOf(n)).ToList();
+        Assert.Equal(byName.OrderBy(c => c.Column).ThenBy(c => c.Row), byName);   // filled down the columns in name order
+        w.SortIcons(SortKey.Modified);
+        Assert.Equal(w.Entries.Count, w.Entries.Select(x => w.CellOf(x.Name)).Distinct().Count());   // every icon has its own cell
+    }
+
+    [AvaloniaFact]
     public void An_icon_and_the_bare_desktop_have_different_menus_and_the_file_actions_make_shortcuts_and_documents()
     {
         using var e = new Env();
         var w = e.Open(); w.Show();
 
-        Assert.Equal(new[] { "View", "Refresh", "Paste", "New", "Properties", "Desktop settings" }, w.MenuLabels);   // the desktop's own
+        Assert.Equal(new[] { "View", "Sort by", "Refresh", "Next desktop background", "New", "Display settings", "Personalize", "Open in Terminal", "Show more options" }, w.MenuLabels);   // the desktop's own
         w.SelectIcon("notes.txt");
         var item = w.ItemMenu().Where(m => m is not null).Select(m => m!.Text).ToList();
         Assert.Equal(new[] { "Open", "Cut", "Copy", "Create shortcut", "Delete", "Rename", "Properties" }, item);   // an item's
@@ -704,7 +738,7 @@ public class DesktopWindowTests
         var made = w.NewFolder();
         Assert.EndsWith("New folder", made);
         Assert.Equal(new[] { "New folder" }, w.SelectedNames);
-        Assert.Equal(new[] { "View", "Refresh", "Paste", "New", "Properties", "Desktop settings" }, w.MenuLabels);
+        Assert.Equal(new[] { "View", "Sort by", "Refresh", "Next desktop background", "New", "Display settings", "Personalize", "Open in Terminal", "Show more options" }, w.MenuLabels);
     }
 
     [AvaloniaFact]
@@ -868,16 +902,19 @@ public class ShortcutWindowTests
     }
 
     [AvaloniaTheory]
-    [InlineData(true, "⇧⌘N", "⌘V", "⌘R")]
-    [InlineData(false, "Ctrl+Shift+N", "Ctrl+V", "F5")]
-    public void The_desktop_menu_shows_each_shortcut_in_the_style_of_the_keyboard(bool apple, string newFolder, string paste, string refresh)
+    [InlineData(true, "⌘V", "⌘R")]
+    [InlineData(false, "Ctrl+V", "F5")]
+    public void The_desktop_menu_shows_each_shortcut_in_the_style_of_the_keyboard(bool apple, string paste, string refresh)
     {
         using var d = new DesktopTestEnv();
         var w = new DesktopWindow(d.Desktop, new Hive("HKCU") { Identity = RegistryIdentity.Root }, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), null, Style(apple));
         w.Show();
 
-        Assert.Equal(new[] { "View", "Refresh", "Paste", "New", "Properties", "Desktop settings" }, w.MenuLabels);
-        Assert.Equal(new[] { "", refresh, paste, "", apple ? "⌘I" : "Alt+Enter", "" }, w.MenuShortcuts);
+        Assert.Equal(new[] { "View", "Sort by", "Refresh", "Next desktop background", "New", "Display settings", "Personalize", "Open in Terminal", "Show more options" }, w.MenuLabels);
+        Assert.Equal(new[] { "", "", refresh, "", "", "", "", "", "Shift+F10" }, w.MenuShortcuts);
+        var more = w.MoreOptionsMenu();   // paste and properties moved to "Show more options"
+        Assert.Equal(paste, ShortcutMap.Label(more.First(m => m?.Text == "Paste")!.Shortcut!.Value, w.ShortcutStyle));
+        Assert.Equal(apple ? "⌘I" : "Alt+Enter", ShortcutMap.Label(more.First(m => m?.Text == "Properties")!.Shortcut!.Value, w.ShortcutStyle));
         var folder = w.BackgroundMenu().First(m => m?.Text == "New")!.Sub!.First(m => m!.Text == "Folder")!;   // the shortcut of a submenu entry
         Assert.Equal(ShortcutAction.NewFolder, folder.Shortcut);
     }
@@ -967,9 +1004,8 @@ public class PropertiesFromWindowsTests
         var w = new DesktopWindow(e.Docs, new Hive("HKCU") { Identity = RegistryIdentity.Root }, _ => { }, null, null, new Vde.Shell.Controls.InMemoryFileClipboard(), null, Style(apple));
         w.Show();
 
-        var index = w.MenuLabels.ToList().IndexOf("Properties");
-        Assert.True(index >= 0);
-        Assert.Equal(hint, w.MenuShortcuts[index]);
+        var properties = w.MoreOptionsMenu().First(m => m?.Text == "Properties")!;   // under "Show more options"
+        Assert.Equal(hint, ShortcutMap.Label(properties.Shortcut!.Value, w.ShortcutStyle));
 
         w.SelectIcon("a.txt");
         Assert.Equal("a.txt Properties", w.ShowProperties()!.Title);

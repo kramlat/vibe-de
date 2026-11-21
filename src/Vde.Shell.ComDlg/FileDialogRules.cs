@@ -46,6 +46,7 @@ public sealed class FileDialogOptions
     public bool Multiselect { get; init; }           // Open only
     public bool ConfirmOverwrite { get; init; } = true;
     public bool ShowHidden { get; init; }
+    public string? OkText { get; init; }             // the accept button's text, e.g. "Choose picture"
 }
 
 public enum Resolve { Accept, ConfirmOverwrite, Navigate, Invalid }

@@ -47,4 +47,6 @@ fi
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ] && command -v dbus-run-session >/dev/null 2>&1; then
     exec dbus-run-session -- "$session" "$@"
 fi
+# drive letters for this user (dosdevman, a systemd user service): started with the session when systemd runs it
+systemctl --user start --no-block dosdevman.service >/dev/null 2>&1 || :
 exec "$session" "$@"

@@ -17,6 +17,7 @@ struct vwm_ipc *vwm_ipc_create(struct vwm_server *server, const char *path);
 void vwm_ipc_destroy(struct vwm_ipc *ipc);
 void vwm_ipc_window(struct vwm_ipc *ipc, struct vwm_view *view);   /* opened or changed */
 void vwm_ipc_closed(struct vwm_ipc *ipc, uint32_t id);
+bool vwm_ipc_start(struct vwm_ipc *ipc);   /* the Start key: true when a shell took it */
 void vwm_ipc_menu_request(struct vwm_ipc *ipc, struct vwm_view *view, unsigned enabled, int hover);
 void vwm_ipc_chrome_request(struct vwm_ipc *ipc, struct vwm_view *view);   /* the titlebar needs (re)drawing */
 
@@ -52,6 +53,8 @@ void vwm_view_get_info(struct vwm_view *view, struct vwm_view_info *out);
 /* Claims a role for a window over the control socket: "desktop" (the wallpaper window, full screen),
  * "top"/"bottom"/"left"/"right" (a dock: it reserves its edge), "none" (back to a normal window). */
 void vwm_view_set_role(struct vwm_server *server, uint32_t id, const char *spec);
+void vwm_taskview(struct vwm_server *server);   /* the taskbar's Task view button */
+void vwm_view_set_popup(struct vwm_server *server, uint32_t id, int x, int y);   /* a flyout (the Start menu): no frame, not listed, placed at x,y, focused */
 struct vwm_view *vwm_find_view(struct vwm_server *server, uint32_t id);
 void vwm_each_view(struct vwm_server *server, void (*fn)(struct vwm_view *, void *), void *data);
 void vwm_view_activate(struct vwm_view *view);
@@ -66,6 +69,7 @@ void vwm_view_set_chrome(struct vwm_view *view, int width, int height, void *bgr
 /* Opens the window menu at the window's top-left corner. */
 void vwm_view_open_menu(struct vwm_view *view);
 void vwm_view_set_menu(struct vwm_view *view, int width, int height, void *bgra);
+void vwm_set_border_colors(struct vwm_server *server, uint32_t focused, uint32_t other);   /* 0xRRGGBB each */
 void vwm_set_titlebar_doubleclick(struct vwm_server *server, const char *action);   /* maximize, minimize, close or none */
 struct wl_event_loop *vwm_event_loop(struct vwm_server *server);
 void vwm_quit(struct vwm_server *server);

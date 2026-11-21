@@ -35,6 +35,7 @@ struct client {
 	struct vwm_ipc *ipc;
 	char buf[256];
 	size_t len;
+	bool wants_start;   /* the shell that opens and closes the Start menu ("handle-start") */
 	/* a titlebar image being received */
 	uint32_t chrome_id;
 	bool payload_is_menu;
@@ -127,6 +128,18 @@ void vwm_ipc_menu_request(struct vwm_ipc *ipc, struct vwm_view *view, unsigned e
 	broadcast(ipc, line);
 }
 
+/* The Start key was pressed alone (or Super+Space): tell the shell that handles Start. False when none does. */
+bool vwm_ipc_start(struct vwm_ipc *ipc)
+{
+	bool sent = false;
+	for (int i = 0; i < MAX_CLIENTS; i++)
+		if (ipc->clients[i] && ipc->clients[i]->wants_start) {
+			send_line(ipc->clients[i], "{\"event\":\"start\"}\n");
+			sent = true;
+		}
+	return sent;
+}
+
 void vwm_ipc_closed(struct vwm_ipc *ipc, uint32_t id)
 {
 	char line[64];
@@ -182,6 +195,26 @@ static void run_command(struct client *c, char *line)
 		char action[16] = "";
 		if (sscanf(line, "titlebar-doubleclick %15s", action) == 1)
 			vwm_set_titlebar_doubleclick(c->ipc->server, action);
+		return;
+	}
+	if (!strcmp(verb, "taskview")) {
+		vwm_taskview(c->ipc->server);
+		return;
+	}
+	if (!strcmp(verb, "handle-start")) {
+		c->wants_start = true;
+		return;
+	}
+	if (!strcmp(verb, "popup")) {
+		int x = 0, y = 0;
+		if (sscanf(line, "popup %u %d %d", &id, &x, &y) == 3)
+			vwm_view_set_popup(c->ipc->server, id, x, y);
+		return;
+	}
+	if (!strcmp(verb, "border")) {
+		unsigned focused = 0, other = 0;
+		if (sscanf(line, "border %x %x", &focused, &other) == 2)
+			vwm_set_border_colors(c->ipc->server, focused & 0xffffff, other & 0xffffff);
 		return;
 	}
 	if (!strcmp(verb, "quit")) {

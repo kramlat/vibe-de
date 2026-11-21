@@ -37,6 +37,7 @@
 #include <wlr/types/wlr_keyboard.h>
 #include <wlr/types/wlr_keyboard_group.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
+#include <wlr/types/wlr_virtual_keyboard_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
@@ -60,6 +61,7 @@
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
 #include <wlr/xwayland/xwayland.h>
+#include <wlr/backend/x11.h>
 #include <xkbcommon/xkbcommon.h>
 
 
@@ -119,6 +121,7 @@ struct vwm_view {
 	struct wlr_scene_tree *chrome;
 	struct wlr_scene_buffer *title_image, *grips[5];
 	struct wlr_scene_rect *title_fallback;
+	struct wlr_scene_rect *frame[4];   /* 1px window border outside the geometry: top, bottom, left, right */
 	struct chrome_hit title_hit, grip_hit[5];
 	int last_w, last_h;
 	/* Windows 11 style drop shadow: a blurred black rect under the window, rebuilt only when the
@@ -137,7 +140,9 @@ struct vwm_view {
 	bool unlisted;   /* _NET_WM_STATE_SKIP_TASKBAR (the start menu, tool windows): a window, but no taskbar button */
 	struct wl_listener x11_set_strut;
 	bool unmanaged;   /* X11 menus and tooltips: shown, but not windows the shell lists */
+	bool popup;       /* a flyout the shell placed (the Start menu): no frame, not listed, still takes focus */
 	struct wl_listener handle_activate, handle_close, handle_minimize, handle_maximize;
+	bool dock_auto;   /* an auto-hiding taskbar: it overlays instead of reserving its edge */
 	enum dock_edge dock_edge;   /* the edge a shell-announced dock reserves (see vwm_view_set_role) */
 };
 
@@ -171,6 +176,8 @@ struct vwm_server {
 	struct wl_list outputs;
 	struct wlr_xdg_shell *xdg_shell;
 	struct wlr_layer_shell_v1 *layer_shell;
+	struct wlr_virtual_keyboard_manager_v1 *virtual_keyboard_manager;   /* on-screen keyboards type through this */
+	struct wl_listener new_virtual_keyboard;
 	struct wlr_foreign_toplevel_manager_v1 *toplevels;
 	struct wlr_xdg_activation_v1 *activation;   /* xdg-activation: Wayland apps ask to be focused (Chromium, Electron) */
 	struct wlr_idle_notifier_v1 *idle_notifier;
@@ -182,6 +189,8 @@ struct vwm_server {
 	struct wl_list keyboards, views, layer_surfaces;   /* views: most recently used first */
 	uint32_t next_id;
 	struct vwm_view *focused;
+	bool super_alone;   /* Super went down and no other key since */
+	float border_color[2][4];   /* the window border: [0] focused (the accent, when the shell says so), [1] the rest */
 	struct vwm_ipc *ipc;
 	const char *launcher;
 	bool no_chrome;
@@ -204,6 +213,7 @@ struct vwm_server {
 	struct vwm_view *sw_list[64];
 	int sw_count, sw_index;
 	bool sw_active;
+	bool sw_sticky;   /* Task view: opened from the taskbar, it stays up without Alt held (Tab/arrows move, Enter or a click picks, Esc leaves) */
 	struct wlr_scene_tree *sw_tree;
 	struct wlr_scene_rect *sw_edge[4];
 	/* Aero snap: dragging to a screen edge or corner docks the window; a preview eases to the target */
@@ -234,6 +244,22 @@ static struct vwm_server *the_server;
 
 struct wl_event_loop *vwm_event_loop(struct vwm_server *s) { return wl_display_get_event_loop(s->display); }
 void vwm_quit(struct vwm_server *s) { wl_display_terminate(s->display); }
+
+static void frame_update(struct vwm_view *v);
+static void each_frame(struct vwm_view *v, void *data) { frame_update(v); }
+
+/* RRGGBB for the focused window's border and for the others'; the shell sends these when the theme changes */
+void vwm_set_border_colors(struct vwm_server *s, uint32_t focused, uint32_t other)
+{
+	const uint32_t in[2] = { focused, other };
+	for (int i = 0; i < 2; i++) {
+		s->border_color[i][0] = ((in[i] >> 16) & 0xff) / 255.0f;
+		s->border_color[i][1] = ((in[i] >> 8) & 0xff) / 255.0f;
+		s->border_color[i][2] = (in[i] & 0xff) / 255.0f;
+		s->border_color[i][3] = 1.0f;
+	}
+	vwm_each_view(s, each_frame, NULL);
+}
 
 void vwm_set_titlebar_doubleclick(struct vwm_server *s, const char *action)
 {
@@ -322,6 +348,7 @@ static struct pixbuf *pixbuf_create(int w, int h, void *data)
 
 static void menu_close(struct vwm_server *s);
 static void switcher_forget(struct vwm_server *s, struct vwm_view *v);
+static void switcher_end(struct vwm_server *s, bool commit);
 static void snap_preview_hide(struct vwm_server *s);
 
 /* ---------- views ---------- */
@@ -368,6 +395,30 @@ static void chrome_request(struct vwm_view *v)
 	vwm_ipc_chrome_request(v->server->ipc, v);
 }
 
+/* the window border: colours come from the shell (ipc "border"), the placement from the window */
+static void frame_update(struct vwm_view *v)
+{
+	if (!v->chrome || !v->frame[0])
+		return;
+	struct wlr_box g;
+	view_geometry(v, &g);
+	int w = g.width, h = g.height;
+	bool on = v->decorated && !v->fullscreen && !v->maximized && v->mapped;
+	const float *c = v->server->border_color[v->server->focused == v ? 0 : 1];
+	const struct { int x, y, w, h; } r[4] = {
+		{ -1, -TITLEBAR_H - 1, w + 2, 1 },
+		{ -1, h, w + 2, 1 },
+		{ -1, -TITLEBAR_H, 1, TITLEBAR_H + h },
+		{ w, -TITLEBAR_H, 1, TITLEBAR_H + h },
+	};
+	for (int i = 0; i < 4; i++) {
+		wlr_scene_node_set_enabled(&v->frame[i]->node, on);
+		wlr_scene_node_set_position(&v->frame[i]->node, r[i].x, r[i].y);
+		wlr_scene_rect_set_size(v->frame[i], r[i].w, r[i].h);
+		wlr_scene_rect_set_color(v->frame[i], c);
+	}
+}
+
 static void chrome_layout(struct vwm_view *v)
 {
 	if (!v->chrome)
@@ -392,6 +443,7 @@ static void chrome_layout(struct vwm_view *v)
 		wlr_scene_node_set_position(&v->grips[i]->node, r[i].x, r[i].y);
 		wlr_scene_buffer_set_dest_size(v->grips[i], r[i].w, r[i].h);
 	}
+	frame_update(v);
 }
 
 static void view_enable_chrome(struct vwm_view *v)
@@ -404,6 +456,8 @@ static void view_enable_chrome(struct vwm_view *v)
 	v->chrome = wlr_scene_tree_create(v->tree);
 	float plain[4] = { 0.12f, 0.12f, 0.16f, 1.0f };   /* shown until the shell's drawing arrives (or when no shell runs) */
 	v->title_fallback = wlr_scene_rect_create(v->chrome, 1, TITLEBAR_H, plain);
+	for (int i = 0; i < 4; i++)
+		v->frame[i] = wlr_scene_rect_create(v->chrome, 1, 1, v->server->border_color[1]);
 	v->title_image = wlr_scene_buffer_create(v->chrome, NULL);
 	v->title_hit = (struct chrome_hit){ .view = v, .kind = HIT_TITLE };
 	v->title_image->node.data = &v->title_hit;
@@ -668,13 +722,21 @@ void vwm_view_set_role(struct vwm_server *s, uint32_t id, const char *spec)
 		return;
 	}
 		wlr_log(WLR_INFO, "role %u %s: kind %s", id, spec, v->xdg ? "xdg" : "x11");
-	if (!strcmp(spec, "desktop"))
+	/* "bottom-auto" is a dock that hides itself: it overlays the screen instead of reserving its edge */
+	char base[16];
+	snprintf(base, sizeof base, "%s", spec);
+	size_t blen = strlen(base);
+	bool autohide = blen > 5 && !strcmp(base + blen - 5, "-auto");
+	if (autohide)
+		base[blen - 5] = '\0';
+	v->dock_auto = false;
+	if (!strcmp(base, "desktop"))
 		v->role = ROLE_DESKTOP;
-	else if (!strcmp(spec, "top"))    { v->role = ROLE_DOCK; v->dock_edge = DOCK_TOP; }
-	else if (!strcmp(spec, "bottom")) { v->role = ROLE_DOCK; v->dock_edge = DOCK_BOTTOM; }
-	else if (!strcmp(spec, "left"))   { v->role = ROLE_DOCK; v->dock_edge = DOCK_LEFT; }
-	else if (!strcmp(spec, "right"))  { v->role = ROLE_DOCK; v->dock_edge = DOCK_RIGHT; }
-	else if (!strcmp(spec, "none"))   { v->role = ROLE_NORMAL; v->dock_edge = DOCK_NO_EDGE; }
+	else if (!strcmp(base, "top"))    { v->role = ROLE_DOCK; v->dock_edge = DOCK_TOP; v->dock_auto = autohide; }
+	else if (!strcmp(base, "bottom")) { v->role = ROLE_DOCK; v->dock_edge = DOCK_BOTTOM; v->dock_auto = autohide; }
+	else if (!strcmp(base, "left"))   { v->role = ROLE_DOCK; v->dock_edge = DOCK_LEFT; v->dock_auto = autohide; }
+	else if (!strcmp(base, "right"))  { v->role = ROLE_DOCK; v->dock_edge = DOCK_RIGHT; v->dock_auto = autohide; }
+	else if (!strcmp(base, "none"))   { v->role = ROLE_NORMAL; v->dock_edge = DOCK_NO_EDGE; }
 	else
 		return;
 
@@ -701,6 +763,29 @@ void vwm_view_set_role(struct vwm_server *s, uint32_t id, const char *spec)
 	} else
 		v->unmanaged = false;
 	role_apply(v);
+}
+
+void vwm_view_set_popup(struct vwm_server *s, uint32_t id, int x, int y)
+{
+	struct vwm_view *v = vwm_find_view(s, id);
+	if (!v || v->role != ROLE_NORMAL || !v->mapped)
+		return;
+	v->popup = true;
+	v->decorated = false;
+	v->unlisted = true;
+	if (v->chrome)
+		wlr_scene_node_set_enabled(&v->chrome->node, false);
+	shadow_destroy(v);
+	if (v->handle) {
+		wl_list_remove(&v->handle_activate.link);
+		wl_list_remove(&v->handle_close.link);
+		wl_list_remove(&v->handle_minimize.link);
+		wl_list_remove(&v->handle_maximize.link);
+		wlr_foreign_toplevel_handle_v1_destroy(v->handle);
+		v->handle = NULL;
+	}
+	view_move(v, x, y);
+	vwm_view_activate(v);
 }
 
 void vwm_each_view(struct vwm_server *s, void (*fn)(struct vwm_view *, void *), void *data)
@@ -773,11 +858,13 @@ static void focus_view(struct vwm_view *v)
 		view_announce(prev);
 		chrome_request(prev);
 		shadow_update(prev);
+		frame_update(prev);
 	}
 	update_handle_state(v);
 	view_announce(v);
 	chrome_request(v);
 	shadow_update(v);
+	frame_update(v);
 }
 
 void vwm_view_activate(struct vwm_view *v)
@@ -1584,7 +1671,7 @@ static void arrange_layers(struct vwm_server *s, struct vwm_output *o)
 	/* docks (the taskbar) reserve their edges too */
 	struct vwm_view *d;
 	wl_list_for_each(d, &s->views, link) {
-		if (!d->mapped || d->role != ROLE_DOCK)
+		if (!d->mapped || d->role != ROLE_DOCK || d->dock_auto)
 			continue;
 		int l = usable.x, t = usable.y, r = usable.x + usable.width, b = usable.y + usable.height;
 		if (d->x11 && d->x11->strut_partial) {
@@ -1735,6 +1822,10 @@ static void on_new_output(struct wl_listener *l, void *data)
 	struct wlr_output_mode *mode = wlr_output_preferred_mode(out);
 	if (mode)
 		wlr_output_state_set_mode(&state, mode);
+	/* started inside an X session (start-vde-x11): the output is a window of that X server, sized like its screen */
+	int fw, fh;
+	if (wlr_output_is_x11(out) && getenv("VWM_X11_SIZE") && sscanf(getenv("VWM_X11_SIZE"), "%dx%d", &fw, &fh) == 2 && fw > 0 && fh > 0)
+		wlr_output_state_set_custom_mode(&state, fw, fh, 0);
 	wlr_output_commit_state(out, &state);
 	wlr_output_state_finish(&state);
 
@@ -2241,6 +2332,17 @@ static void on_cursor_button(struct wl_listener *l, void *data)
 	struct wlr_pointer_button_event *e = data;
 	if (s->idle_notifier)
 		wlr_idle_notifier_v1_notify_activity(s->idle_notifier, s->seat);
+	if (s->sw_active && s->sw_sticky) {   /* Task view: a click on a window picks it, anywhere else leaves */
+		if (e->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+			double sx, sy;
+			struct vwm_view *under = view_at(s, s->cursor->x, s->cursor->y, NULL, &sx, &sy);
+			bool picked = false;
+			for (int i = 0; under && i < s->sw_count; i++)
+				if (s->sw_list[i] == under) { s->sw_index = i; picked = true; }
+			switcher_end(s, picked);
+		}
+		return;
+	}
 	if (e->state == WL_POINTER_BUTTON_STATE_RELEASED) {
 		if (s->sticky_grab)
 			return;   /* Move or Size from the window menu: it ends with the next click */
@@ -2454,6 +2556,7 @@ static void switcher_end(struct vwm_server *s, bool commit)
 		return;
 	struct vwm_view *pick = s->sw_list[s->sw_index];
 	s->sw_active = false;
+	s->sw_sticky = false;
 	s->sw_count = 0;
 	if (s->sw_tree) {
 		wlr_scene_node_destroy(&s->sw_tree->node);
@@ -2510,6 +2613,26 @@ static void switcher_step(struct vwm_server *s, int dir)
 	switcher_frame(s);
 }
 
+/* Task view (the taskbar button): the window switcher left open until a window is picked. Again closes it. */
+void vwm_taskview(struct vwm_server *s)
+{
+	if (s->sw_active) {
+		switcher_end(s, false);
+		return;
+	}
+	s->sw_sticky = true;
+	switcher_step(s, 1);
+	if (!s->sw_active)
+		s->sw_sticky = false;   /* fewer than two windows: nothing to choose */
+}
+
+/* Start: the shell that registered for it opens or closes its Start menu; with none, the launcher program runs. */
+static void start_menu(struct vwm_server *s)
+{
+	if (!vwm_ipc_start(s->ipc))
+		spawn(s->launcher);
+}
+
 /* Compositor shortcuts. Returns true when the key was ours. */
 static bool handle_shortcut(struct vwm_server *s, xkb_keysym_t sym, uint32_t mods)
 {
@@ -2539,12 +2662,17 @@ static bool handle_shortcut(struct vwm_server *s, xkb_keysym_t sym, uint32_t mod
 		switcher_step(s, back ? -1 : 1);
 		return true;
 	}
+	if (s->sw_active && s->sw_sticky) {
+		if (sym == XKB_KEY_Tab || sym == XKB_KEY_Right || sym == XKB_KEY_Down) { switcher_step(s, 1); return true; }
+		if (sym == XKB_KEY_ISO_Left_Tab || sym == XKB_KEY_Left || sym == XKB_KEY_Up) { switcher_step(s, -1); return true; }
+		if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) { switcher_end(s, true); return true; }
+	}
 	if (s->sw_active && sym == XKB_KEY_Escape) {
 		switcher_end(s, false);
 		return true;
 	}
-	if (logo && (sym == XKB_KEY_space || sym == XKB_KEY_Super_L)) {
-		spawn(s->launcher);
+	if (logo && sym == XKB_KEY_space) {
+		start_menu(s);
 		return true;
 	}
 	if (logo && (sym == XKB_KEY_Left || sym == XKB_KEY_Right) && s->focused) {
@@ -2586,10 +2714,16 @@ static void keyboard_key(struct wl_listener *l, void *data)
 	const xkb_keysym_t *syms;
 	int n = xkb_state_key_get_syms(k->keyboard->xkb_state, keycode, &syms);
 	bool handled = false;
+	bool is_super = n > 0 && (syms[0] == XKB_KEY_Super_L || syms[0] == XKB_KEY_Super_R);
 	if (e->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+		/* the Super key pressed and released with nothing in between is the Start key, as in Windows */
+		s->super_alone = is_super;
 		uint32_t mods = wlr_keyboard_get_modifiers(k->keyboard);
 		for (int i = 0; i < n; i++)
 			handled |= handle_shortcut(s, syms[i], mods);
+	} else if (is_super && s->super_alone) {
+		s->super_alone = false;
+		start_menu(s);
 	}
 	if (!handled) {
 		wlr_seat_set_keyboard(s->seat, k->keyboard);
@@ -2600,7 +2734,7 @@ static void keyboard_key(struct wl_listener *l, void *data)
 static void keyboard_modifiers(struct wl_listener *l, void *data)
 {
 	struct vwm_keyboard *k = FROM(struct vwm_keyboard, l, modifiers);
-	if (k->server->sw_active && !(wlr_keyboard_get_modifiers(k->keyboard) & WLR_MODIFIER_ALT))
+	if (k->server->sw_active && !k->server->sw_sticky && !(wlr_keyboard_get_modifiers(k->keyboard) & WLR_MODIFIER_ALT))
 		switcher_end(k->server, true);
 	wlr_seat_set_keyboard(k->server->seat, k->keyboard);
 	wlr_seat_keyboard_notify_modifiers(k->server->seat, &k->keyboard->modifiers);
@@ -2647,6 +2781,15 @@ static void on_new_input(struct wl_listener *l, void *data)
 	}
 	caps |= WL_SEAT_CAPABILITY_KEYBOARD;   /* the virtual keyboard keeps the capability when no real one is attached */
 	wlr_seat_set_capabilities(s->seat, caps);
+}
+
+/* An on-screen keyboard (vde-osk, or any zwp_virtual_keyboard_v1 client) is one more keyboard of the seat. */
+static void on_new_virtual_keyboard(struct wl_listener *l, void *data)
+{
+	struct vwm_server *s = FROM(struct vwm_server, l, new_virtual_keyboard);
+	struct wlr_virtual_keyboard_v1 *vk = data;
+	add_keyboard(s, &vk->keyboard.base);
+	wlr_seat_set_capabilities(s->seat, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
 }
 
 /* ---------- start-up ---------- */
@@ -2722,6 +2865,8 @@ int main(int argc, char **argv)
 	s.scene = wlr_scene_create();
 	s.scene_layout = wlr_scene_attach_output_layout(s.scene, s.output_layout);
 	float dark[4] = { 0.07f, 0.09f, 0.14f, 1.0f };
+	for (int i = 0; i < 2; i++)
+		s.border_color[i][0] = s.border_color[i][1] = s.border_color[i][2] = 0.27f, s.border_color[i][3] = 1.0f;
 	s.background = wlr_scene_rect_create(&s.scene->tree, 16384, 16384, dark);
 	wlr_scene_node_set_position(&s.background->node, -4096, -4096);
 	for (int i = 0; i < LAYER_COUNT; i++)
@@ -2741,6 +2886,9 @@ int main(int argc, char **argv)
 	wl_signal_add(&deco->events.new_toplevel_decoration, &s.new_decoration);
 
 	s.layer_shell = wlr_layer_shell_v1_create(s.display, 4);
+	s.virtual_keyboard_manager = wlr_virtual_keyboard_manager_v1_create(s.display);
+	s.new_virtual_keyboard.notify = on_new_virtual_keyboard;
+	wl_signal_add(&s.virtual_keyboard_manager->events.new_virtual_keyboard, &s.new_virtual_keyboard);
 	s.new_layer.notify = on_new_layer;
 	wl_signal_add(&s.layer_shell->events.new_surface, &s.new_layer);
 
@@ -2845,6 +2993,7 @@ int main(int argc, char **argv)
 	if (s.env_path[0])
 		unlink(s.env_path);
 	wl_list_remove(&s.new_input.link);
+	wl_list_remove(&s.new_virtual_keyboard.link);
 	wlr_xcursor_manager_destroy(s.xcursor);
 	wlr_cursor_destroy(s.cursor);
 	if (s.xwayland)

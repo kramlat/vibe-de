@@ -90,7 +90,7 @@ public sealed class ThemeEngine
 
         if (_tokens is not null)
             app.Resources.MergedDictionaries.Remove(_tokens);
-        _tokens = BuildTokens(theme, _baseStyle, accent);
+        _tokens = BuildTokens(theme, _baseStyle, accent, selection.AccentOnTitleBars);
         app.Resources.MergedDictionaries.Add(_tokens);
 
         app.RequestedThemeVariant = theme.Variant != VariantPreference.System ? ToVariant(theme.Variant) : ToVariant(selection.Variant);
@@ -168,7 +168,7 @@ public sealed class ThemeEngine
         }
     }
 
-    private static ResourceDictionary BuildTokens(ThemeInfo theme, IStyle? baseStyle, Color? accent)
+    private static ResourceDictionary BuildTokens(ThemeInfo theme, IStyle? baseStyle, Color? accent, bool accentOnTitleBars = false)
     {
         var root = new ResourceDictionary();
         foreach (var variant in new[] { ThemeVariant.Light, ThemeVariant.Dark })
@@ -214,6 +214,7 @@ public sealed class ThemeEngine
             inner["ButtonBorderBrushPressed"] = new SolidColorBrush(dark ? Color.Parse("#666666") : Color.Parse("#C9C9C9"));
             root.ThemeDictionaries[variant] = inner;
         }
+        root["Vde.AccentOnTitleBars"] = accentOnTitleBars;
         root["Vde.Classic"] = theme.Classic;
         root["Vde.ClassicBarFrom"] = theme.ClassicBarFrom ?? Color.Parse("#0A246A");
         root["Vde.ClassicBarTo"] = theme.ClassicBarTo ?? Color.Parse("#A6CAF0");

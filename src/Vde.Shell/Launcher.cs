@@ -33,6 +33,9 @@ public sealed class LauncherModel
     private readonly ControlPanelCatalog? _settings;
     private readonly IReadOnlyList<string> _desktops;
 
+    // The places Start shows next to the Power button (Personalization > Start > Folders).
+    public IReadOnlyList<StartFolder> StartFolders => Vde.Shell.StartFolders.Visible(_hive);
+
     public LauncherModel(IHive hive, DesktopEntryDatabase apps, IReadOnlyList<string> desktops, ControlPanelCatalog? settings = null)
     {
         _hive = hive;

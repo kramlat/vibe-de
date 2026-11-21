@@ -4,6 +4,7 @@ using Avalonia.VisualTree;
 using Vde.Shell;
 using Vde.Components;
 using Vde.Shell.ComDlg;
+using Vibe.Registry;
 
 namespace Vde.Shell.ComDlg.Tests;
 
@@ -76,31 +77,64 @@ public class DialogTests
     }
 
     [AvaloniaFact]
-    public void The_elevation_prompt_shows_the_exact_command_wipes_nothing_early_and_cancel_means_no()
+    public void The_password_prompt_has_one_password_box_hides_the_command_until_asked_and_no_means_no()
     {
-        var request = new ElevationRequest("Edit with Thing", "edit", "/f", ["/usr/bin/thing", "--edit", "my file.txt"], "it is not executable by you (mode 0644)");
+        var request = new ElevationRequest("Edit with Thing", "edit", "/f", ["/usr/bin/thing", "--edit", "my file.txt"], "it is not executable by you (mode 0644)") { Account = "deck" };
         var window = new ElevationPromptWindow(request, 1, null);
         window.Show();
+        var texts = () => window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToList();
 
+        Assert.Equal("User Account Control: password required", window.Title);            // the titlebar says which kind of prompt it is
+        Assert.True(window.AsksForPassword);
+        Assert.Contains("Do you want to allow this app to make changes to your device?", texts());
+        Assert.Contains("Edit with Thing", texts());
+        Assert.Contains("To continue, enter the password for deck.", texts());
+        Assert.Single(window.GetVisualDescendants().OfType<TextBox>(), t => t.PasswordChar == '•');   // no user name or e-mail box
+        Assert.Equal(1, window.GetVisualDescendants().OfType<TextBox>().Count(t => !t.IsReadOnly));
+
+        Assert.False(window.DetailsVisible);
+        window.MoreButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.True(window.DetailsVisible);
         Assert.Equal("/usr/bin/thing --edit 'my file.txt'", window.CommandBox.Text);
         Assert.True(window.CommandBox.IsReadOnly);
-        Assert.Contains("Allow \"Edit with Thing\" to make changes?", window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text));
 
-        window.Accept();                                                         // no password yet: stays open and says so
+        window.Accept();                                                                 // no password yet: stays open and says so
         Assert.Null(window.Response);
-        Assert.Contains("Type your password.", window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text));
+        Assert.Contains("Type your password.", texts());
 
         window.Password = "hunter2";
         window.Accept();
         Assert.True(window.Response!.Approved);
         Assert.Equal("hunter2", new string(window.Response.Password!));
-        Assert.Equal("", window.Password);                                       // the control no longer holds it
+        Assert.Equal("", window.Password);                                               // the control no longer holds it
 
         var closed = new ElevationPromptWindow(request, 2, "Incorrect password. Try again.");
         closed.Show();
-        Assert.Contains("attempt 2 of 3", closed.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).First(t => t is not null && t.StartsWith("Password")));
+        Assert.Contains(closed.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text), t => t is not null && t.Contains("attempt 2 of 3"));
         closed.Close();
-        Assert.False(closed.Response!.Approved);                                 // closing the window is saying no
+        Assert.False(closed.Response!.Approved);                                         // closing the window is saying no
+
+        var no = new ElevationPromptWindow(request, 1, null);
+        no.Show();
+        no.NoButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.False(no.Response!.Approved);
+    }
+
+    [AvaloniaFact]
+    public void With_passwordless_sudo_the_prompt_only_asks_to_agree()
+    {
+        var request = new ElevationRequest("Install fonts", "install", "/f", ["/usr/bin/install"], "it writes to /usr/local/share/fonts") { NeedsPassword = false };
+        var window = new ElevationPromptWindow(request, 1, null);
+        window.Show();
+
+        Assert.Equal("User Account Control", window.Title);
+        Assert.False(window.AsksForPassword);
+        Assert.DoesNotContain(window.GetVisualDescendants().OfType<TextBox>(), t => !t.IsReadOnly);   // no password box at all
+        Assert.DoesNotContain(window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text), t => t is not null && t.Contains("enter"));
+
+        window.OkButton.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));   // Yes
+        Assert.True(window.Response!.Approved);
+        Assert.Empty(window.Response.Password!);
     }
 
     [AvaloniaFact]
@@ -136,6 +170,59 @@ public class DialogTests
         window.FileName = "a.txt";
         await window.AcceptAsync();
         Assert.Equal(new[] { Path.Combine(d.Docs, "a.txt") }, window.Paths);
+    }
+
+    [AvaloniaFact]
+    public async Task Open_has_navigation_buttons_search_new_folder_and_a_custom_accept_text()
+    {
+        using var d = new Dir();
+        var window = new FileDialogWindow(FileDialogMode.Open, new FileDialogOptions { InitialFolder = d.Docs, OkText = "Choose picture" }, Folders(d.Root));
+        window.Show();
+        Assert.Equal("Choose picture", window.OkButton.Content);
+
+        window.Search = "b b";
+        Assert.Equal(new[] { "b b.txt" }, window.Entries.Select(e => e.Name));
+        window.Search = "";
+
+        await window.NewFolderAsync("fresh");
+        Assert.Contains(window.Entries, e => e.Name == "fresh" && e.IsDirectory);
+
+        var buttons = window.GetVisualDescendants().OfType<Button>().ToList();
+        buttons.Single(b => Equals(b.Content, "\u2191")).RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal(d.Root, window.CurrentFolder);
+        buttons.Single(b => Equals(b.Content, "\u2190")).RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal(d.Docs, window.CurrentFolder);
+    }
+
+    private sealed class FakeComputer(string drive) : IShellFolder
+    {
+        public string DisplayName => "This PC";
+        public IReadOnlyList<string> IconNames => ["computer"];
+        public IReadOnlyList<ShellItem> GetItems() => [new ShellItem("d", "Data", true, ["drive-harddisk"]) { FileSystemPath = drive }];
+        public IReadOnlyList<ShellAction> GetActions(ShellItem? item) => [];
+        public Task InvokeAsync(string actionId, ShellItem? item, CancellationToken cancel) => Task.CompletedTask;
+        public event EventHandler? Changed { add { } remove { } }
+    }
+
+    [AvaloniaFact]
+    public async Task Open_lists_This_PC_in_the_sidebar_opens_its_drives_and_will_not_accept_there()
+    {
+        using var d = new Dir();
+        var catalog = new ShellFolderCatalog(new ClassesRoot(new Hive("HKCU"), new Hive("HKLM")), null, null, new ComponentLoader());
+        catalog.AddBuiltIn("{11111111-2222-3333-4444-555555555555}", "Computer", "This PC", ShellFolderAttributes.Folder, new FakeComputer(d.Docs), ["Sidebar"]);
+        var window = new FileDialogWindow(FileDialogMode.Open, new FileDialogOptions { InitialFolder = d.Docs }, Folders(d.Root), vfs: new ShellVfs(catalog));
+        window.Show();
+
+        window.Go("shell:Computer");
+        Assert.Equal(new[] { "Data" }, window.Entries.Select(e => e.Name));
+        window.FileName = "x";
+        await window.AcceptAsync();
+        Assert.Null(window.Paths);
+        Assert.Contains("drive or folder", window.Message);
+
+        window.List.SelectAll();
+        window.List.InvokeSelected();
+        Assert.Equal(d.Docs, window.CurrentFolder);
     }
 
     [AvaloniaFact]
@@ -248,9 +335,9 @@ public class ElevationFlowTests
         Assert.Equal(new[] { "wrong", "right" }, backend.Passwords);
         Assert.Equal(ElevationStatus.WrongPassword, outcome1.Status);
         Assert.Equal(ElevationStatus.Success, outcome2.Status);
-        Assert.Contains("Your password", shownTexts[0]);
+        Assert.Contains("To continue, enter your password.", shownTexts[0]);
         Assert.DoesNotContain(shownTexts[0], t => t.StartsWith("Incorrect"));
-        Assert.Contains("Password (attempt 2 of 3)", shownTexts[1]);
+        Assert.Contains("To continue, enter your password. (attempt 2 of 3)", shownTexts[1]);
         Assert.Contains("Incorrect password. Try again.", shownTexts[1]);   // the retry says what went wrong
         Assert.Equal("/bin/true 'x y'", commands[0]);
     }
@@ -270,10 +357,10 @@ public class ElevationFlowTests
 public class ElevationLabelTests
 {
     [AvaloniaTheory]
-    [InlineData(null, 1, "Your password")]
-    [InlineData("deck", 1, "Password for deck")]
-    [InlineData("root", 2, "Password for root (attempt 2 of 3)")]
-    [InlineData(null, 3, "Password (attempt 3 of 3)")]
+    [InlineData(null, 1, "To continue, enter your password.")]
+    [InlineData("deck", 1, "To continue, enter the password for deck.")]
+    [InlineData("root", 2, "To continue, enter the password for root. (attempt 2 of 3)")]
+    [InlineData(null, 3, "To continue, enter your password. (attempt 3 of 3)")]
     public void The_prompt_says_whose_password_it_wants(string? account, int attempt, string expected)
     {
         var request = new ElevationRequest("x", "o", "/f", ["/bin/true"], "r") { Account = account };
@@ -331,7 +418,7 @@ public class PropertySheetTests
         Assert.Equal("1 byte", general.SizeText);
         Assert.Contains(window.Page<DetailsPage>().Rows, r => r.key == "Full path" && r.value == Path.Combine(d.Docs, "a.txt"));
         Assert.Contains(window.Page<DetailsPage>().Rows, r => r.key == "Permissions" && r.value.Contains("rw"));
-        Assert.False(window.Pages.Any(p => p.IsDirty));
+        Assert.DoesNotContain(window.Pages, p => p.IsDirty);
     }
 
     [AvaloniaFact]

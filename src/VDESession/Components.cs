@@ -20,7 +20,7 @@ public static class SessionComponents
     public const string KeyPath = @"Software\Vde\Session\Components";
     public const string WaylandName = "wayland-vde";
 
-    public const string Compositor = "vwm", Chrome = "chrome", Desktop = "desktop", Taskbar = "taskbar", Notifications = "notifications";
+    public const string Compositor = "vwm", Chrome = "chrome", Desktop = "desktop", Taskbar = "taskbar", Notifications = "notifications", XEmbedTray = "xembed-tray";
 
     public static IReadOnlyList<ComponentSpec> Defaults(string waylandName = WaylandName) =>
     [
@@ -30,6 +30,8 @@ public static class SessionComponents
         new(Taskbar, ["vexplore", "--taskbar"], Description: "taskbar and start button"),
         // exit status 2 = another notification daemon owns the name: that is not worth restarting over
         new(Notifications, ["VDENotify"], RestartPolicy.OnFailure, PermanentFailureCodes: [2], Description: "notification daemon"),
+        // the old X11 tray protocol (Steam, Wine, GTK/Qt apps...) as StatusNotifierItems; status 2 = another tray manager owns it
+        new(XEmbedTray, ["vde-xembed"], RestartPolicy.OnFailure, PermanentFailureCodes: [2], Description: "X11 system tray (XEmbed) bridge"),
     ];
 
     public static IReadOnlyList<ComponentSpec> Load(IHive? hive, string waylandName = WaylandName)

@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using Avalonia.VisualTree;
 using Vde.Components;
 using Vde.Freedesktop;
 using Vde.Shell;
@@ -42,7 +43,7 @@ public class ShellFolderTests
         foreach (var name in new[] { "Computer", "Network", "Trash", "Documents", "ControlPanel" })
             Assert.NotNull(catalog.Resolve("shell:" + name));
         Assert.Equal(ShellFolderIds.Trash, catalog.Resolve("::" + ShellFolderIds.Trash)!.Clsid, ignoreCase: true);
-        Assert.Equal(new[] { "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));   // Control Panel is not in the sidebar
+        Assert.Equal(new[] { "Quick access", "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));   // Control Panel is not in the sidebar
         Assert.Null(catalog.Resolve("shell:Nowhere"));
     }
 
@@ -84,11 +85,11 @@ public class ShellFolderTests
 
         var changed = 0;
         folder.Changed += (_, _) => changed++;
-        await folder.InvokeAsync("restore", item, default);
+        await folder.InvokeAsync("restore", item, TestContext.Current.CancellationToken);
         Assert.True(File.Exists(file));
         Assert.Empty(folder.GetItems());
         Assert.Equal(1, changed);
-        await Assert.ThrowsAsync<ArgumentException>(() => folder.InvokeAsync("explode", null, default));
+        await Assert.ThrowsAsync<ArgumentException>(() => folder.InvokeAsync("explode", null, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -102,7 +103,7 @@ public class ShellFolderTests
         Assert.NotEmpty(items);
         Assert.All(items, i => Assert.Equal("open", i.DefaultAction));
 
-        await folder.InvokeAsync("open", items[0], default);
+        await folder.InvokeAsync("open", items[0], TestContext.Current.CancellationToken);
         Assert.Equal("cp:" + opened!.Id, items[0].Id);
     }
 
@@ -121,7 +122,7 @@ public class ShellFolderTests
         Assert.NotNull(trash);
         Assert.False(trash!.IsBuiltIn);
         Assert.Contains("Sidebar", trash.Namespaces);
-        Assert.Equal(new[] { "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));
+        Assert.Equal(new[] { "Quick access", "Home", "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos", "This Computer", "Network", "Trash" }, catalog.Namespace("Sidebar").Select(i => i.Name));
         Assert.Equal("Trash", catalog.Open(trash).DisplayName);   // loaded through the apartment-aware loader
         foreach (var (clsid, parsing, name, _) in ShellFolderIds.All)   // every shell folder is in the registry, whole
         {
@@ -132,7 +133,7 @@ public class ShellFolderTests
             Assert.Equal(ShellFolderIds.Places(clsid).Order(), info.Namespaces.Order());
             Assert.Equal(name, catalog.Open(info).DisplayName);
         }
-        Assert.Equal(new[] { "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos" }, catalog.Namespace("Computer").Select(i => i.Name));
+        Assert.Equal(new[] { "Desktop", "Documents", "Downloads", "Music", "Pictures", "Videos" }, catalog.Namespace("QuickAccess").Select(i => i.Name));   // the user's places are the Quick access namespace
         Assert.Equal(new[] { "This Computer", "Network", "Trash" }, catalog.Namespace("Desktop").Select(i => i.Name));   // registered for the desktop: their icons
     }
 
@@ -149,8 +150,14 @@ public class ShellFolderTests
         Assert.Equal(Path.Combine(Path.Combine(e.Root, "home"), "Documents"), window.CurrentFolder);
         Assert.Equal(new[] { "sub", "a.txt" }, window.Entries.Select(x => x.Name));
 
+        window.Navigate("shell:QuickAccess");
+        Assert.Contains(window.Entries, x => x.Name == "Documents" && x.Group == ComputerGroups.Folders);   // the user's places are in Quick access
+        Assert.DoesNotContain(window.Entries, x => x.Name == "Documents" && x.Group != ComputerGroups.Folders);
+        var documents = window.Entries.Single(x => x.Name == "Documents");
+        Assert.Equal(Path.Combine(e.Root, "home"), documents.Detail);                                          // under the name: where it is
+
         window.Navigate("shell:Computer");
-        Assert.Contains(window.Entries, x => x.Name == "Documents" && x.Group == ComputerGroups.Folders);   // listed from the Computer namespace
+        Assert.DoesNotContain(window.Entries, x => x.Name == "Documents");                                      // not in This Computer any more
 
         window.Navigate(Path.Combine(e.Root, "home"));
         Assert.False(window.InShell);
@@ -166,16 +173,66 @@ public class ShellFolderTests
         window.Show();
         Assert.Equal(Vde.Shell.ViewMode.MediumIcons, window.ActiveView.ViewMode);
 
-        window.Navigate("shell:Computer");
+        window.Navigate("shell:QuickAccess");
         Assert.Equal(Vde.Shell.ViewMode.Tiles, window.ActiveView.ViewMode);
         Assert.Equal(Vde.Shell.GroupBy.Type, window.ActiveView.GroupBy);
-        Assert.Equal(Vde.Shell.ComputerGroups.Folders, window.ActiveView.GroupTitles[0]);   // the folders before the drives
+        Assert.Equal(Vde.Shell.ComputerGroups.Folders, window.ActiveView.GroupTitles[0]);
         Assert.Equal(Vde.Shell.ComputerGroups.Folders, window.ActiveView.Entries[0].Group);
+        window.Navigate("shell:Computer");
+        Assert.Equal(Vde.Shell.ViewMode.Tiles, window.ActiveView.ViewMode);
 
         window.ActiveView.ViewMode = Vde.Shell.ViewMode.LargeIcons;   // the user's choice is kept for this place
         window.Navigate(home);
         Assert.Equal(Vde.Shell.ViewMode.MediumIcons, window.ActiveView.ViewMode);
         window.Navigate("shell:Computer");
         Assert.Equal(Vde.Shell.ViewMode.LargeIcons, window.ActiveView.ViewMode);
+    }
+}
+
+public class ExplorerCommandBarTests
+{
+    [AvaloniaFact]
+    public void The_command_bar_ends_with_the_overflow_menu_of_selection_commands_properties_and_options()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "vexplore-ov-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        foreach (var n in new[] { "a.txt", "b.txt", "c.txt" }) File.WriteAllText(Path.Combine(root, n), "x");
+        try
+        {
+            var opened = new List<string>();
+            var env = new Dictionary<string, string> { ["HOME"] = root, ["XDG_CONFIG_HOME"] = Path.Combine(root, "cfg") };
+            var folders = new KnownFolders(new Vde.Freedesktop.XdgDirectories(k => env.GetValueOrDefault(k)));
+            var view = new FileManagerView(root, folders, _ => { }, openSettingsPage: opened.Add);
+            var window = new Avalonia.Controls.Window { Width = 900, Height = 600, Content = view };
+            window.Show();
+
+            Assert.Contains(window.GetVisualDescendants().OfType<Avalonia.Controls.Button>(), b => Equals(b.Tag, "CommandOverflow"));
+            Assert.Equal(new[] { "Select all", "Select none", "Invert selection", "Properties", "Options" }, view.OverflowMenu().Where(m => m is not null).Select(m => m!.Text));
+            Assert.False(view.OverflowMenu().First(m => m?.Text == "Properties")!.Enabled);   // grey with nothing selected
+
+            view.OverflowMenu().First(m => m?.Text == "Select all")!.Click!();
+            Assert.Equal(3, view.SelectedPaths.Count);
+            Assert.True(view.OverflowMenu().First(m => m?.Text == "Properties")!.Enabled);
+            view.OverflowMenu().First(m => m?.Text == "Select none")!.Click!();
+            Assert.Empty(view.SelectedPaths);
+            view.SelectEntries("a.txt");
+            view.OverflowMenu().First(m => m?.Text == "Invert selection")!.Click!();
+            Assert.Equal(new[] { "b.txt", "c.txt" }, view.SelectedPaths.Select(Path.GetFileName).Order());
+
+            view.OverflowMenu().First(m => m?.Text == "Options")!.Click!();
+            Assert.Equal(new[] { "fileexplorer" }, opened);                                      // the options page
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void File_Explorer_opens_to_the_place_the_options_name()
+    {
+        var hive = new Hive("HKCU");
+        Assert.Equal("Home", Vde.Shell.ExplorerOptions.OpenTo(hive));
+        hive.SetValue(Vde.Shell.ExplorerOptions.KeyPath, "OpenTo", RegistryValueKind.String, "QuickAccess");
+        Assert.Equal("QuickAccess", Vde.Shell.ExplorerOptions.OpenTo(hive));
+        hive.SetValue(Vde.Shell.ExplorerOptions.KeyPath, "OpenTo", RegistryValueKind.String, "garbage");
+        Assert.Equal("Home", Vde.Shell.ExplorerOptions.OpenTo(hive));
     }
 }

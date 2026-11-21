@@ -84,7 +84,7 @@ public sealed class ShellExecute
             return;
         }
 
-        var path = Uri.TryCreate(target, UriKind.Absolute, out var fileUri) && fileUri.IsFile ? fileUri.LocalPath : target;
+        var path = Uri.TryCreate(target, UriKind.Absolute, out var fileUri) && fileUri.IsFile ? fileUri.LocalPath : ShellVfs.Resolve(target);
         path = Path.GetFullPath(path);
         if (!File.Exists(path) && !Directory.Exists(path))
             throw new FileNotFoundException("Nothing to open.", path);

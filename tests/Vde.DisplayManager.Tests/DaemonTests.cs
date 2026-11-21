@@ -160,7 +160,7 @@ public class DaemonTests : IDisposable
         var run = daemon.RunAsync(stop.Token);
 
         Assert.Equal("alice", await started.Task.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.Equal(1, auto.Sessions.Count);
+        Assert.Single(auto.Sessions);
         Assert.Equal("alice", system.Processes[0].Plan.UserName);   // no greeter was started first
         Assert.Equal(new[] { "start-vde" }, system.Processes[0].Plan.Command.Skip(9).ToArray());
 

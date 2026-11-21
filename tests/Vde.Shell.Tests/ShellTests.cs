@@ -593,6 +593,33 @@ public class ComputerTests
     }
 
     [Fact]
+    public async Task This_computer_shows_drive_letters_folder_drives_and_can_give_a_drive_a_letter()
+    {
+        using var fx = new Fixture();
+        var computer = Build(fx);
+        var hive = new Vibe.Registry.Hive("HKCU");
+        var dos = new DosDevices(new DosDeviceStore(hive), () => computer.GetVolumes(), d => "uuid:" + d.Replace("/dev/", ""));
+        var games = Path.Combine(fx.Root, "games"); Directory.CreateDirectory(games);
+        dos.MountFolder(games, label: "Games");                       // D: is taken by the folder
+        var links = Path.Combine(fx.Root, "dosdevices");
+        var folder = new ComputerFolder(null, computer, dos, links);
+
+        var stick = folder.GetItems().Single(i => i.Id.StartsWith("drive:/dev/sdb1"));
+        Assert.Equal("My Stick", stick.Name);                          // no letter yet
+        Assert.Equal("Assign a drive letter", Assert.Single(folder.GetActions(stick)).Label);
+        Assert.Contains(folder.GetItems(), i => i.Name == "Games (D:)" && i.FileSystemPath == games && i.TypeText == "Folder drive");
+
+        await folder.InvokeAsync("dos-assign", stick, CancellationToken.None);
+        Assert.Equal("My Stick (E:)", folder.GetItems().Single(i => i.Id.StartsWith("drive:/dev/sdb1")).Name);
+        Assert.Equal("/run/media/deck/My Stick", new FileInfo(Path.Combine(links, "e:")).LinkTarget);   // Wine's link is written at once
+        Assert.Equal("Remove drive letter", Assert.Single(folder.GetActions(folder.GetItems().Single(i => i.Id.StartsWith("drive:/dev/sdb1")))).Label);
+
+        var gamesItem = folder.GetItems().Single(i => i.Id == "dos:D");
+        await folder.InvokeAsync("dos-remove", gamesItem, CancellationToken.None);
+        Assert.DoesNotContain(folder.GetItems(), i => i.Id == "dos:D");
+    }
+
+    [Fact]
     public void Lists_network_shares_with_urls()
     {
         using var fx = new Fixture();
@@ -1657,6 +1684,31 @@ public class SudoBackendTests
         Assert.DoesNotContain(executor.Calls.SelectMany(c => c.commandLine), a => a.Contains("hunter2"));   // never on a command line
     }
 
+    [Fact]
+    public void A_password_is_needed_unless_root_or_sudo_is_set_up_without_one()
+    {
+        var user = new RegistryIdentity(1000, 1000, [998]);
+        Assert.False(new SudoBackend(new FakeExecutor(Ok), "/nonexistent").NeedsPassword(user));                                              // NOPASSWD: sudo -n works
+        Assert.True(new SudoBackend(new FakeExecutor(new ExecResult(1, "a password is required", false)), "/nonexistent").NeedsPassword(user));
+        Assert.True(new SudoBackend(new FakeExecutor(Ok), "/nonexistent", rootPassword: true).NeedsPassword(user));                           // rootpw always asks
+        Assert.False(new SudoBackend(new FakeExecutor(), "/nonexistent").NeedsPassword(RegistryIdentity.Root));
+        Assert.True(new SudoBackend(new FakeExecutor { Throw = new System.ComponentModel.Win32Exception("no sudo") }, "/nonexistent").NeedsPassword(user));
+    }
+
+    [Fact]
+    public async Task Agreeing_without_a_password_runs_the_command_with_no_password_check()
+    {
+        var executor = new FakeExecutor(Running, Ok);
+        var backend = new SudoBackend(executor, "/nonexistent");
+
+        var outcome = await backend.RunAsync(["/usr/bin/tool"], ReadOnlyMemory<char>.Empty, CancellationToken.None);
+
+        Assert.Equal(ElevationStatus.Success, outcome.Status);
+        Assert.Equal(new[] { "sudo", "-n", "--", "/usr/bin/tool" }, executor.Calls[0].commandLine);   // no sudo -v, no stdin
+        Assert.Null(executor.Calls[0].stdin);
+        Assert.Equal(new[] { "sudo", "-k" }, executor.Calls[1].commandLine);
+    }
+
     [Theory]
     [InlineData("Sorry, try again.", ElevationStatus.WrongPassword)]
     [InlineData("sudo: 1 incorrect password attempt", ElevationStatus.WrongPassword)]
@@ -2356,7 +2408,7 @@ public class DesktopTests
         Assert.Equal(new Cell(0, 1), layout["a"]);        // the rest fill the free cells down each column in the given order: (0,1) first because b has (0,0)
         Assert.Equal(new Cell(1, 0), layout["c"]);
         Assert.All(layout.Values, c => Assert.True(c.Column >= 0 && c.Row >= 0));
-        Assert.True(layout.Values.Any(c => c.Column >= 3));   // 7 icons do not fit in 3x2: extra columns, not stacking
+        Assert.Contains(layout.Values, c => c.Column >= 3);   // 7 icons do not fit in 3x2: extra columns, not stacking
     }
 
     [Fact]

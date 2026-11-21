@@ -8,6 +8,7 @@ using Avalonia.VisualTree;
 using Vde.Freedesktop;
 using Vde.Shell;
 using Vde.Shell.Controls;
+using Vibe.Registry;
 using Vde.Shell.Theme;
 
 namespace Vde.Shell.Controls.Tests;
@@ -466,6 +467,140 @@ public class FileManagerControlTests
         hive.SetValue(@"Software\Vde\Notifications", "DoNotDisturb", Vibe.Registry.RegistryValueKind.DWord, 0u);   // a script flips it
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         Assert.False(dnd.IsChecked);
+    }
+
+    [AvaloniaFact]
+    public void The_taskbar_page_has_items_corner_icons_and_behaviors_sections_whose_settings_reach_the_taskbar()
+    {
+        var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+        var view = new SettingsPageView(BuiltInPages.Taskbar, hive);
+        var window = new Window { Width = 700, Height = 500, Content = view };
+        window.Show();
+
+        Assert.Equal(new[] { "Taskbar items", "Taskbar corner icons", "Taskbar corner overflow", "Taskbar behaviors" }, view.SectionBodies.Keys);
+        var edge = (ComboBox)view.ControlFor("edge");
+        var position = (ComboBox)view.ControlFor("alignment");
+        Assert.Equal(0, edge.SelectedIndex);       // Bottom
+        Assert.Equal(0, position.SelectedIndex);   // Centered
+
+        edge.SelectedIndex = 2;                    // Left
+        position.SelectedIndex = 1;                // Aligned to the start
+        Assert.Equal("Left", hive.GetValue(TaskbarModel.KeyPath, "Edge")!.Data);
+        Assert.Equal("Start", hive.GetValue(TaskbarModel.KeyPath, "Alignment")!.Data);
+
+        var model = new TaskbarModel(hive, Vde.Freedesktop.DesktopEntryDatabase.Load(new XdgDirectories(k => k switch { "HOME" => "/nonexistent-home", "XDG_DATA_HOME" => "/nonexistent-data", "XDG_DATA_DIRS" => "/nonexistent-system", _ => null }), []), new NoWindowSource(), _ => { });
+        Assert.Equal(TaskbarEdge.Left, model.Edge);
+        Assert.Equal(TaskbarAlignment.Start, model.Alignment);
+
+        ((ToggleSwitch)view.ControlFor("touchkeyboard")).IsChecked = true;
+        ((ToggleSwitch)view.ControlFor("search")).IsChecked = false;
+        Assert.True(model.ShowTouchKeyboard);
+        Assert.False(model.ShowSearch);
+        Assert.True(model.ShowTaskView);   // untouched: still the default
+
+        var header = window.GetVisualDescendants().OfType<Button>().Single(b => Equals(b.Tag, "section:Taskbar behaviors"));
+        Assert.True(view.SectionBodies["Taskbar behaviors"].IsVisible);
+        header.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.False(view.SectionBodies["Taskbar behaviors"].IsVisible);   // the chevron folds it
+    }
+
+    [AvaloniaFact]
+    public void The_taskbar_page_lists_remembered_tray_icons_and_toggling_one_moves_it_to_the_overflow()
+    {
+        var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+        TrayPreferences.Remember(hive, "steam", "Steam", "steam");
+        var view = new SettingsPageView(BuiltInPages.Taskbar, hive);
+        var window = new Window { Width = 700, Height = 700, Content = view };
+        window.Show();
+
+        var toggle = (ToggleSwitch)view.ControlFor("tray-steam");
+        Assert.True(toggle.IsChecked);   // in the corner until the user says otherwise
+        toggle.IsChecked = false;
+        Assert.False(TrayPreferences.InCorner(hive, "steam"));
+
+        TrayPreferences.Remember(hive, "nm-applet", "Network", "network-wired");   // a new icon shows up while the page is open
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        Assert.NotNull(view.ControlFor("tray-nm-applet"));
+        Assert.False(((ToggleSwitch)view.ControlFor("tray-steam")).IsChecked);
+
+        var autohide = (CheckBox)view.ControlFor("autohide");
+        autohide.IsChecked = true;
+        Assert.Equal(true, hive.GetValue(TaskbarModel.KeyPath, "AutoHide")!.Data);
+    }
+
+    [AvaloniaFact]
+    public async Task The_fonts_page_shows_the_installed_fonts_filters_them_and_installs_locally_or_for_everyone()
+    {
+        var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+        var fonts = FontCatalog.Parse("Arial\tRegular\t/f/a.ttf\ten\nArial\tBold\t/f/b.ttf\ten\nAGA Arabesque\tRegular\t/f/c.ttf\tar\n");
+        var installs = new List<(int Count, bool Local)>();
+        var view = new FontsPageView(hive, (paths, local) => { installs.Add((paths.Count, local)); return Task.FromResult("done"); }, () => fonts);
+        var window = new Window { Width = 900, Height = 700, Content = view };
+        window.Show();
+
+        Assert.Equal(2, view.Tiles.Count);
+        Assert.Equal("Install Locally", view.InstallLocallyBox.Content);
+        Assert.True(view.InstallLocallyBox.IsChecked);   // for the current user, by default
+
+        view.SearchText = "arial";
+        Assert.Equal(new[] { "Arial" }, view.Shown.Select(f => f.Name));
+        view.SearchText = "";
+        view.LanguageBox.SelectedIndex = view.LanguageBox.Items.Cast<string>().ToList().IndexOf("Arabic");
+        Assert.Equal(new[] { "AGA Arabesque" }, view.Shown.Select(f => f.Name));
+
+        await view.InstallAsync(["/x/a.ttf"]);
+        view.InstallLocallyBox.IsChecked = false;        // unchecked: every user, the system install
+        await view.InstallAsync(["/x/a.ttf", "/x/b.otf"]);
+        Assert.Equal(new[] { (1, true), (2, false) }, installs);
+        Assert.False(FontInstaller.InstallLocally(hive));
+        Assert.Equal("done", view.Status);
+    }
+
+    [AvaloniaFact]
+    public async Task The_widgets_panel_shows_the_clock_search_cards_headlines_and_community_widgets()
+    {
+        var hive = new Vibe.Registry.Hive("HKCU") { Identity = Vibe.Registry.RegistryIdentity.Root };
+        hive.SetValue(WidgetSettings.KeyPath, "Feeds", Vibe.Registry.RegistryValueKind.String, "https://news.example/rss");
+        hive.SetValue(WidgetSettings.KeyPath, "WeatherCity", Vibe.Registry.RegistryValueKind.String, "");
+        var opened = new List<string>();
+        Fetch fetch = (url, _) => Task.FromResult("<rss><channel><title>Daily</title><item><title>Big story</title><link>http://x/1</link></item></channel></rss>");
+        var community = new CommunityWidget("tides", "Tides", ["weather-clear"], () => new TextBlock { Text = "High 14:32" });
+        var panel = new WidgetsPanelView(hive, opened.Add, opened.Add, () => opened.Add("settings"), fetch, () => new DateTime(2026, 11, 21, 15, 0, 0), [], () => [community]);
+        var window = new Window { Width = 700, Height = 900, Content = panel };
+        window.Show();
+        await Task.Delay(100);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Contains("3", panel.ClockText);
+        Assert.Equal(new[] { "Photos", "System", "Weather", "tides" }, panel.CardIds.Order(StringComparer.Ordinal));    // ours and then the community's, in two columns
+        Assert.Equal(new[] { "http://x/1" }, panel.Headlines);
+
+        panel.SearchText = "open source widgets";
+        panel.GetVisualDescendants().OfType<TextBox>().First(t => Equals(t.Tag, "search")).RaiseEvent(new Avalonia.Input.KeyEventArgs { RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent, Key = Avalonia.Input.Key.Enter });
+        Assert.Equal("https://duckduckgo.com/?q=open%20source%20widgets", opened.Single());   // an open search engine
+
+        RegistryBoolSet(hive, "Photos", false);                                               // hide a card from the settings
+        panel.Rebuild();
+        Assert.DoesNotContain("Photos", panel.CardIds);
+    }
+
+    private static void RegistryBoolSet(Vibe.Registry.IHive hive, string id, bool on) => RegistryBool.Set(hive, WidgetSettings.ShowKey, id, on);
+
+    [AvaloniaFact]
+    public void A_card_an_app_sent_is_drawn_with_the_shells_controls_and_a_press_names_the_action()
+    {
+        var card = WidgetCard.Parse("{\"rows\":[{\"type\":\"text\",\"text\":\"Hello\"},{\"type\":\"progress\",\"value\":0.5,\"label\":\"Half\"},"
+            + "{\"type\":\"list\",\"items\":[{\"text\":\"Item\",\"action\":\"open:1\"}]},{\"type\":\"button\",\"text\":\"Refresh\",\"action\":\"refresh\"}]}")!;
+        var pressed = new List<string>();
+        var view = WidgetCardView.Build(card, pressed.Add);
+        var window = new Window { Content = view };
+        window.Show();
+
+        Assert.Contains("Hello", view.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text));
+        Assert.Equal(0.5, view.GetVisualDescendants().OfType<ProgressBar>().Single().Value);
+        foreach (var button in view.GetVisualDescendants().OfType<Button>())
+            button.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        Assert.Equal(new[] { "open:1", "refresh" }, pressed);
     }
 
     [AvaloniaFact]

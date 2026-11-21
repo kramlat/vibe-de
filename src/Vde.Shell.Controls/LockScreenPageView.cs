@@ -35,6 +35,10 @@ public sealed class LockScreenPageView : UserControl
     private readonly StackPanel _colorBody = new() { Spacing = 4 };
     private readonly ComboBox _status = new() { MinWidth = 180 };
     private readonly ToggleSwitch _signIn = new() { OnContent = "On", OffContent = "Off" };
+    private readonly Button _expand = new() { Content = "\u2303", Tag = "expand", Padding = new Thickness(8, 2), Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+    private readonly Border _details = new() { Padding = new Thickness(42, 6, 14, 12) };
+    private Control _chooseRow = null!;
+    private bool _expanded = true;
     private bool _updating;
 
     // statusApps are the apps that can show a status ("None" is added); browse picks a picture file.
@@ -47,17 +51,39 @@ public sealed class LockScreenPageView : UserControl
         _browse = browse;
         _statusApps = [new SettingChoice("", "None"), .. statusApps ?? []];
         _status.ItemsSource = _statusApps.Select(a => a.Label).ToList();
+        _status.ItemTemplate = new Avalonia.Controls.Templates.FuncDataTemplate<string>((label, _) =>
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            if (label is { Length: > 0 } && label != "None")
+                row.Children.Add(new Border
+                {
+                    Width = 20, Height = 20, CornerRadius = new CornerRadius(3), Background = ThemeTokens.Find(this, ThemeToken.Accent, Brushes.DodgerBlue),
+                    Child = new TextBlock { Text = label[..1], FontSize = 12, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center },
+                });
+            row.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+            return row;
+        });
 
         var panel = new StackPanel { Spacing = 4, Margin = new Thickness(24) };
-        panel.Children.Add(new TextBlock { Text = "Lock screen", FontSize = 24, FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 0, 0, 12) });
+        panel.Children.Add(new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(0, 0, 0, 14),
+            Children =
+            {
+                new TextBlock { Text = "Personalization", FontSize = 24, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock { Text = "\u203A", FontSize = 20, Opacity = 0.7, VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock { Text = "Lock screen", FontSize = 24, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center },
+            },
+        });
         _previewFrame.Child = _preview;
         _previewFrame.Margin = new Thickness(0, 0, 0, 12);
         panel.Children.Add(_previewFrame);
 
-        var browseButton = new Button { Content = "Browse photos", IsEnabled = browse is not null, Tag = "browse" };
+        var browseButton = new Button { Content = "Browse photos", IsEnabled = browse is not null, Tag = "browse", MinWidth = 130, HorizontalContentAlignment = HorizontalAlignment.Center };
         browseButton.Click += async (_, _) => await BrowseAsync();
+        _pictureBody.Children.Add(new TextBlock { Text = "Recent images", Margin = new Thickness(0, 0, 0, 2) });
         _pictureBody.Children.Add(_gallery);
-        _pictureBody.Children.Add(browseButton);
+        _chooseRow = Row("Choose a photo", null, browseButton);
         _folder.LostFocus += (_, _) => { if (!_updating) Change(s => s with { SlideshowFolder = string.IsNullOrWhiteSpace(_folder.Text) ? null : _folder.Text!.Trim() }); };
         _folderBody.Children.Add(new TextBlock { Text = "Choose a folder of pictures to cycle through", FontSize = 12, Opacity = 0.7 });
         _folderBody.Children.Add(_folder);
@@ -65,14 +91,18 @@ public sealed class LockScreenPageView : UserControl
         _colorBody.Children.Add(_color);
         _colorBody.Children.Add(_colorError);
 
-        panel.Children.Add(Row("Personalize your lock screen", null, _mode));
-        panel.Children.Add(new Border { Padding = new Thickness(42, 6, 14, 12), Child = new StackPanel { Spacing = 8, Children = { _pictureBody, _folderBody, _colorBody } } });
+        _expand.Click += (_, _) => { _expanded = !_expanded; _expand.Content = _expanded ? "\u2303" : "\u2304"; Reload(); };
+        var modeControls = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _mode, _expand } };
+        panel.Children.Add(Row("Personalize your lock screen", null, modeControls));
+        _details.Child = new StackPanel { Spacing = 8, Children = { _pictureBody, _folderBody, _colorBody } };
+        panel.Children.Add(_details);
+        panel.Children.Add(_chooseRow);
         panel.Children.Add(Row("Lock screen status", "Choose an app to show detailed status on the lock screen", _status));
         panel.Children.Add(Row("Show the lock screen background picture on the sign-in screen", null, _signIn));
 
         panel.Children.Add(new TextBlock { Text = "Related settings", FontWeight = FontWeight.SemiBold, Margin = new Thickness(0, 22, 0, 6) });
         panel.Children.Add(Link("Screen timeout", "power"));
-        panel.Children.Add(Link("Screen saver", "screensaver"));
+        panel.Children.Add(Link("Screen saver", "screensaver", external: true));
         Content = new ScrollViewer { Content = panel };
 
         _mode.SelectionChanged += (_, _) => { if (!_updating && _mode.SelectedIndex >= 0) Change(s => s with { Background = Modes[_mode.SelectedIndex].Value }); };
@@ -143,6 +173,8 @@ public sealed class LockScreenPageView : UserControl
             _mode.SelectedIndex = Array.FindIndex(Modes, m => m.Value == s.Background);
             _status.SelectedIndex = Math.Max(0, _statusApps.ToList().FindIndex(a => a.Value == (s.StatusApp ?? "")));
             _signIn.IsChecked = s.ShowOnSignIn;
+            _details.IsVisible = _expanded;
+            _chooseRow.IsVisible = _expanded && s.Background == LockBackground.Picture;
             _pictureBody.IsVisible = s.Background == LockBackground.Picture;
             _folderBody.IsVisible = s.Background == LockBackground.Slideshow;
             _colorBody.IsVisible = s.Background == LockBackground.Color;
@@ -165,26 +197,27 @@ public sealed class LockScreenPageView : UserControl
             shown.Insert(0, new WallpaperInfo(Path.GetFileNameWithoutExtension(own), own));   // a picture from Browse stays visible
         foreach (var w in shown)
         {
-            var picture = new Border { Width = 96, Height = 54, CornerRadius = new CornerRadius(4), ClipToBounds = true, Background = ThemeTokens.Find(this, ThemeToken.Track, Brushes.DimGray) };
-            try { using var stream = File.OpenRead(w.Path); picture.Child = new Image { Source = Avalonia.Media.Imaging.Bitmap.DecodeToWidth(stream, 192), Stretch = Stretch.UniformToFill }; }
+            var picture = new Border { Width = 96, Height = 96, CornerRadius = new CornerRadius(4), ClipToBounds = true, Background = ThemeTokens.Find(this, ThemeToken.Track, Brushes.DimGray) };
+            try { using var stream = File.OpenRead(w.Path); picture.Child = new Image { Source = Avalonia.Media.Imaging.Bitmap.DecodeToWidth(stream, 288), Stretch = Stretch.UniformToFill }; }
             catch (Exception e) when (e is IOException or ArgumentException or NotSupportedException or InvalidOperationException or UnauthorizedAccessException) { }
             var path = w.Path;
             var button = new Button
             {
                 Tag = w.Path, Margin = new Thickness(0, 0, 8, 8), Padding = new Thickness(4), Background = Brushes.Transparent, BorderThickness = new Thickness(2),
                 BorderBrush = path == chosen && current.Picture is not null ? ThemeTokens.Find(this, ThemeToken.Accent, Brushes.DodgerBlue) : Brushes.Transparent,
-                Content = new StackPanel { Spacing = 2, Children = { picture, new TextBlock { Text = w.Name, FontSize = 11, MaxWidth = 96, TextTrimming = TextTrimming.CharacterEllipsis } } },
+                Content = picture,
             };
+            ToolTip.SetTip(button, w.Name);
             button.Click += (_, _) => SelectPicture(path);
             _gallery.Children.Add(button);
         }
     }
 
-    private Control Link(string title, string pageId)
+    private Control Link(string title, string pageId, bool external = false)
     {
         var button = new Button
         {
-            Tag = "link:" + pageId, Content = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Children = { new TextBlock { Text = title }, new TextBlock { Text = ">", Opacity = 0.6, [Grid.ColumnProperty] = 1 } } },
+            Tag = "link:" + pageId, Content = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Children = { new TextBlock { Text = title }, new TextBlock { Text = external ? "\u2197" : "\u203A", Opacity = 0.6, [Grid.ColumnProperty] = 1 } } },
             HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Padding = new Thickness(14, 16), BorderThickness = new Thickness(0), CornerRadius = new CornerRadius(4),
             Background = ThemeTokens.Find(this, ThemeToken.Surface, Brushes.Transparent), Margin = new Thickness(0, 0, 0, 2),

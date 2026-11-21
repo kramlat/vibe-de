@@ -1,3 +1,4 @@
+using Vde.Shell.Theme;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -32,6 +33,16 @@ public sealed class ChromeRenderer
             if (blurred is { } b)
                 _view.SetBackdrop(new ImageBrush(b) { Stretch = Avalonia.Media.Stretch.UniformToFill });
         }
+    }
+
+    // The window border's colours under the current theme: the focused window's is the accent when the Colors page says
+    // title bars and borders take it, otherwise the theme's border colour like every other window's.
+    public (uint Focused, uint Other) BorderColors()
+    {
+        static uint Rgb(Color c) => (uint)(c.R << 16 | c.G << 8 | c.B);
+        var border = (ThemeTokens.Find(_view, ThemeToken.Border, Brushes.Gray) as ISolidColorBrush)?.Color ?? Colors.Gray;
+        var focused = ThemeTokens.OnAccentBar(_view, active: true) ? ThemeTokens.AccentColor(_view) : border;
+        return (Rgb(focused), Rgb(border));
     }
 
     // Premultiplied BGRA, request.Width x WindowChromeView.BarHeight.

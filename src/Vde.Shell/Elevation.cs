@@ -16,6 +16,9 @@ public sealed record ElevationRequest(
     // Whose password sudo is waiting for (the user's own, or root's when sudo is set up with rootpw); shown in the prompt.
     public string? Account { get; init; }
 
+    // False when sudo lets this user in without a password (NOPASSWD): the prompt only asks for consent.
+    public bool NeedsPassword { get; init; } = true;
+
     // The command line for display, quoted so that every argument is unambiguous.
     public string CommandText => string.Join(' ', CommandLine.Select(Quote));
 
@@ -58,6 +61,9 @@ public interface IElevationBackend
     // The account whose password the prompt must ask for, or null when it is just "your password".
     string? PasswordAccount(RegistryIdentity identity) => null;
 
+    // False when no password is needed (root, or sudo set up with NOPASSWD): the user is only asked to agree.
+    bool NeedsPassword(RegistryIdentity identity) => true;
+
     Task<ElevationOutcome> RunAsync(IReadOnlyList<string> commandLine, ReadOnlyMemory<char> password, CancellationToken cancel);
 }
 
@@ -91,7 +97,7 @@ public static class ElevationRunner
         if (!options.Backend.CanElevate(options.Identity))
             throw new ElevationDeniedException($"'{request.Label}' needs more rights than you have, and you are not allowed to elevate.");
 
-        request = request with { Account = request.Account ?? options.Backend.PasswordAccount(options.Identity) };
+        request = request with { Account = request.Account ?? options.Backend.PasswordAccount(options.Identity), NeedsPassword = options.Backend.NeedsPassword(options.Identity) };
 
         string? error = null;
         for (int attempt = 1; attempt <= ElevationOptions.MaxAttempts; attempt++)

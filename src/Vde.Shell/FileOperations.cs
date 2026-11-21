@@ -61,17 +61,17 @@ public static class FileOperations
 
     // Returns the paths that were created.
     public static IReadOnlyList<string> Copy(IEnumerable<string> sources, string destinationFolder, FileOperationOptions? options = null)
-        => Transfer(sources, destinationFolder, move: false, options ?? new());
+        => Transfer(ShellVfs.Resolve(sources), ShellVfs.Resolve(destinationFolder), move: false, options ?? new());
 
     public static IReadOnlyList<string> Move(IEnumerable<string> sources, string destinationFolder, FileOperationOptions? options = null)
-        => Transfer(sources, destinationFolder, move: true, options ?? new());
+        => Transfer(ShellVfs.Resolve(sources), ShellVfs.Resolve(destinationFolder), move: true, options ?? new());
 
     public static string Rename(string path, string newName)
     {
         if (newName.Length == 0 || newName.Contains('/') || newName is "." or "..")
             throw new ArgumentException("Not a valid file name.", nameof(newName));
 
-        path = Path.GetFullPath(path);
+        path = Path.GetFullPath(ShellVfs.Resolve(path));
         var target = Path.Combine(Path.GetDirectoryName(path)!, newName);
         if (File.Exists(target) || Directory.Exists(target))
             throw new IOException($"'{newName}' already exists.");
@@ -86,6 +86,7 @@ public static class FileOperations
     // "New folder", "New folder (2)", ...
     public static string CreateFolder(string parent, string baseName = "New folder")
     {
+        parent = ShellVfs.Resolve(parent);
         for (int i = 1; ; i++)
         {
             var path = Path.Combine(parent, i == 1 ? baseName : $"{baseName} ({i})");
@@ -99,6 +100,7 @@ public static class FileOperations
     // An empty file: "New Text Document.txt", "New Text Document (2).txt", ...
     public static string CreateFile(string parent, string baseName = "New Text Document", string extension = ".txt")
     {
+        parent = ShellVfs.Resolve(parent);
         for (int i = 1; ; i++)
         {
             var path = Path.Combine(parent, (i == 1 ? baseName : $"{baseName} ({i})") + extension);
@@ -112,7 +114,7 @@ public static class FileOperations
     // Permanent deletion. Use Trash.Send for the recoverable kind.
     public static void Delete(IEnumerable<string> paths)
     {
-        foreach (var path in paths)
+        foreach (var path in ShellVfs.Resolve(paths))
         {
             if (Directory.Exists(path) && new DirectoryInfo(path).LinkTarget is null)
                 Directory.Delete(path, recursive: true);

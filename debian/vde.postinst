@@ -22,7 +22,7 @@ configure)
 
   VDE is installed. It does not change how you log in.
   Try it inside your current desktop:  vde-session
-  As a login session: pick "Vibe Desktop Environment" in your login manager, or run start-vde on a text console.
+  As a login session: pick "Vibe Desktop Environment" (Wayland) or "Vibe Desktop Environment (X11)" in your login manager, or run start-vde on a text console.
   Its own login screen (vdedm): read /usr/share/doc/vde/dm.md first (keep a text console available).
 
 MSG

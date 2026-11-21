@@ -16,9 +16,30 @@ public sealed record SettingDefinition(
     public long Step { get; init; } = 100;                              // what the up/down arrows add
     public long Max { get; init; } = long.MaxValue;
     public object? Default { get; init; }                               // what it shows when the registry has nothing
+    public string? IconName { get; init; }                              // a small picture before the label (the tray icons)
+    public bool AsCheckBox { get; init; }                               // a Toggle drawn as a check box, label beside it
 }
 
-public sealed record SettingsPage(string Id, string Title, IReadOnlyList<SettingDefinition> Settings);
+public sealed record SettingsPage(string Id, string Title, IReadOnlyList<SettingDefinition> Settings)
+{
+    // Windows 11 style: the settings in collapsible sections, each with a title and a line saying what it holds.
+    // Settings is then all of the sections' settings together.
+    public IReadOnlyList<SettingsSection>? Sections { get; init; }
+
+    // Shown before the title in the header ("Personalization › Taskbar"), for pages that sit under a heading.
+    public string? Parent { get; init; }
+
+    public static SettingsPage WithSections(string id, string title, params SettingsSection[] sections)
+        => new(id, title, sections.SelectMany(s => s.Settings).ToList()) { Sections = sections };
+}
+
+public sealed record SettingsSection(string Title, string Help, IReadOnlyList<SettingDefinition> Settings, bool Expanded = true)
+{
+    // Settings that are not known until the page opens (the tray icons the taskbar has seen), read from the registry and
+    // re-read when it changes. When set, Settings is empty.
+    public Func<IHive, IReadOnlyList<SettingDefinition>>? Dynamic { get; init; }
+    public string? DynamicKey { get; init; }   // the registry key it comes from: when it changes the section is built again
+}
 
 public static class BuiltInPages
 {
@@ -91,22 +112,76 @@ public static class BuiltInPages
         },
     ]);
 
-    public static readonly SettingsPage Taskbar = new("taskbar", "Taskbar",
-    [
-        new("edge", "Taskbar location", SettingKind.Choice, TaskbarModel.KeyPath, "Edge")
+    // Both apply at once: the taskbar watches its key and docks and lays itself out again. Other sections (items,
+    // corner icons, overflow) join as the taskbar grows the things they switch.
+    public static readonly SettingsPage Taskbar = SettingsPage.WithSections("taskbar", "Taskbar",
+        new SettingsSection("Taskbar items", "Show or hide buttons that appear on the taskbar",
+        [
+            new("search", "Search", SettingKind.Toggle, TaskbarModel.KeyPath, "ShowSearch", "Opens Start, ready to search") { Default = true },
+            new("widgets", "Widgets", SettingKind.Toggle, TaskbarModel.KeyPath, "ShowWidgets", "VDE's widgets panel: weather, photos, system and headlines, and widgets the community makes") { Default = true },
+            new("taskview", "Task view", SettingKind.Toggle, TaskbarModel.KeyPath, "ShowTaskView", "Shows all open windows to pick from") { Default = true },
+        ]),
+        new SettingsSection("Taskbar corner icons", "Show or hide icons that appear on the corner of your taskbar",
+        [
+            new("touchkeyboard", "Touch keyboard", SettingKind.Toggle, TaskbarModel.KeyPath, "ShowTouchKeyboard", "Always show the on-screen keyboard icon") { Default = false },
+        ]),
+        new SettingsSection("Taskbar corner overflow", "Choose which icons may appear in the taskbar corner \u2013 all others will appear in the taskbar corner overflow menu", [])
         {
-            Default = "Bottom",
-            Choices = [new("Bottom", "Bottom"), new("Top", "Top"), new("Left", "Left"), new("Right", "Right")],
+            Dynamic = TrayPreferences.Definitions, DynamicKey = TrayPreferences.KeyPath,
         },
-        new("alignment", "Start button and apps", SettingKind.Choice, TaskbarModel.KeyPath, "Alignment")
+        new SettingsSection("Taskbar behaviors", "Where the taskbar sits, how it is aligned, whether it hides, and the show desktop corner",
+        [
+            new("edge", "Taskbar location on screen", SettingKind.Choice, TaskbarModel.KeyPath, "Edge")
+            {
+                Default = "Bottom",
+                Choices = [new("Bottom", "Bottom"), new("Top", "Top"), new("Left", "Left"), new("Right", "Right")],
+            },
+            new("alignment", "Start menu position", SettingKind.Choice, TaskbarModel.KeyPath, "Alignment", "The Start button and the apps next to it")
+            {
+                Default = "Center",
+                Choices = [new("Center", "Centered"), new("Start", "Aligned to the start")],
+            },
+            new("autohide", "Automatically hide the taskbar", SettingKind.Toggle, TaskbarModel.KeyPath, "AutoHide") { Default = false, AsCheckBox = true },
+            new("showdesktop", "Select the far corner of the taskbar to show the desktop", SettingKind.Toggle, TaskbarModel.KeyPath, "ShowDesktopCorner") { Default = true, AsCheckBox = true },
+        ])) with { Parent = "Personalization" };
+
+    // VDE's widgets: the built-in cards, the weather's city and units, the headline feeds, and the community's widgets (each runs only when allowed).
+    public static readonly SettingsPage Widgets = SettingsPage.WithSections("widgets", "Widgets",
+        new SettingsSection("Widgets", "Show or hide the cards in the widgets panel",
+            WidgetCatalog.All.Select(w => new SettingDefinition(w.Id.ToLowerInvariant(), w.Title, SettingKind.Toggle, WidgetSettings.ShowKey, w.Id) { Default = true, IconName = w.IconNames[0] }).ToList()),
+        new SettingsSection("Weather", "The weather comes from Open-Meteo, open data that needs no account",
+        [
+            new("city", "City", SettingKind.Text, WidgetSettings.KeyPath, "WeatherCity", "For example Berlin, or Springfield. Only this name is sent to the weather service.") { Default = "" },
+            new("units", "Temperature", SettingKind.Choice, WidgetSettings.KeyPath, "WeatherUnits")
+            {
+                Default = "Auto", Choices = [new("Auto", "Follow my region"), new("Celsius", "Celsius"), new("Fahrenheit", "Fahrenheit")],
+            },
+        ]),
+        new SettingsSection("Top stories", "Headlines from the feeds you choose",
+        [
+            new("feeds", "News feeds", SettingKind.Text, WidgetSettings.KeyPath, "Feeds", "The addresses of RSS or Atom feeds, separated by spaces.") { Default = "" },
+        ]),
+        new SettingsSection("Community widgets", "Widgets other people made, from apps or components. One runs only while it is allowed here.", [])
         {
-            Default = "Center",
-            Choices = [new("Center", "Centered"), new("Start", "Aligned to the start")],
+            Dynamic = WidgetProviders.Definitions, DynamicKey = WidgetProviders.KeyPath,
+        });
+
+    // File Explorer's options (the "..." menu > Options).
+    public static readonly SettingsPage FileExplorer = new("fileexplorer", "File Explorer options",
+    [
+        new("opento", "Open File Explorer to", SettingKind.Choice, ExplorerOptions.KeyPath, "OpenTo", "Where a new File Explorer window starts when no folder was asked for.")
+        {
+            Default = "Home", Choices = [new("Home", "Home"), new("QuickAccess", "Quick access"), new("Computer", "This Computer")],
         },
     ]);
 
-    public static readonly IReadOnlyList<SettingsPage> Pages = [Power, ScreenSaver, StartMenu, Taskbar, Windows, Terminal, Notifications, Keyboard];
+    public static readonly SettingsPage StartFolderPage = StartFolders.Page();
 
+    public static readonly IReadOnlyList<SettingsPage> Pages = [Power, ScreenSaver, StartMenu, StartFolderPage, Widgets, FileExplorer, Taskbar, Windows, Terminal, Notifications, Keyboard];
+
+    // Windows settings pages that VDE will never have, on purpose: they exist to serve Microsoft's own services and advertising.
+    //   - Personalization > Device usage (picks what personalized tips, ads and recommendations "within Microsoft experiences" are shown)
+    // Copy the layout of a Windows page, never a page whose whole point is a Microsoft service. See the "skip MS-only items" rule.
     public static readonly IReadOnlyList<ControlPanelItem> Items =
     [
         new("themes", "Themes", "Choose the style of your windows and controls", "preferences-desktop-theme", ControlPanelCategories.Appearance,
@@ -123,6 +198,14 @@ public static class BuiltInPages
             ["wallpaper", "background", "picture", "image", "desktop", "icons", "colour", "color"], ItemSource.BuiltIn) { PageId = "desktop" },
         new("startmenu", "Start menu", "Windows 11 or Windows 10 layout", "start-here-vde", ControlPanelCategories.Appearance,
             ["start", "launcher", "layout", "tiles", "menu"], ItemSource.BuiltIn) { PageId = "startmenu" },
+        new("startfolders", "Start folders", "Choose which folders appear on Start next to the Power button", "start-here-vde", ControlPanelCategories.Appearance,
+            ["start", "folders", "power button", "documents", "downloads", "settings", "file explorer", "network", "home"], ItemSource.BuiltIn) { PageId = "startfolders" },
+        new("widgets", "Widgets", "Weather, photos, headlines and widgets the community makes", "preferences-desktop-widgets", ControlPanelCategories.Appearance,
+            ["widget", "widgets", "gadget", "gadgets", "weather", "news", "feed", "rss", "panel"], ItemSource.BuiltIn) { PageId = "widgets" },
+        new("fileexplorer", "File Explorer options", "Where File Explorer opens", "system-file-manager", ControlPanelCategories.Appearance,
+            ["explorer", "file explorer", "folder options", "options", "files", "open to", "home", "quick access"], ItemSource.BuiltIn) { PageId = "fileexplorer" },
+        new("fonts", "Fonts", "Install fonts and see the ones you have", "preferences-desktop-font", ControlPanelCategories.Appearance,
+            ["font", "fonts", "typeface", "install", "ttf", "otf", "text"], ItemSource.BuiltIn) { PageId = "fonts" },
         new("windows", "Windows", "What double-clicking a titlebar does", "preferences-system-windows", ControlPanelCategories.Appearance,
             ["window", "titlebar", "double click", "maximize", "minimize"], ItemSource.BuiltIn) { PageId = "windows" },
         new("taskbar", "Taskbar", "Which screen edge it sits on and how apps are aligned", "preferences-desktop", ControlPanelCategories.Appearance,

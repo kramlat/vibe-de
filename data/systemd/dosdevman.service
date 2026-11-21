@@ -1,0 +1,20 @@
+[Unit]
+Description=VDE drive letters (DOS devices) for this user
+Documentation=https://github.com/kramlat/vibe-de
+# The letters and the main Wine bottle live in the user's registry, so they belong to this user alone: each user has their own C:.
+After=fhived.socket
+Wants=fhived.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vde/dosdevman daemon
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=default.target

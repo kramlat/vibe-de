@@ -76,7 +76,7 @@ public class SessionTests
         var run = session.RunAsync(stop.Token);
         await Until(() => host.Count("notifications") == 1);
 
-        Assert.Equal(new[] { "vwm", "chrome", "desktop", "taskbar", "notifications" }, host.Order);
+        Assert.Equal(new[] { "vwm", "chrome", "desktop", "taskbar", "notifications", "xembed-tray" }, host.Order);
         foreach (var name in new[] { "chrome", "desktop", "taskbar", "notifications" })
         {
             var env = host.Get(name).Spec.Environment;

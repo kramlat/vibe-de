@@ -11,7 +11,7 @@ arch=(x86_64)
 url='https://github.com/kramlat/vibe-de'
 license=(GPL-3.0-or-later LGPL-3.0-or-later)
 # dotnet-runtime-9.0 is the runtime everything is built and tested against
-depends=(dotnet-runtime-9.0 pam wayland libxkbcommon libinput libdrm mesa libglvnd pixman seatd systemd-libs libxcb
+depends=(dotnet-runtime-9.0 pam wayland cairo pango libxkbcommon libinput libdrm mesa libglvnd pixman seatd systemd-libs libxcb
          xcb-util-wm xcb-util-renderutil xcb-util-errors libdisplay-info
          systemd xorg-xwayland breeze-icons polkit dbus)
 makedepends=(dotnet-sdk-9.0 git meson ninja gcc pkgconf hwdata)

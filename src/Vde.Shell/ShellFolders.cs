@@ -170,16 +170,39 @@ public static class ComputerGroups
     public const string Folders = "Folders", Drives = "Devices and drives", Network = "Network locations";
 }
 
-// "This Computer": the user's folders and the mounted drives.
-public class ComputerFolder(KnownFolders? folders = null, Computer? computer = null) : ShellFolderBase
+// "Quick access": the user's own places (Desktop, Downloads, Documents, Pictures, Music, Videos), each shown with where it is. They
+// are the shell folders registered for the "QuickAccess" namespace, so a component can add one, and the user can hide one.
+public class QuickAccessFolder : ShellFolderBase
+{
+    public override string DisplayName => "Quick access";
+    public override IReadOnlyList<string> IconNames => ["folder-favorites", "starred", "user-bookmarks"];
+
+    public override IReadOnlyList<ShellItem> GetItems()
+    {
+        var items = new List<ShellItem>();
+        if (Site is not null)
+            foreach (var (info, folder) in Site.Items("QuickAccess"))
+            {
+                var item = NamespaceItems.Of(info, folder, ComputerGroups.Folders);
+                // under the name: the folder that holds it, as Windows says "This PC"
+                var where = item.FileSystemPath is { } path ? Path.GetDirectoryName(path.TrimEnd('/')) : null;
+                items.Add(item with { Detail = where is { Length: > 0 } ? where : "This computer" });
+            }
+        return items;
+    }
+}
+
+// "This Computer": the mounted drives (the user's own folders are in Quick access); a component can still add folders to its "Computer" namespace.
+public class ComputerFolder(KnownFolders? folders = null, Computer? computer = null, DosDevices? dos = null, string? dosdevices = null) : ShellFolderBase
 {
     private readonly KnownFolders _folders = folders ?? new KnownFolders();
     private readonly Computer _computer = computer ?? new Computer();
+    private readonly DosDevices? _dos = dos;   // drive letters (DOS devices): shown after the drives' names, and Assign/Remove actions
 
     public override string DisplayName => "This Computer";
     public override IReadOnlyList<string> IconNames => ["computer", "drive-harddisk"];
 
-    // The folders registered for the "Computer" namespace come first (the user's own folders), then the drives.
+    // Folders registered for the "Computer" namespace come first, then the drives.
     public override IReadOnlyList<ShellItem> GetItems()
     {
         var items = new List<ShellItem>();
@@ -187,7 +210,7 @@ public class ComputerFolder(KnownFolders? folders = null, Computer? computer = n
             foreach (var (info, folder) in Site.Items("Computer"))
                 items.Add(NamespaceItems.Of(info, folder, ComputerGroups.Folders));
         foreach (var v in _computer.GetVolumes())
-            items.Add(new ShellItem("drive:" + v.Device + "|" + v.MountPoint, v.Label, true, v.Names())
+            items.Add(new ShellItem("drive:" + v.Device + "|" + v.MountPoint, _dos?.LetterOf(v) is { } letter ? $"{v.Label} ({letter}:)" : v.Label, true, v.Names())
             {
                 TypeText = v.Kind switch { VolumeKind.Removable => "Removable disk", VolumeKind.Optical => "Optical drive", VolumeKind.Network => "Network drive", _ => "Local disk" },
                 Detail = v.TotalBytes > 0 ? $"{ByteFormat.Format(v.FreeBytes)} free of {ByteFormat.Format(v.TotalBytes)}" : v.MountPoint,
@@ -196,7 +219,52 @@ public class ComputerFolder(KnownFolders? folders = null, Computer? computer = n
                 Group = v.Kind == VolumeKind.Network ? ComputerGroups.Network : ComputerGroups.Drives,
                 FileSystemPath = v.MountPoint,
             });
+        // folders and Wine's drive_c that were mounted as drive letters (the reverse of mounting a drive in a folder)
+        foreach (var d in _dos?.Drives().Where(d => d.Mapping.Kind != DosKind.Device && d.Available) ?? [])
+        {
+            long total = 0, free = 0;
+            try { var info = new DriveInfo(d.Path!); total = info.TotalSize; free = info.AvailableFreeSpace; }
+            catch (Exception e) when (e is IOException or ArgumentException or UnauthorizedAccessException) { }
+            var name = d.Mapping.Label is { Length: > 0 } label ? label : "Local Disk";
+            items.Add(new ShellItem("dos:" + d.Letter, $"{name} ({d.Letter}:)", true, ["drive-harddisk", "folder"])
+            {
+                TypeText = d.Mapping.Kind == DosKind.WineRoot ? "Wine drive" : "Folder drive", Group = ComputerGroups.Drives, FileSystemPath = d.Path,
+                Detail = total > 0 ? $"{ByteFormat.Format(free)} free of {ByteFormat.Format(total)}" : d.Path,
+                Size = total > 0 ? total : null, Usage = total > 0 ? 1.0 - (double)free / total : null,
+            });
+        }
         return items;
+    }
+
+    // Give a drive a letter, or take it away.
+    public override IReadOnlyList<ShellAction> GetActions(ShellItem? item)
+    {
+        if (_dos is null || item is null) return [];
+        if (item.Id.StartsWith("dos:", StringComparison.Ordinal)) return [new ShellAction("dos-remove", "Remove drive letter")];
+        if (VolumeOf(item) is not { } v) return [];
+        return _dos.LetterOf(v) is null ? [new ShellAction("dos-assign", "Assign a drive letter")] : [new ShellAction("dos-remove", "Remove drive letter")];
+    }
+
+    public override Task InvokeAsync(string actionId, ShellItem? item, CancellationToken cancel)
+    {
+        if (_dos is null || item is null) return Task.CompletedTask;
+        if (actionId == "dos-assign" && VolumeOf(item) is { } toAssign) _dos.Assign(toAssign);
+        else if (actionId == "dos-remove")
+        {
+            if (item.Id.StartsWith("dos:", StringComparison.Ordinal) && item.Id.Length == 5) _dos.Unassign(item.Id[4]);
+            else if (VolumeOf(item) is { } v && _dos.LetterOf(v) is { } letter) _dos.Unassign(letter);
+        }
+        else return Task.CompletedTask;
+        _dos.SyncAll(dosdevices ?? DosDevices.DefaultDirectory);   // Wine sees the change at once
+        RaiseChanged();
+        return Task.CompletedTask;
+    }
+
+    private Volume? VolumeOf(ShellItem item)
+    {
+        if (!item.Id.StartsWith("drive:", StringComparison.Ordinal)) return null;
+        var device = item.Id["drive:".Length..].Split('|')[0];
+        return _computer.GetVolumes().FirstOrDefault(v => v.Device == device);
     }
 }
 

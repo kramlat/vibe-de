@@ -67,14 +67,19 @@ public sealed class ShellApp : Application
         var associations = new FileAssociations(xdg, mime, apps, Desktops(), host.Classes);
         var types = new FileTypes(mime, host.Classes, Locale.FromEnvironment());
         var shell = new ShellExecute(associations, mime, types: types, elevation: Elevation);
-        var start = folder is null ? new KnownFolders(xdg).Get(KnownFolder.Home) : AddressPath.IsShellPath(folder) ? folder : Path.GetFullPath(folder);
+        // File Explorer opens to what Options says (Home, Quick access or This Computer) unless a folder was asked for
+        var start = folder is null ? OpenToLocation(host, new KnownFolders(xdg).Get(KnownFolder.Home)) : AddressPath.IsShellPath(folder) ? folder : Path.GetFullPath(folder);
         var window = new FileManagerWindow(start, new KnownFolders(xdg), path =>
         {
             _ = OpenAsync(shell, path, associations, apps);   // no application: the chooser; an untrusted command: the password prompt
         }, types, shortcuts: Shortcuts, properties: paths => PropertyContext(host, paths), shellFolders: ShellFolders(host),
-            settings: DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine));   // the tabbed chrome takes the mica crop itself
+            settings: DesktopSettingsStore.Load(host.CurrentUser, host.LocalMachine),   // the tabbed chrome takes the mica crop itself
+            openSettingsPage: page => { try { shell.Run("vdesettings --page " + page); } catch (Exception e) when (e is FileNotFoundException or ArgumentException) { } });
         return window;
     }
+
+    private static string OpenToLocation(ExplorerHost host, string home)
+        => ExplorerOptions.OpenTo(host.CurrentUser) switch { "QuickAccess" => "shell:QuickAccess", "Computer" => "shell:Computer", _ => home };
 
     // What a Properties window needs: file types, rename, the tabs registered components add, and the groups the user is in.
     public static PropertySheetContext PropertyContext(ExplorerHost host, IReadOnlyList<string> paths)
@@ -100,7 +105,9 @@ public sealed class ShellApp : Application
     public static ShellFolderCatalog ShellFolders(ExplorerHost host)
     {
         var catalog = new ShellFolderCatalog(host.Classes, host.LocalMachine, host.CurrentUser, host.Loader);
-        ShellFolderSetup.AddBuiltIns(catalog);
+        // drive letters (dosdevman): This Computer shows them and can give a drive one
+        ShellFolderSetup.AddBuiltIns(catalog, dos: new DosDevices(new DosDeviceStore(host.CurrentUser), () => new Computer().GetVolumes()));
+        ShellVfs.Default = new ShellVfs(catalog);
         ControlPanelShellFolder.Opener = item =>
         {
             if (item.Entry is { } entry) ExplorerCommand.Launch(host, entry);

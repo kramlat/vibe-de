@@ -19,10 +19,10 @@ BUILD       := build
 PUBLISH     := $(BUILD)/publish
 
 # project directory under src/ -> published executable name (see each .csproj AssemblyName)
-DOTNET_PROJECTS := fhived PAMSAM SECMAN SYSMAN mkhive RegSvrVDE VExplore VdeRegEdit VdeSettings VTerminal VDESession VDEDM VDEDMGreeter VDENotify VTaskMgr
+DOTNET_PROJECTS := fhived PAMSAM SECMAN SYSMAN mkhive RegSvrVDE VExplore VdeRegEdit VdeSettings VTerminal VDESession VDEDM VDEDMGreeter VDENotify VTaskMgr DOSDEVMAN
 
 # commands people type, linked into PREFIX/bin
-BIN_LINKS := vexplore vterminal vtaskmgr vde-session vdedm vdedm-greeter mkhive RegSvrVDE vderegedit vdesettings
+BIN_LINKS := vexplore vterminal vtaskmgr vde-session vdedm vdedm-greeter mkhive RegSvrVDE vderegedit vdesettings dosdevman
 
 export DOTNET_CLI_TELEMETRY_OPTOUT := 1
 export DOTNET_NOLOGO := 1
@@ -33,6 +33,8 @@ all: native dotnet
 native:
 	native/vwm/build.sh
 	native/vterm/build.sh
+	native/vxembed/build.sh
+	native/vosk/build.sh
 
 # ReadyToRun: the native image saves every app's per-process JIT, which windows opening was dominated by
 PUBLISH_FLAGS := -p:PublishReadyToRun=true -p:PublishReadyToRunShowWarnings=false
@@ -48,11 +50,12 @@ dotnet:
 install:
 	install -d $(DESTDIR)$(LIBDIR)
 	cp -a $(PUBLISH)/. $(DESTDIR)$(LIBDIR)/
-	install -m755 native/build/vwm/vwm native/build/vterm/vterm-launch $(DESTDIR)$(LIBDIR)/
+	install -m755 native/build/vwm/vwm native/build/vterm/vterm-launch native/build/vxembed/vde-xembed native/build/vosk/vde-osk $(DESTDIR)$(LIBDIR)/
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m755 data/session/start-vde $(DESTDIR)$(PREFIX)/bin/start-vde
 	for b in $(BIN_LINKS); do ln -sfr $(DESTDIR)$(LIBDIR)/$$b $(DESTDIR)$(PREFIX)/bin/$$b; done
 	ln -sfr $(DESTDIR)$(LIBDIR)/RegSvrVDE $(DESTDIR)$(PREFIX)/bin/regsvrvde
+	ln -sfr $(DESTDIR)$(LIBDIR)/vde-osk $(DESTDIR)$(PREFIX)/bin/vde-osk
 	# data
 	install -d $(DESTDIR)$(DATADIR)/vde/terminal $(DESTDIR)$(DATADIR)/vde/registry
 	install -m644 data/terminal/* $(DESTDIR)$(DATADIR)/vde/terminal/
@@ -62,13 +65,15 @@ install:
 	install -d $(DESTDIR)$(DATADIR)/icons
 	cp -a data/icons/hicolor $(DESTDIR)$(DATADIR)/icons/
 	install -Dm644 data/wayland-sessions/vde.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/vde.desktop
+	install -Dm644 data/xsessions/vde-x11.desktop $(DESTDIR)$(DATADIR)/xsessions/vde-x11.desktop
+	install -m755 data/session/start-vde-x11 $(DESTDIR)$(PREFIX)/bin/start-vde-x11
 	install -d $(DESTDIR)$(DATADIR)/applications
 	install -m644 data/applications/*.desktop $(DESTDIR)$(DATADIR)/applications/
 	install -Dm644 data/dbus/org.freedesktop.Notifications.service $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.Notifications.service
 	# systemd: the registry daemons and the display manager are system units, the user's registry and notifications user units
 	install -d $(DESTDIR)$(UNITDIR)/system $(DESTDIR)$(UNITDIR)/user
 	install -m644 data/systemd/fhived-system.service data/systemd/fhived-system.socket data/systemd/pamsam.service data/systemd/pamsam.socket data/systemd/secman.service data/systemd/secman.socket data/systemd/sysman.service data/systemd/sysman.socket data/systemd/vdedm.service $(DESTDIR)$(UNITDIR)/system/
-	install -m644 data/systemd/fhived.service data/systemd/fhived.socket data/systemd/vdenotify.service $(DESTDIR)$(UNITDIR)/user/
+	install -m644 data/systemd/fhived.service data/systemd/fhived.socket data/systemd/vdenotify.service data/systemd/dosdevman.service $(DESTDIR)$(UNITDIR)/user/
 	install -Dm644 data/sysusers.d/vdedm.conf $(DESTDIR)$(PREFIX)/lib/sysusers.d/vdedm.conf
 	install -Dm644 data/tmpfiles.d/vdedm.conf $(DESTDIR)$(PREFIX)/lib/tmpfiles.d/vdedm.conf
 	install -Dm644 data/polkit/50-vdedm-greeter.rules $(DESTDIR)$(DATADIR)/polkit-1/rules.d/50-vdedm-greeter.rules
@@ -81,11 +86,11 @@ install:
 
 uninstall:
 	rm -rf $(DESTDIR)$(LIBDIR) $(DESTDIR)$(DATADIR)/vde $(DESTDIR)$(DATADIR)/backgrounds/vde $(DESTDIR)$(DATADIR)/doc/vde $(DESTDIR)$(DATADIR)/licenses/vde
-	rm -f $(DESTDIR)$(PREFIX)/bin/start-vde $(DESTDIR)$(PREFIX)/bin/regsvrvde $(addprefix $(DESTDIR)$(PREFIX)/bin/,$(BIN_LINKS))
-	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/vde.desktop $(DESTDIR)$(DATADIR)/applications/vexplore.desktop \
+	rm -f $(DESTDIR)$(PREFIX)/bin/start-vde $(DESTDIR)$(PREFIX)/bin/regsvrvde $(DESTDIR)$(PREFIX)/bin/vde-osk $(addprefix $(DESTDIR)$(PREFIX)/bin/,$(BIN_LINKS))
+	rm -f $(DESTDIR)$(DATADIR)/wayland-sessions/vde.desktop $(DESTDIR)$(DATADIR)/xsessions/vde-x11.desktop $(DESTDIR)$(PREFIX)/bin/start-vde-x11 $(DESTDIR)$(DATADIR)/applications/vexplore.desktop \
 	      $(DESTDIR)$(DATADIR)/applications/vexplore-settings.desktop $(DESTDIR)$(DATADIR)/applications/vterminal.desktop $(DESTDIR)$(DATADIR)/applications/vtaskmgr.desktop \
 	      $(DESTDIR)$(DATADIR)/dbus-1/services/org.freedesktop.Notifications.service
-	rm -f $(DESTDIR)$(UNITDIR)/system/fhived-system.* $(DESTDIR)$(UNITDIR)/system/pamsam.* $(DESTDIR)$(UNITDIR)/system/secman.* $(DESTDIR)$(UNITDIR)/system/sysman.* $(DESTDIR)$(UNITDIR)/system/vdedm.service $(DESTDIR)$(UNITDIR)/user/fhived.* $(DESTDIR)$(UNITDIR)/user/vdenotify.service
+	rm -f $(DESTDIR)$(UNITDIR)/system/fhived-system.* $(DESTDIR)$(UNITDIR)/system/pamsam.* $(DESTDIR)$(UNITDIR)/system/secman.* $(DESTDIR)$(UNITDIR)/system/sysman.* $(DESTDIR)$(UNITDIR)/system/vdedm.service $(DESTDIR)$(UNITDIR)/user/fhived.* $(DESTDIR)$(UNITDIR)/user/vdenotify.service $(DESTDIR)$(UNITDIR)/user/dosdevman.service
 	rm -f $(DESTDIR)$(PREFIX)/lib/sysusers.d/vdedm.conf $(DESTDIR)$(PREFIX)/lib/tmpfiles.d/vdedm.conf $(DESTDIR)$(DATADIR)/polkit-1/rules.d/50-vdedm-greeter.rules
 
 # What the whole test suite says; the packaging step does not run it (it needs a display for some tests).

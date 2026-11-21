@@ -77,6 +77,9 @@ public sealed class NotificationService
     public event EventHandler<NotificationClosedEventArgs>? Closed;
     public event EventHandler<ActionInvokedEventArgs>? ActionInvoked;
 
+    // The kept list changed: something was added to it, removed from it, or it was cleared.
+    public event EventHandler? HistoryChanged;
+
     public NotificationSettings Settings
     {
         get { lock (_gate) return _settings; }
@@ -209,6 +212,18 @@ public sealed class NotificationService
     {
         lock (_gate)
             _history.Clear();
+        HistoryChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // The user dismissed one from the notification centre: gone from the screen and from the kept list.
+    public bool Dismiss(uint id)
+    {
+        bool removed = Close(id, CloseReason.Dismissed);
+        lock (_gate)
+            removed |= _history.RemoveAll(n => n.Id == id) > 0;
+        if (removed)
+            HistoryChanged?.Invoke(this, EventArgs.Empty);
+        return removed;
     }
 
     // Keeps the settings in step with the registry (HKCU\Software\Vde\Notifications), now and whenever they change.
@@ -280,6 +295,8 @@ public sealed class NotificationService
                 _history.RemoveRange(_settings.HistoryLimit, _history.Count - _settings.HistoryLimit);
         }
         raised.Add(() => Closed?.Invoke(this, new NotificationClosedEventArgs(notification.Id, reason, notification)));
+        if (!notification.Transient)
+            raised.Add(() => HistoryChanged?.Invoke(this, EventArgs.Empty));
     }
 
     private sealed class Unsubscribe(Action action) : IDisposable

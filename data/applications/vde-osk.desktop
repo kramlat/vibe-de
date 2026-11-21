@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=VDE On-Screen Keyboard
+Comment=VDE's touch keyboard; also usable as Plasma's virtual keyboard
+Exec=vde-osk
+Type=Application
+Icon=input-keyboard-virtual
+# Plasma (KWin) starts this as its virtual keyboard when it is chosen in System Settings > Virtual Keyboard
+X-KDE-Wayland-VirtualKeyboard=true
+NoDisplay=true

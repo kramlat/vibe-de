@@ -32,15 +32,18 @@ public sealed class FileManagerWindow : Window
     private readonly ShellFolderCatalog? _shellFolders;
 
     private readonly Grid _pages = new();
+    private Border? _bar;
     private readonly StackPanel _strip = new() { Orientation = Orientation.Horizontal };
     private readonly List<Tab> _tabs = [];
     private Tab _active = null!;
+    private readonly Action<string>? _openSettingsPage;
 
     public FileManagerWindow(string startFolder, KnownFolders folders, Action<string> openFile, FileTypes? types = null,
         FileActions? actions = null, IFileClipboard? clipboard = null, ShortcutStyleService? shortcuts = null,
         Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, ShellFolderCatalog? shellFolders = null,
-        DesktopSettings? settings = null)
+        DesktopSettings? settings = null, Action<string>? openSettingsPage = null)
     {
+        _openSettingsPage = openSettingsPage;
         _folders = folders;
         _openFile = openFile;
         _types = types;
@@ -74,6 +77,7 @@ public sealed class FileManagerWindow : Window
             Child = Root(),
         };
         Opened += (_, _) => body.Background = ThemeTokens.Find(this, ThemeToken.Surface, Brushes.White);
+        TitleBarAccent.Attach(this, _bar!, body);
         WindowMica.Attach(this, settings, body);   // subscribed after the surface colour, so it paints over it
         Content = body;
 
@@ -89,7 +93,7 @@ public sealed class FileManagerWindow : Window
     {
         var grid = new Grid { RowDefinitions = new RowDefinitions(BarHeight + ",*") };
 
-        var bar = new Border { Child = Titlebar(), Background = Brushes.Transparent };
+        var bar = _bar = new Border { Child = Titlebar(), Background = Brushes.Transparent };
         Grid.SetRow(bar, 0);
         bar.PointerPressed += (_, e) =>
         {
@@ -219,7 +223,7 @@ public sealed class FileManagerWindow : Window
 
     public void NewTab(string? folder = null)   // a new tab starts in the given folder, else the active tab's home
     {
-        var view = new FileManagerView(folder ?? _active.View.Home, _folders, _openFile, _types, _actions, _clipboard, _shortcuts, _properties, _shellFolders);
+        var view = new FileManagerView(folder ?? _active.View.Home, _folders, _openFile, _types, _actions, _clipboard, _shortcuts, _properties, _shellFolders, _openSettingsPage);
         // the path, cut at its start when it is long: the folder's own name at the end is what matters
         var label = new TextBlock { TextTrimming = TextTrimming.PrefixCharacterEllipsis, MaxWidth = 240, VerticalAlignment = VerticalAlignment.Center };
         var icon = new ShellIcon { IconSize = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
@@ -247,6 +251,7 @@ public sealed class FileManagerWindow : Window
             e.Handled = true;   // a tab press switches (or closes); it must not also drag the window
         };
 
+        TabReorder.Attach(_strip, header, (from, to) => { _tabs.RemoveAt(from); _tabs.Insert(to, tab); });
         view.TitleChanged += (_, _) => TabTitleChanged(tab);
         label.Text = view.FolderPath;
         icon.IconNames = view.FolderIconNames;

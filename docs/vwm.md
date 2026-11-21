@@ -66,6 +66,13 @@ Icons re-read on the app's NewTitle/NewIcon/NewToolTip signals, clicks call Acti
 right-click opens the app's menu read (read-only) from its `com.canonical.dbusmenu` object. Items vanish when
 their connection leaves the bus.
 
+Programs that still dock through the old X11 protocol (`_NET_SYSTEM_TRAY_S0` + XEmbed: Steam, Wine, older GTK and
+Qt apps) are handled by `vde-xembed` (`native/vxembed`, the session component `xembed-tray`). It owns the selection on
+vwm's Xwayland, keeps each docked icon in a hidden 24x24 container, reads the picture back through XComposite (kept
+current with Damage) and publishes it as a StatusNotifierItem, so the taskbar and any other StatusNotifierHost show it.
+Left, middle and right clicks and scrolling go back to the program as button events; the item disappears when the
+program closes or takes its window back. `native/vxembed/test-client.c` is a stand-in tray program for testing it.
+
 ## Not built yet
 
 Snapping/tiling, virtual desktops, an Alt+Tab switcher overlay, multi-monitor layout policy, window

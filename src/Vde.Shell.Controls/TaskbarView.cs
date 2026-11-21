@@ -17,6 +17,11 @@ public sealed class TaskbarView : UserControl
     private readonly TaskbarModel _model;
     private readonly Func<DateTime> _now;
     private readonly Button _start = new() { Tag = "Start" };
+    private readonly Button _search = new() { Tag = "Search" };
+    private readonly Button _taskView = new() { Tag = "TaskView" };
+    private readonly Button _widgets = new() { Tag = "Widgets" };
+    private readonly Button _keyboard = new() { Tag = "TouchKeyboard" };
+    private readonly Button _showDesktop = new() { Tag = "ShowDesktop", Background = Brushes.Transparent, BorderThickness = new Thickness(1, 0, 0, 0), Padding = new Thickness(0) };
     private readonly StackPanel _apps = new() { Spacing = 2 };
     private readonly TextBlock _clock = new() { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, FontSize = 12, TextAlignment = TextAlignment.Center };
     private readonly Border _bar = new();
@@ -32,6 +37,12 @@ public sealed class TaskbarView : UserControl
         _start.Click += (_, _) => StartInvoked?.Invoke(this, EventArgs.Empty);
         _start.Background = Brushes.Transparent;
         _start.BorderThickness = new Thickness(0);
+        Style(_search, ["edit-find", "system-search"], "Search", () => SearchInvoked?.Invoke(this, EventArgs.Empty));
+        Style(_taskView, ["view-grid", "window-duplicate"], "Task view", () => TaskViewInvoked?.Invoke(this, EventArgs.Empty));
+        _showDesktop.Click += (_, _) => ShowDesktopInvoked?.Invoke(this, EventArgs.Empty);
+        ToolTip.SetTip(_showDesktop, "Show desktop");
+        Style(_widgets, ["view-dashboard", "applications-utilities"], "Widgets", () => WidgetsInvoked?.Invoke(this, EventArgs.Empty));
+        Style(_keyboard, ["input-keyboard-virtual", "input-keyboard"], "Touch keyboard", () => TouchKeyboardInvoked?.Invoke(this, EventArgs.Empty), 28, 16);
         TrayArea = new StackPanel { Spacing = 4, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
         Content = _bar;
         _timer.Tick += (_, _) => UpdateClock();
@@ -40,10 +51,20 @@ public sealed class TaskbarView : UserControl
     }
 
     public event EventHandler? StartInvoked;
+    public event EventHandler? SearchInvoked;          // the Search button: Start, ready to search
+    public event EventHandler? TaskViewInvoked;        // the Task view button: the window overview
+    public event EventHandler? WidgetsInvoked;         // the Widgets button: VDE's widgets panel
+    public event EventHandler? TouchKeyboardInvoked;
+    public event EventHandler? ShowDesktopInvoked;     // the far corner of the bar   // the corner's keyboard icon: shows or hides the on-screen keyboard
     // A button was clicked; the model's Click result says what happened (ChooseWindow means show the windows).
     public event EventHandler<TaskbarButton>? ButtonInvoked;
 
     public Button StartButton => _start;
+    public Button SearchButton => _search;
+    public Button TaskViewButton => _taskView;
+    public Button WidgetsButton => _widgets;
+    public Button TouchKeyboardButton => _keyboard;
+    public Button ShowDesktopButton => _showDesktop;
     // Where notification and status icons go.
     public StackPanel TrayArea { get; }
     public string ClockText => _clock.Text ?? "";
@@ -96,21 +117,33 @@ public sealed class TaskbarView : UserControl
         foreach (var button in _model.Buttons())
             _apps.Children.Add(MakeButton(button, vertical));
 
-        foreach (var c in new Control[] { _start, _apps, TrayArea, _clock })
+        foreach (var c in new Control[] { _start, _search, _taskView, _widgets, _keyboard, _apps, TrayArea, _clock, _showDesktop })
             (c.Parent as Panel)?.Children.Remove(c);
 
         _start.Width = _start.Height = 40;
         TrayArea.Orientation = orientation;
         var dock = new DockPanel { LastChildFill = true, Margin = new Thickness(vertical ? 4 : 8, vertical ? 8 : 4) };
         var tail = new StackPanel { Orientation = orientation, Spacing = 4 };
+        if (_model.ShowTouchKeyboard) tail.Children.Add(_keyboard);   // the corner icons come before the tray's
         tail.Children.Add(TrayArea);
         tail.Children.Add(_clock);
+        if (_model.ShowDesktopCorner)
+        {
+            // the far corner: a thin strip that shows the desktop
+            _showDesktop.Width = vertical ? double.NaN : 8;
+            _showDesktop.Height = vertical ? 8 : double.NaN;
+            _showDesktop.BorderBrush = ThemeTokens.Find(this, ThemeToken.Border, Brushes.Gray);
+            tail.Children.Add(_showDesktop);
+        }
         DockPanel.SetDock(tail, vertical ? Dock.Bottom : Dock.Right);
         dock.Children.Add(tail);
 
         // The launcher button and the task list move together: centred on the bar, or packed at its start.
         var group = new StackPanel { Orientation = orientation, Spacing = 2 };
         group.Children.Add(_start);
+        if (_model.ShowSearch) group.Children.Add(_search);
+        if (_model.ShowTaskView) group.Children.Add(_taskView);
+        if (_model.ShowWidgets) group.Children.Add(_widgets);
         group.Children.Add(_apps);
         var centered = _model.Alignment == TaskbarAlignment.Center;
         group.HorizontalAlignment = vertical ? HorizontalAlignment.Center : (centered ? HorizontalAlignment.Center : HorizontalAlignment.Left);
@@ -120,6 +153,16 @@ public sealed class TaskbarView : UserControl
         _bar.Child = dock;
         _bar.Background = BarBrush();
         UpdateClock();
+    }
+
+    private static void Style(Button button, IReadOnlyList<string> icons, string tip, Action invoke, int size = 40, int icon = 20)
+    {
+        button.Content = new ShellIcon { IconNames = icons, IconSize = icon };
+        button.Width = button.Height = size;
+        button.Background = Brushes.Transparent;
+        button.BorderThickness = new Thickness(0);
+        ToolTip.SetTip(button, tip);
+        button.Click += (_, _) => invoke();
     }
 
     private Button MakeButton(TaskbarButton model, bool vertical)

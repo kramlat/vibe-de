@@ -34,8 +34,9 @@ public sealed class FileManagerView : UserControl
 
     private readonly FileActions _actions;
     private readonly ShortcutStyleService _shortcuts;
+    private readonly Action<string>? _openSettingsPage;
     private readonly Func<IReadOnlyList<string>, PropertySheetContext>? _properties;
-    private readonly ShellFolderCatalog? _shell;
+    private readonly ShellVfs? _shell;
     private IShellFolder? _openShellFolder;
     private readonly IFileClipboard _clipboard;
     private readonly KnownFolders _knownFolders;
@@ -43,10 +44,11 @@ public sealed class FileManagerView : UserControl
 
     public FileManagerView(string startFolder, KnownFolders folders, Action<string> openFile, FileTypes? types = null,
         FileActions? actions = null, IFileClipboard? clipboard = null, ShortcutStyleService? shortcuts = null,
-        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, ShellFolderCatalog? shellFolders = null)
+        Func<IReadOnlyList<string>, PropertySheetContext>? properties = null, ShellFolderCatalog? shellFolders = null, Action<string>? openSettingsPage = null)
     {
+        _openSettingsPage = openSettingsPage;
         _properties = properties;
-        _shell = shellFolders;
+        _shell = shellFolders is null ? null : new ShellVfs(shellFolders);
         _openFile = openFile;
         _shortcuts = shortcuts ?? new ShortcutStyleService(new Hive("shortcuts"));
         _shortcutChanged = (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(ApplyShortcutStyle);
@@ -260,8 +262,22 @@ public sealed class FileManagerView : UserControl
             hidden.IsChecked = ShowHidden;
         };
         bar.Children.Add(FoldButton("View", view));
+        bar.Children.Add(Gap(bar));
+        bar.Children.Add(CommandOverflow.Create(OverflowMenu, () => _shortcuts.Style));   // the "..." every menubar-less app ends its command bar with
         return bar;
     }
+
+    // What this program puts behind the "...": selection commands, Properties (grey with nothing selected) and its options.
+    public IReadOnlyList<MenuEntry?> OverflowMenu() =>
+    [
+        new("Select all", ShortcutAction.SelectAll, () => _list.SelectAll()),
+        new("Select none", null, () => _list.ClearSelection()),
+        new("Invert selection", null, () => _list.InvertSelection()),
+        null,
+        new("Properties", ShortcutAction.Properties, () => ShowProperties(), Enabled: _list.SelectedEntries.Count > 0),
+        null,
+        new("Options", null, () => _openSettingsPage?.Invoke("fileexplorer"), Enabled: _openSettingsPage is not null),
+    ];
 
     private static Button FlatButton(object content, string tip, Action invoke)
     {
@@ -512,25 +528,14 @@ public sealed class FileManagerView : UserControl
         _forward.IsEnabled = _history.CanGoForward;
         _up.IsEnabled = false;
 
-        var info = _shell?.Resolve(_history.Current);
-        if (info is null)
-        {
-            SetTitle("Not available", "Not available", ["dialog-warning"]);
-            _unfiltered = [];
-            _list.Entries = [];
-            _status.Text = "This place is not available.";
-            return;
-        }
         try
         {
-            var folder = _shell!.Open(info);
-            folder.Changed += OnShellChanged;
-            _openShellFolder = folder;
-            SetTitle(folder.DisplayName, folder.DisplayName, folder.IconNames);
-            var items = folder.GetItems();
             var path = _history.Current;
-            _unfiltered = items.Select(i => new FileEntry(i.Name, path + "/" + i.Id, i.IsFolder, false, false, i.Size ?? 0, i.ModifiedUtc ?? default, "")
-                { IconNames = i.IconNames, TypeText = i.TypeText, Detail = i.Detail, Tag = i, Group = i.Group, Usage = i.Usage }).ToList();
+            var listing = (_shell ?? throw new InvalidOperationException("This place is not available.")).List(path);
+            listing.Folder!.Changed += OnShellChanged;
+            _openShellFolder = listing.Folder;
+            SetTitle(listing.Title, listing.Title, listing.IconNames);
+            _unfiltered = listing.Entries;
             ApplyFilter();
             _search.PlaceholderText = "Search " + FolderTitle;
         }
@@ -546,17 +551,14 @@ public sealed class FileManagerView : UserControl
 
     private void OpenShellItem(ShellItem item)
     {
-        if (item.ChildFolder is { } child) { Navigate(child); return; }
-        if (item.FileSystemPath is { } path)
+        var open = ShellVfs.Open(item);
+        switch (open.Kind)
         {
-            if (Directory.Exists(path)) Navigate(path);
-            else if (File.Exists(path)) _openFile(path);
-            return;
-        }
-        if (item.DefaultAction is { } action && _openShellFolder is not null)
-        {
-            _ = RunDefaultActionAsync(_openShellFolder, action, item);
-            return;
+            case VfsOpenKind.Enter: Navigate(open.Path!); return;
+            case VfsOpenKind.OpenFile: _openFile(open.Path!); return;
+            case VfsOpenKind.RunAction when _openShellFolder is not null:
+                _ = RunDefaultActionAsync(_openShellFolder, open.Action!, item);
+                return;
         }
         _status.Text = $"\"{item.Name}\" cannot be opened.";
     }
@@ -688,8 +690,8 @@ public sealed class FileManagerView : UserControl
     {
         // a shell folder that stands for a directory (shell:Music) is that directory, as in Windows: the real file
         // operations, watching and sorting apply, and the address bar shows where it is
-        if (record && AddressPath.IsShellPath(path) && _shell?.DirectoryOf(path) is { } directory)
-            path = directory;
+        if (record && _shell is not null)
+            path = _shell.Normalize(path);
         if (record)
             _history.Navigate(path);
         Reload();

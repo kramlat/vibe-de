@@ -32,7 +32,7 @@ var bar = new Border
         },
     },
 };
-var window = new Window { Width = width, Height = height, Content = bar, Background = Brushes.Transparent, SystemDecorations = Avalonia.Controls.WindowDecorations.None };
+var window = new Window { Width = width, Height = height, Content = bar, Background = Brushes.Transparent, WindowDecorations = Avalonia.Controls.WindowDecorations.None };
 window.Show();
 var frame = window.CaptureRenderedFrame() ?? throw new InvalidOperationException("nothing was rendered");
 if (args.Length > 2) frame.Save(args[2], new Avalonia.Media.Imaging.PngBitmapEncoderOptions());

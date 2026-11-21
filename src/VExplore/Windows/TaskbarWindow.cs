@@ -12,6 +12,11 @@ public sealed class TaskbarWindow : Window
     private readonly TaskbarModel _model;
     private readonly DesktopSettings? _settings;
     private bool _transparency = true;
+    private bool _hidden;   // auto-hide: only a thin strip of the bar shows until the pointer reaches it
+    private readonly Avalonia.Threading.DispatcherTimer _hideTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
+
+    // Auto-hide waits while this says something (the Start menu) is open from the bar.
+    public Func<bool>? KeepVisible { get; set; }
 
     public TaskbarWindow(TaskbarModel model, Action startMenu, Func<DateTime>? now = null, DesktopSettings? settings = null)
     {
@@ -28,8 +33,27 @@ public sealed class TaskbarWindow : Window
         Content = View;
         X11WindowHints.SetType(this, X11WindowHints.Kind.Dock);
         _model.Changed += (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(Dock);
-        Opened += (_, _) => Dock();
+        Opened += (_, _) => { Dock(); if (_model.AutoHide) _hideTimer.Start(); };
+        PointerEntered += (_, _) => { _hideTimer.Stop(); SetHidden(false); };
+        PointerExited += (_, _) => { if (_model.AutoHide) _hideTimer.Start(); };
+        _hideTimer.Tick += (_, _) =>
+        {
+            if (KeepVisible?.Invoke() == true) return;   // try again later
+            _hideTimer.Stop();
+            SetHidden(true);
+        };
     }
+
+    // Slides the bar away to a strip at its edge, or back.
+    private void SetHidden(bool hidden)
+    {
+        if (hidden && !_model.AutoHide) return;
+        if (_hidden == hidden) return;
+        _hidden = hidden;
+        Dock();
+    }
+
+    public bool IsHidden => _hidden && _model.AutoHide;
 
     public TaskbarView View { get; }
 
@@ -55,7 +79,7 @@ public sealed class TaskbarWindow : Window
         var scale = screen.Scaling;
         var area = screen.Bounds;
         var edge = _model.Edge;
-        var thickness = TaskbarView.Thickness;
+        var thickness = IsHidden ? 3 : TaskbarView.Thickness;
         var pixels = (int)Math.Round(thickness * scale);
         if (edge is TaskbarEdge.Top or TaskbarEdge.Bottom)
         {
@@ -71,6 +95,7 @@ public sealed class TaskbarWindow : Window
         View.Rebuild();
         // Keep the screen edge for the taskbar: maximised windows stop at it, and the window manager docks it there.
         long full = pixels, ax = area.X, ay = area.Y, aw = area.Width, ah = area.Height;
+        if (_model.AutoHide) return;   // a hiding bar reserves nothing
         switch (edge)
         {
             case TaskbarEdge.Top: X11WindowHints.SetStrut(this, 0, 0, full, 0, 0, 0, 0, 0, ax, ax + aw - 1, 0, 0); break;

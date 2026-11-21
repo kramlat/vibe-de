@@ -79,13 +79,16 @@ public sealed class CaptionButton : Control
     {
         var classic = ThemeTokens.IsClassic(themeSource);
         var close = kind == CaptionKind.Close;
-        IBrush ink = active || hot ? ThemeTokens.Find(themeSource, ThemeToken.TextPrimary, Brushes.White) : ThemeTokens.Find(themeSource, ThemeToken.TextSecondary, Brushes.Gray);
+        // on an accent titlebar the glyphs take whichever of black and white reads on the accent
+        var onAccent = ThemeTokens.OnAccentBar(themeSource, active);
+        var accentInk = onAccent ? ThemeTokens.InkOn(ThemeTokens.AccentColor(themeSource)) : default;
+        IBrush ink = onAccent ? new SolidColorBrush(accentInk) : active || hot ? ThemeTokens.Find(themeSource, ThemeToken.TextPrimary, Brushes.White) : ThemeTokens.Find(themeSource, ThemeToken.TextSecondary, Brushes.Gray);
 
         if (classic)
             DrawClassicFace(context, bounds, pressed, themeSource, ref ink);
         else if (hot || pressed)
         {
-            if (HotFill(themeSource, kind, pressed) is { } fill)
+            if ((onAccent && !close ? new SolidColorBrush(accentInk, pressed ? 0.28 : 0.18) : HotFill(themeSource, kind, pressed)) is { } fill)
                 context.DrawRectangle(fill, null, compact ? bounds.Deflate(2) : bounds, compact ? 4 : 0, compact ? 4 : 0);
             if (close) ink = Brushes.White;
         }

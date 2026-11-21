@@ -17,14 +17,14 @@ public static class CommonDialogs
     }
 
     // Null when cancelled. Several paths only with options.Multiselect.
-    public static async Task<IReadOnlyList<string>?> OpenFileAsync(Window? owner, KnownFolders folders, FileDialogOptions? options = null, FileTypes? types = null)
-        => await RunFile(owner, new FileDialogWindow(FileDialogMode.Open, options ?? new(), folders, types));
+    public static async Task<IReadOnlyList<string>?> OpenFileAsync(Window? owner, KnownFolders folders, FileDialogOptions? options = null, FileTypes? types = null, ShellVfs? vfs = null)
+        => await RunFile(owner, new FileDialogWindow(FileDialogMode.Open, options ?? new(), folders, types, vfs: vfs));
 
-    public static async Task<string?> SaveFileAsync(Window? owner, KnownFolders folders, FileDialogOptions? options = null, FileTypes? types = null)
-        => (await RunFile(owner, new FileDialogWindow(FileDialogMode.Save, options ?? new(), folders, types)))?.FirstOrDefault();
+    public static async Task<string?> SaveFileAsync(Window? owner, KnownFolders folders, FileDialogOptions? options = null, FileTypes? types = null, ShellVfs? vfs = null)
+        => (await RunFile(owner, new FileDialogWindow(FileDialogMode.Save, options ?? new(), folders, types, vfs: vfs)))?.FirstOrDefault();
 
-    public static async Task<string?> PickFolderAsync(Window? owner, KnownFolders folders, FileDialogOptions? options = null)
-        => (await RunFile(owner, new FileDialogWindow(FileDialogMode.Folder, options ?? new(), folders)))?.FirstOrDefault();
+    public static async Task<string?> PickFolderAsync(Window? owner, KnownFolders folders, FileDialogOptions? options = null, ShellVfs? vfs = null)
+        => (await RunFile(owner, new FileDialogWindow(FileDialogMode.Folder, options ?? new(), folders, vfs: vfs)))?.FirstOrDefault();
 
     // validate returns an explanation when the text is not acceptable, or null when it is.
     public static async Task<string?> InputAsync(Window? owner, string prompt, string title = "VDE", string defaultText = "", Func<string, string?>? validate = null)

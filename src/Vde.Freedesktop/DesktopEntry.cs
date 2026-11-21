@@ -27,6 +27,11 @@ public sealed class DesktopEntry
     public IReadOnlyList<string> NotShowIn { get; init; } = [];
     public IReadOnlyList<DesktopAction> Actions { get; init; } = [];
 
+    // An app that offers a widget to the VDE widgets panel: X-VDE-Widget=<the D-Bus name it owns>, X-VDE-Widget-Path=<object path>.
+    // A Flatpak exports its .desktop file, so a widget on Flathub is found like any app.
+    public string? WidgetBusName { get; init; }
+    public string WidgetPath { get; init; } = "/org/vde/Widget";
+
     public static DesktopEntry Load(string path, string id, IReadOnlyList<string> locales)
     {
         var entry = Parse(File.ReadAllText(path), id, locales);
@@ -68,6 +73,8 @@ public sealed class DesktopEntry
             OnlyShowIn = ini.GetList(Group, "OnlyShowIn"),
             NotShowIn = ini.GetList(Group, "NotShowIn"),
             Actions = actions,
+            WidgetBusName = ini.Get(Group, "X-VDE-Widget"),
+            WidgetPath = ini.Get(Group, "X-VDE-Widget-Path") is { Length: > 0 } wp ? wp : "/org/vde/Widget",
         };
     }
 
@@ -91,7 +98,7 @@ public sealed class DesktopEntry
         Id = e.Id, FilePath = path, Type = e.Type, Name = e.Name, GenericName = e.GenericName,
         Comment = e.Comment, Icon = e.Icon, Exec = e.Exec, TryExec = e.TryExec,
         WorkingDirectory = e.WorkingDirectory, Terminal = e.Terminal, NoDisplay = e.NoDisplay,
-        Hidden = e.Hidden, StartupWmClass = e.StartupWmClass, Categories = e.Categories,
+        Hidden = e.Hidden, StartupWmClass = e.StartupWmClass, Categories = e.Categories, WidgetBusName = e.WidgetBusName, WidgetPath = e.WidgetPath,
         MimeTypes = e.MimeTypes, OnlyShowIn = e.OnlyShowIn, NotShowIn = e.NotShowIn, Actions = e.Actions,
     };
 }

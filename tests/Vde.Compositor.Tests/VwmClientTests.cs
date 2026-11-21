@@ -82,4 +82,44 @@ public class VwmClientTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task The_start_event_reaches_the_handler_and_a_flyout_is_placed_once_per_showing()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "vwm-test-" + Guid.NewGuid().ToString("N") + ".sock");
+        using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(path));
+        listener.Listen(1);
+        try
+        {
+            using var client = new VwmClient();
+            var starts = new SemaphoreSlim(0);
+            var changed = new SemaphoreSlim(0);
+            client.StartRequested += (_, _) => starts.Release();
+            client.Changed += (_, _) => changed.Release();
+            Assert.True(client.Connect(path));
+            using var server = await listener.AcceptAsync();
+
+            client.HandleStart();
+            client.AnnouncePopup(77, "Start", 668, 460);
+            await server.SendAsync(Encoding.UTF8.GetBytes("{\"event\":\"start\"}\n"));
+            Assert.True(await starts.WaitAsync(TimeSpan.FromSeconds(5)));
+
+            // the flyout's window appears (twice: it changes), and is placed once; another window of that process is not touched
+            string Window(int id, string title) => "{\"event\":\"window\",\"id\":" + id + ",\"title\":\"" + title + "\",\"app_id\":\"vexplore\",\"active\":true,\"minimized\":false,\"maximized\":false,\"fullscreen\":false,\"x11\":false,\"pid\":77,\"x\":0,\"y\":0,\"width\":584,\"height\":620}\n";
+            await server.SendAsync(Encoding.UTF8.GetBytes(Window(9, "Taskbar") + Window(10, "Start") + Window(10, "Start")));
+            for (var i = 0; i < 3; i++) Assert.True(await changed.WaitAsync(TimeSpan.FromSeconds(5)));
+
+            var expected = "handle-start\npopup 10 668 460\n";
+            var received = new byte[128];
+            var total = 0;
+            while (total < expected.Length)
+                total += await server.ReceiveAsync(received.AsMemory(total), SocketFlags.None);
+            Assert.Equal(expected, Encoding.ASCII.GetString(received, 0, total));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
